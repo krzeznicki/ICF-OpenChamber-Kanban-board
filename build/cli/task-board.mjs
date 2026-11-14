@@ -544,6 +544,7 @@ Commands:
   list [--state <state>] [--ready]      tasks, one per line
   show <id>                             one task with its body
   create --title <t> [--type <x>] [--body-file <f>|-] [--parent <id>] [--state <state>]
+         [--blocked-by <id>[,<id>...]]...   blockers: repeat the option or separate ids with commas
   state <id> <state>                    set the state ('done' closes)
   next                                  first ready-for-agent ticket with no open blocker
   close <id> [--with-children]          close a task (and a feature's tickets)
@@ -552,6 +553,8 @@ Commands:
 Options for every command:
   --dir <path>   project root (default: current directory)
   --json         machine-readable output
+
+A value starting with '-' is written with '=': --title=-x
 
 States: needs-triage, needs-info, ready-for-agent, ready-for-human, wontfix, done
 Exit codes: 0 ok, 2 usage, 3 nothing found, 4 tracker error
@@ -567,12 +570,13 @@ var OPTIONS = {
   type: { type: "string" },
   "body-file": { type: "string" },
   parent: { type: "string" },
+  "blocked-by": { type: "string", multiple: true },
   "with-children": { type: "boolean" }
 };
 var COMMANDS = {
   list: { positionals: 0, options: ["state", "ready"] },
   show: { positionals: 1, options: [] },
-  create: { positionals: 0, options: ["title", "type", "body-file", "parent", "state"] },
+  create: { positionals: 0, options: ["title", "type", "body-file", "parent", "state", "blocked-by"] },
   state: { positionals: 2, options: [] },
   next: { positionals: 0, options: [] },
   close: { positionals: 1, options: ["with-children"] },
@@ -648,12 +652,9 @@ ${USAGE}`);
     switch (command) {
       case "list": {
         const state = values.state === void 0 ? void 0 : toState2(values.state, "state");
-        let tasks = await (await openTracker(root, exec)).list();
-        if (state !== void 0) tasks = tasks.filter((t) => t.state === state);
-        if (values.ready) {
-          const ready = new Set(readyTickets(tasks).map((t) => t.id));
-          tasks = tasks.filter((t) => ready.has(t.id));
-        }
+        const all = await (await openTracker(root, exec)).list();
+        const ready = values.ready ? new Set(readyTickets(all).map((t) => t.id)) : null;
+        const tasks = all.filter((t) => (state === void 0 || t.state === state) && (ready === null || ready.has(t.id)));
         print(tasks, tasks.map(line).join(""));
         return 0;
       }
@@ -668,6 +669,8 @@ ${task.body.replace(/\s*$/, "\n")}`);
       case "create": {
         if (values.title === void 0 || values.title.trim() === "") usage("create needs --title");
         const state = values.state === void 0 ? void 0 : toState2(values.state, "state");
+        const blockedBy = (values["blocked-by"] ?? []).flatMap((v) => v.split(",")).map((v) => v.trim());
+        if (blockedBy.some((id) => id === "")) usage("--blocked-by needs non-empty ids");
         let body;
         const file = values["body-file"];
         if (file === "-") body = await readStdin(io.stdin);
@@ -683,6 +686,7 @@ ${task.body.replace(/\s*$/, "\n")}`);
           ...body === void 0 ? {} : { body },
           ...values.type === void 0 ? {} : { type: values.type },
           ...values.parent === void 0 ? {} : { parentId: values.parent },
+          ...blockedBy.length === 0 ? {} : { blockedBy },
           ...state === void 0 ? {} : { state }
         });
         print(task, line(task));

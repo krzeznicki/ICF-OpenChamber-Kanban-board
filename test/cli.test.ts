@@ -141,6 +141,51 @@ test('list --state filters by state', async (t) => {
   assert.deepEqual(json<Task[]>(r).map((x) => x.id), [ids[1], ids[2]]);
 });
 
+test('list --state ready-for-agent --ready judges blockers against the unfiltered list', async (t) => {
+  const { root, ids } = await project(t);
+  const r = await run(['list', '--state', 'ready-for-agent', '--ready', '--json'], root);
+  assert.equal(r.code, 0, r.err);
+  assert.deepEqual(json<Task[]>(r).map((x) => x.id), [ids[2]]);
+});
+
+test('create --blocked-by (repeatable, comma-separated) is skipped by next while a blocker is open', async (t) => {
+  const { root, spec, ids } = await project(t);
+  assert.equal((await run(['state', ids[2]!, 'wontfix'], root)).code, 0);
+  const r = await run(
+    ['create', '--title', 'Fourth', '--parent', spec, '--state', 'ready-for-agent',
+      '--blocked-by', `${ids[0]},${ids[1]}`, '--blocked-by', ids[2]!, '--json'],
+    root,
+  );
+  assert.equal(r.code, 0, r.err);
+  const created = json<Task>(r);
+  assert.deepEqual(created.blockedBy, [ids[0], ids[1], ids[2]]);
+  assert.equal((await run(['next'], root)).code, 3);
+
+  // Only blockers that are done stop blocking: 01 done frees 02; 02 done (03 wontfix still open) keeps Fourth blocked.
+  assert.equal((await run(['state', ids[0]!, 'done'], root)).code, 0);
+  assert.equal(json<Task>(await run(['next', '--json'], root)).id, ids[1]);
+  assert.equal((await run(['state', ids[1]!, 'done'], root)).code, 0);
+  assert.equal((await run(['next'], root)).code, 3);
+  assert.equal((await run(['state', ids[2]!, 'done'], root)).code, 0);
+  assert.equal(json<Task>(await run(['next', '--json'], root)).id, created.id);
+});
+
+test('create --blocked-by with a ticket of another feature exits 4 INVALID', async (t) => {
+  const { root, spec } = await project(t);
+  const other = json<Task>(await run(['create', '--title', 'Other', '--json'], root));
+  const ticket = json<Task>(await run(['create', '--title', 'Elsewhere', '--parent', other.id, '--json'], root));
+  const r = await run(['create', '--title', 'X', '--parent', spec, '--blocked-by', ticket.id, '--json'], root);
+  assert.equal(r.code, 4);
+  assert.equal(json<{ error: { code: string } }>(r).error.code, 'INVALID');
+});
+
+test('a title starting with "-" is passed as --title=-x', async (t) => {
+  const { root, spec } = await project(t);
+  const r = await run(['create', '--title=-dash', '--parent', spec, '--json'], root);
+  assert.equal(r.code, 0, r.err);
+  assert.equal(json<Task>(r).title, '-dash');
+});
+
 test('show prints one task; close --with-children closes the feature', async (t) => {
   const { root, spec, ids } = await project(t);
   const show = await run(['show', ids[0]!], root);
@@ -175,6 +220,8 @@ test('usage errors: missing args, unknown option, bad state, option of another c
     ['next', '--title', 'x'],
     ['init', 'gitlab'],
     ['show', ids[0]!, 'extra'],
+    ['create', '--title', 'x', '--blocked-by', `${ids[0]},`],
+    ['list', '--blocked-by', ids[0]!],
   ]) {
     const r = await run(argv, root);
     assert.equal(r.code, 2, `${argv.join(' ')} -> ${r.code} ${r.err}`);
