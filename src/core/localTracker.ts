@@ -201,6 +201,17 @@ export const createLocalTracker = (root: string): Tracker => {
     const ref = parseId(parentId);
     if (ref.kind !== 'parent') throw new TrackerError('INVALID', `Parent must be a spec.md id: ${parentId}`);
     if (!(await featureExists(ref.feature))) throw new TrackerError('NOT_FOUND', `Parent not found: ${parentId}`);
+    // Blockers are written as bare NN and resolved within this feature on read, so each one must be
+    // an existing ticket of the same feature; anything else would become a silent wrong dependency.
+    for (const b of input.blockedBy ?? []) {
+      const bRef = parseId(b);
+      if (bRef.kind !== 'ticket' || bRef.feature !== ref.feature) {
+        throw new TrackerError('INVALID', `Blocker must be a ticket of the same feature as ${parentId}: ${b}`);
+      }
+      if ((await readText(abs(ticketId(bRef.feature, bRef.file!)))) === null) {
+        throw new TrackerError('INVALID', `Blocker does not exist: ${b}`);
+      }
+    }
     await mkdir(issuesDir(ref.feature), { recursive: true });
     for (;;) {
       const files = await issueFiles(issuesDir(ref.feature));

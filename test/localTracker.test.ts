@@ -142,6 +142,26 @@ test('create without parent makes a feature directory with spec.md', async (t) =
   assert.equal(ticket.id, '.scratch/dark-mode/issues/01-first.md');
 });
 
+test('create rejects blockers that are not existing tickets of the same feature, writing nothing', async (t) => {
+  const root = await repo(t);
+  await mkdir(join(root, '.scratch/other-feature/issues'), { recursive: true });
+  await writeFile(join(root, '.scratch/other-feature/issues/03-x.md'), '# 03: X\n');
+  await writeFile(join(root, '.scratch/example-feature/issues/03-local.md'), '# 03: Local\n');
+  const tracker = createLocalTracker(root);
+  const before = (await tracker.list()).map((x) => x.id);
+  await rejectsWith(
+    tracker.create({ title: 'x', parentId: SPEC, blockedBy: ['.scratch/other-feature/issues/03-x.md'] }),
+    'INVALID',
+  );
+  await rejectsWith(
+    tracker.create({ title: 'x', parentId: SPEC, blockedBy: ['.scratch/example-feature/issues/05-missing.md'] }),
+    'INVALID',
+  );
+  await rejectsWith(tracker.create({ title: 'x', parentId: SPEC, blockedBy: [SPEC] }), 'INVALID');
+  await rejectsWith(tracker.create({ title: 'x', parentId: SPEC, blockedBy: ['#42'] }), 'INVALID');
+  assert.deepEqual((await tracker.list()).map((x) => x.id), before);
+});
+
 test('create with an unknown parent rejects NOT_FOUND, with a ticket as parent INVALID', async (t) => {
   const root = await repo(t);
   const tracker = createLocalTracker(root);
