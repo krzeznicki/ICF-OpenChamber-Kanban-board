@@ -52,6 +52,35 @@ test('renderIssue output follows the template and parses back to the input', () 
   assert.equal(patchLine(text, 'Status', 'ready-for-agent'), text);
 });
 
+test('renderIssue puts the fields between the leading paragraph and the acceptance criteria', () => {
+  const text = renderIssue(3, {
+    title: 'Add login',
+    body: '**What to build:** a login form.\n\n- [ ] Criterion 1\n- [ ] Criterion 2\n',
+    type: 'bug',
+    state: 'ready-for-agent',
+    blockedBy: ['01'],
+  });
+  assert.equal(
+    text,
+    '# 03: Add login\n\n**What to build:** a login form.\n\n**Blocked by:** 01\n\n**Type:** bug\n\n' +
+      '**Status:** ready-for-agent\n\n- [ ] Criterion 1\n- [ ] Criterion 2\n',
+  );
+  const what = text.indexOf('**What to build:**');
+  const blocked = text.indexOf('**Blocked by:**');
+  const status = text.indexOf('**Status:**');
+  const ac = text.indexOf('- [ ]');
+  assert.ok(what < blocked && blocked < status && status < ac);
+});
+
+test('renderIssue with a body that starts with a list puts the fields right after the heading', () => {
+  const text = renderIssue(4, { title: 'T', body: '- [ ] Only criteria\n' });
+  assert.equal(
+    text,
+    '# 04: T\n\n**Blocked by:** None (can start immediately)\n\n**Status:** needs-triage\n\n- [ ] Only criteria\n',
+  );
+  assert.ok(text.indexOf('**Status:**') < text.indexOf('- [ ]'));
+});
+
 test('renderIssue with no blockers writes Matt\'s "None" phrase and done as resolved', () => {
   const text = renderIssue(1, { title: 'Ship it', state: 'done' });
   assert.match(text, /^\*\*Blocked by:\*\* None \(can start immediately\)$/m);
@@ -130,14 +159,63 @@ test('patchLine keeps the bare form of an existing line', () => {
   assert.equal(patchLine(text, 'Status', 'resolved'), '# 01: T\n\nStatus: resolved\nBlocked by: 02\n\nBody\n');
 });
 
-test('patchLine on a file without Type inserts one line after the title\'s blank line', () => {
+test('patchLine on a file without Type inserts one line, directly above Status', () => {
   const out = patchLine(TICKET, 'Type', 'chore');
   const before = TICKET.split('\n');
   const after = out.split('\n');
   assert.equal(after.length, before.length + 1);
-  assert.equal(after[2], '**Type:** chore');
-  assert.deepEqual([...after.slice(0, 2), ...after.slice(3)], before);
+  const statusAt = before.indexOf('**Status:** ready-for-agent');
+  assert.equal(after[statusAt], '**Type:** chore');
+  assert.equal(after[statusAt + 1], '**Status:** ready-for-agent');
+  assert.deepEqual([...after.slice(0, statusAt), ...after.slice(statusAt + 1)], before);
   assert.equal(parseIssue(out, '01-ticket-title.md').type, 'chore');
+});
+
+test('patchLine with no Status inserts a missing field directly below the last field line', () => {
+  const text = '# 01: T\n\nWhat to build: prose.\n\n**Blocked by:** 02\n\n- [ ] AC\n';
+  assert.equal(
+    patchLine(text, 'Status', 'claimed'),
+    '# 01: T\n\nWhat to build: prose.\n\n**Blocked by:** 02\n**Status:** claimed\n\n- [ ] AC\n',
+  );
+});
+
+test('patchLine with no field line at all falls back to after the title\'s blank line', () => {
+  assert.equal(patchLine('# T\n\nProse.\n', 'Status', 'claimed'), '# T\n\n**Status:** claimed\nProse.\n');
+});
+
+test('field lines inside ## Comments are ignored by parse and patch', () => {
+  const text = '# T\n\nBody\n\n## Comments\n\nStatus: resolved per alice\n';
+  assert.equal(parseIssue(text, 't.md').state, 'needs-triage');
+  const out = patchLine(text, 'Status', 'claimed');
+  assert.ok(out.endsWith('## Comments\n\nStatus: resolved per alice\n'), 'comment untouched');
+  assert.equal(out, '# T\n\n**Status:** claimed\nBody\n\n## Comments\n\nStatus: resolved per alice\n');
+  assert.equal(parseIssue(out, 't.md').state, 'ready-for-agent');
+});
+
+test('field lines inside ## Answer are ignored', () => {
+  const text = '# T\n\n**Status:** claimed\n\n## Answer\n\n**Status:** resolved\n';
+  assert.equal(parseIssue(text, 't.md').state, 'ready-for-agent');
+  assert.equal(
+    patchLine(text, 'Status', 'resolved'),
+    '# T\n\n**Status:** resolved\n\n## Answer\n\n**Status:** resolved\n',
+  );
+});
+
+test('field lines inside code fences are ignored by parse and patch', () => {
+  const text = '# T\n\n```sh\nStatus: done\nBlocked by: 04\n```\n';
+  const p = parseIssue(text, 't.md');
+  assert.equal(p.state, 'needs-triage');
+  assert.deepEqual(p.blockedBy, []);
+  assert.equal(patchLine(text, 'Status', 'claimed'), '# T\n\n**Status:** claimed\n```sh\nStatus: done\nBlocked by: 04\n```\n');
+  const tilde = '# T\n\n~~~\n**Status:** resolved\n~~~\n';
+  assert.equal(parseIssue(tilde, 't.md').state, 'needs-triage');
+});
+
+test('a # line inside a code fence is not the title', () => {
+  const text = '```sh\n# comment\n```\n\n# 02: Real title\n';
+  assert.equal(parseIssue(text, '02-x.md').title, 'Real title');
+  assert.equal(parseIssue('```\n# comment\n```\n', '03-y.md').title, '03-y');
+  assert.equal(parseSpec('```\n# comment\n```\n', 'feat').title, 'feat');
 });
 
 test('patchLine inserts in the bare form when the file uses bare fields', () => {
