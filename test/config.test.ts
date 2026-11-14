@@ -132,12 +132,13 @@ test('writeConfig writes Matt\'s templates for a fresh repo', async (t) => {
   const root = await repo(t);
   await writeConfig(root, 'local');
   assert.equal(await readFile(join(root, 'docs/agents/issue-tracker.md'), 'utf8'), await fixture('issue-tracker-local.md'));
-  assert.equal(await readFile(join(root, 'docs/agents/triage-labels.md'), 'utf8'), await fixture('triage-labels.md'));
-  assert.equal((await readConfig(root)).tracker, 'local');
+  assert.equal(existsSync(join(root, 'docs/agents/triage-labels.md')), false, 'triage-labels.md must not be created');
+  assert.deepEqual(await readConfig(root), { tracker: 'local', labels: DEFAULT_LABELS });
 
   const gh = await repo(t);
   await writeConfig(gh, 'github');
   assert.equal(await readFile(join(gh, 'docs/agents/issue-tracker.md'), 'utf8'), await fixture('issue-tracker-github.md'));
+  assert.equal(existsSync(join(gh, 'docs/agents/triage-labels.md')), false, 'triage-labels.md must not be created');
   assert.equal((await readConfig(gh)).tracker, 'github');
 });
 

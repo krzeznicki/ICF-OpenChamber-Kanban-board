@@ -84,12 +84,12 @@ const writeNew = async (path: string, text: string): Promise<void> => {
   }
 };
 
-/** Seeds Matt's templates for `tracker`; existing files are never overwritten. */
+/** Seeds Matt's issue-tracker template for `tracker`; an existing file is never overwritten. */
 export const writeConfig = async (root: string, tracker: TrackerKind): Promise<void> => {
   if (tracker !== 'local' && tracker !== 'github') {
     throw new TrackerError('INVALID', `Unknown tracker "${String(tracker)}": use local or github`);
   }
   await mkdir(join(root, DIR), { recursive: true });
   await writeNew(join(root, ISSUE_TRACKER), tracker === 'local' ? TEMPLATES.local : TEMPLATES.github);
-  await writeNew(join(root, TRIAGE_LABELS), TEMPLATES.triageLabels);
+  // triage-labels.md is not written: the spec writes it only when the user keeps the triage skill.
 };
