@@ -65,7 +65,9 @@ export const DEFAULT_SETTINGS: Settings = {
   maxParallel: 3,
   defaults: { presetId: 'implement', model: null, agent: null, variant: null, location: 'worktree' },
   presetByType: { enhancement: 'implement', bug: DIAGNOSE_PRESET_ID, research: 'plan' },
-  summary: { auto: true, language: 'Polish', prompt: DEFAULT_SUMMARY_PROMPT },
+  // Defaults are never stored (only what the user types is), so changing one (Polish until 0.3.1)
+  // moves users who never set the field and keeps every explicit choice.
+  summary: { auto: true, language: 'English', prompt: DEFAULT_SUMMARY_PROMPT },
   hideChildren: false,
   types: ['enhancement', 'bug', 'chore', 'research'],
   presetSet: defaultSetId([]),

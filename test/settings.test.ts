@@ -40,7 +40,7 @@ test('defaults when nothing is stored', () => {
   assert.equal(s.maxParallel, 3);
   assert.deepEqual(s.defaults, { presetId: 'implement', model: null, agent: null, variant: null, location: 'worktree' });
   assert.deepEqual(s.presetByType, { enhancement: 'implement', bug: 'diagnose', research: 'plan' });
-  assert.deepEqual(s.summary, { auto: true, language: 'Polish', prompt: DEFAULT_SUMMARY_PROMPT });
+  assert.deepEqual(s.summary, { auto: true, language: 'English', prompt: DEFAULT_SUMMARY_PROMPT });
   assert.equal(s.hideChildren, false);
   assert.deepEqual(s.types, ['enhancement', 'bug', 'chore', 'research']);
   assert.equal(s.presetSet, 'plain');
@@ -381,4 +381,20 @@ test('archived sessions: parsed defensively, stored per project under archivedSe
   assert.deepEqual([...(await store.loadArchived('p1'))], ['s1']);
   await store.saveArchived('p1', new Set());
   assert.equal(data.has('archivedSessions:p1'), false);
+});
+
+test('summary language: a fresh install summarises in English; a language the user set survives an update', async () => {
+  const data = new Map<string, unknown>();
+  const storage = {
+    get: async (k: string) => data.get(k),
+    set: async (k: string, v: never) => void data.set(k, v),
+    delete: async (k: string) => void data.delete(k),
+  };
+  const store = createSettingsStore(storage);
+  // First run: nothing stored, and nothing gets written just by reading the settings.
+  assert.equal(resolveSettings(await store.loadGlobal(), {}).summary.language, 'English');
+  assert.equal(data.has(STORAGE_KEYS.global), false);
+  // Only what the user typed is stored, so a new default never replaces it (Polish was 0.3's default).
+  await store.saveGlobal({ summary: { language: 'Polish' } });
+  assert.equal(resolveSettings(await createSettingsStore(storage).loadGlobal(), {}).summary.language, 'Polish');
 });
