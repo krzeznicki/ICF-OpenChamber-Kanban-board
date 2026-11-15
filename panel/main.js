@@ -2724,10 +2724,16 @@ ${GUEST_UI_LOOK_CSS}`;
       cliPath: () => call("GET", "/cli").then((r) => r.path),
       /** Path B: the service makes the worktree (if asked) and starts the session with this model/agent. */
       startSession: (input) => call("POST", "/sessions/start", input),
-      /** Sessions the service started for this project's tasks. */
-      listLinks: () => call("POST", "/links/list").then(
-        (r) => r.links
-      )
+      /** Sessions linked to this project's tasks (path B, and path A the panel recorded), with their live status. */
+      listLinks: () => call("POST", "/links/list").then((r) => r.links),
+      /** Records a session the panel started (path A), so the queue counts it while it runs. */
+      addLink: (taskId, sessionId, sessionDirectory) => call("POST", "/links/add", { taskId, sessionId, sessionDirectory }).then(() => void 0),
+      listQueue: () => call("POST", "/queue/list").then((r) => r.queue),
+      /** Idempotent per task; `maxParallel` is stored so the service drains with the same limit. */
+      addToQueue: (entry, maxParallel) => call("POST", "/queue/add", { entry, maxParallel }).then((r) => r.queue),
+      removeFromQueue: (taskId) => call("POST", "/queue/remove", { taskId }).then((r) => r.queue),
+      /** Atomically removes and returns the entries that may start now. */
+      takeFromQueue: (maxParallel, starting) => call("POST", "/queue/take", { maxParallel, starting })
     };
   };
 
@@ -2750,6 +2756,18 @@ ${GUEST_UI_LOOK_CSS}`;
     }
     return task.state === "ready-for-agent" ? "ready" : "backlog";
   };
+  var fromLink = (link) => {
+    switch (link.status) {
+      case "busy":
+        return { id: link.sessionId, activity: "running", outcome: null, archived: false };
+      case "waiting":
+        return { id: link.sessionId, activity: "waiting-question", outcome: null, archived: false };
+      case "idle":
+        return { id: link.sessionId, activity: "idle", outcome: "completed", archived: false };
+      default:
+        return null;
+    }
+  };
   var sessionForTask = (taskId, sessions, links = []) => {
     const linked = new Set(links.filter((l) => l.taskId === taskId).map((l) => l.sessionId));
     let best = null;
@@ -2760,9 +2778,15 @@ ${GUEST_UI_LOOK_CSS}`;
         best = s;
       }
     }
-    return best === null ? null : { id: best.id, activity: best.activity, outcome: best.outcome, archived: false };
+    if (best !== null) return { id: best.id, activity: best.activity, outcome: best.outcome, archived: false };
+    let newest = null;
+    for (const l of links) {
+      if (l.taskId !== taskId || fromLink(l) === null || sessions.some((s) => s.id === l.sessionId)) continue;
+      if (newest === null || (l.createdAt ?? 0) >= (newest.createdAt ?? 0)) newest = l;
+    }
+    return newest === null ? null : fromLink(newest);
   };
-  var groupTasks = (tasks, sessions, queued, hideSubtasks, links = []) => {
+  var groupTasks = (tasks, sessions, starting, hideSubtasks, links = [], queued = /* @__PURE__ */ new Set()) => {
     const byId = new Map(tasks.map((t) => [t.id, t]));
     const children = /* @__PURE__ */ new Map();
     for (const t of tasks) {
@@ -2777,7 +2801,7 @@ ${GUEST_UI_LOOK_CSS}`;
       const session = sessionForTask(task.id, sessions, links);
       const kids = children.get(task.id) ?? [];
       cards.set(task.id, {
-        column: columnFor(task, session, queued.has(task.id)),
+        column: columnFor(task, session, starting.has(task.id) || queued.has(task.id) && task.state !== "done"),
         card: {
           task,
           session,
@@ -2787,7 +2811,8 @@ ${GUEST_UI_LOOK_CSS}`;
           }),
           progress: kids.length === 0 ? null : { done: kids.filter((k) => k.state === "done").length, total: kids.length },
           child: false,
-          starting: queued.has(task.id) && session === null
+          starting: starting.has(task.id) && session === null,
+          queued: queued.has(task.id) && !starting.has(task.id) && task.state !== "done"
         }
       });
     }
@@ -4071,7 +4096,7 @@ ${GUEST_UI_LOOK_CSS}`;
     let addDispose = null;
     let card = null;
     const find = (id) => deps.tasks().find((t) => t.id === id) ?? null;
-    const info2 = (message) => void deps.host.toast({ kind: "info", message }).catch(() => {
+    const info = (message) => void deps.host.toast({ kind: "info", message }).catch(() => {
     });
     const fail2 = (message) => void deps.host.toast({ kind: "error", message }).catch(() => {
     });
@@ -4149,18 +4174,22 @@ ${GUEST_UI_LOOK_CSS}`;
         if (answer === null) return;
         withChildren = answer === "all";
       }
+      if (deps.beforeMove !== void 0 && !await deps.beforeMove(task)) return;
       await run(task.id, (api) => api.close(task.id, withChildren));
     };
     const apply = (task, move2) => {
       switch (move2.kind) {
         case "none":
-          info2(move2.reason);
+          info(move2.reason);
           return;
         case "start":
           deps.onStart(task);
           return;
         case "setState":
-          void run(task.id, (api) => api.setState(task.id, move2.state));
+          void (async () => {
+            if (deps.beforeMove !== void 0 && !await deps.beforeMove(task)) return;
+            await run(task.id, (api) => api.setState(task.id, move2.state));
+          })();
           return;
         case "close":
           void close(task, move2.askChildren);
@@ -4289,82 +4318,6 @@ ${GUEST_UI_LOOK_CSS}`;
     };
   };
 
-  // src/panel/launcher.ts
-  var SETTLE_MS = 6e4;
-  var createLauncher = (deps) => {
-    const now = deps.now ?? Date.now;
-    const waiting = /* @__PURE__ */ new Map();
-    const launch = async (task, opts) => {
-      if (deps.isStarting.has(task.id) || deps.hasLiveSession(task.id)) return "already";
-      deps.isStarting.add(task.id);
-      let sessionId = null;
-      try {
-        const prompt = await deps.prompt(task, opts);
-        sessionId = (await deps.start(task, opts, prompt)).sessionId;
-      } catch (e) {
-        deps.onError(task, e);
-      }
-      if (sessionId === null) {
-        deps.isStarting.delete(task.id);
-        return "failed";
-      }
-      waiting.set(task.id, { sessionId, at: now() });
-      return "started";
-    };
-    const settle = (known) => {
-      let changed = false;
-      for (const [taskId, w] of waiting) {
-        if (!known(w.sessionId) && now() - w.at < SETTLE_MS) continue;
-        waiting.delete(taskId);
-        deps.isStarting.delete(taskId);
-        changed = true;
-      }
-      return changed;
-    };
-    const reset = () => {
-      waiting.clear();
-      deps.isStarting.clear();
-    };
-    return { launch, settle, reset };
-  };
-
-  // src/panel/prompt.ts
-  var PROMPT_MAX = GUEST_ATTACH_TEXT_MAX;
-  var STATES2 = "needs-triage, needs-info, ready-for-agent, ready-for-human, wontfix, done";
-  var shellWord = (s) => /^[A-Za-z0-9_./:@%+=,-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`;
-  var isGithub = (task) => task.url !== null || /^#\d+$/.test(task.id);
-  var buildPrompt = (task, preset, cliPath2, children) => {
-    const cli2 = `node ${shellWord(cliPath2)}`;
-    const id = shellWord(task.id);
-    const head = [`# Task: ${task.title}`, `Id: ${task.id}`, ...task.url !== null ? [`URL: ${task.url}`] : []].join("\n");
-    const tracker = [
-      "## Tracker",
-      isGithub(task) ? "This task is a GitHub issue of this repository." : "This task is a local issue file under .scratch/ in this repository.",
-      `Move it with the task-board CLI: ${cli2} state ${id} <state>`,
-      `States: ${STATES2}. Set "done" only when the work is finished.`
-    ].join("\n");
-    const kids = children.length === 0 ? "" : [
-      "## Sub-tasks",
-      ...children.map((c) => `- ${c.id}: ${c.title} (${c.state})`),
-      "",
-      "Work until every sub-task is done; move each sub-task with the CLI as you go."
-    ].join("\n");
-    const instructions = preset.text.trim() === "" ? "" : `## Instructions (${preset.name})
-${preset.text.trim()}`;
-    const body = task.body.trim() === "" ? "No description." : task.body.trim();
-    const compose = (b) => [head, b, tracker, kids, instructions].filter((part) => part !== "").join("\n\n");
-    const full = compose(body);
-    if (full.length <= PROMPT_MAX) return full;
-    const note = `[\u2026] The description is cut here; read the full task with the CLI: ${cli2} show ${id}`;
-    const room = PROMPT_MAX - compose(`
-
-${note}`).length;
-    const cut = room > 0 ? `${body.slice(0, room).trimEnd()}
-
-${note}` : note;
-    return compose(cut).slice(0, PROMPT_MAX);
-  };
-
   // src/panel/setup.ts
   var TRACKER_NAMES = { local: "local Markdown files", github: "GitHub Issues" };
   var trackerName = (tracker) => TRACKER_NAMES[tracker];
@@ -4413,6 +4366,476 @@ ${note}` : note;
     return { kind: "board" };
   };
 
+  // src/panel/launcher.ts
+  var SETTLE_MS = 6e4;
+  var createLauncher = (deps) => {
+    const now = deps.now ?? Date.now;
+    const waiting = /* @__PURE__ */ new Map();
+    const inFlight = /* @__PURE__ */ new Set();
+    const launch = async (task, opts, prompt) => {
+      if (deps.isStarting.has(task.id) || deps.hasLiveSession(task.id)) return "already";
+      deps.isStarting.add(task.id);
+      inFlight.add(task.id);
+      let sessionId = null;
+      let pending = false;
+      try {
+        const text2 = prompt ?? await deps.prompt(task, opts);
+        const r = await deps.start(task, opts, text2);
+        sessionId = r.sessionId;
+        pending = sessionId === null && r.pending === true;
+      } catch (e) {
+        deps.onError(task, e);
+      } finally {
+        inFlight.delete(task.id);
+      }
+      if (sessionId === null && !pending) {
+        deps.isStarting.delete(task.id);
+        return "failed";
+      }
+      waiting.set(task.id, { sessionId, at: now() });
+      return pending ? "pending" : "started";
+    };
+    const settle = (known, taskKnown) => {
+      let changed = false;
+      for (const [taskId, w] of waiting) {
+        const found = w.sessionId !== null ? known(w.sessionId) : taskKnown?.(taskId, w.at) ?? false;
+        if (!found && now() - w.at < SETTLE_MS) continue;
+        waiting.delete(taskId);
+        deps.isStarting.delete(taskId);
+        changed = true;
+      }
+      return changed;
+    };
+    const reset = () => {
+      waiting.clear();
+      inFlight.clear();
+      deps.isStarting.clear();
+    };
+    const starting = () => [...inFlight];
+    return { launch, settle, reset, starting };
+  };
+
+  // src/panel/prompt.ts
+  var PROMPT_MAX = GUEST_ATTACH_TEXT_MAX;
+  var STATES2 = "needs-triage, needs-info, ready-for-agent, ready-for-human, wontfix, done";
+  var shellWord = (s) => /^[A-Za-z0-9_./:@%+=,-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`;
+  var isGithub = (task) => task.url !== null || /^#\d+$/.test(task.id);
+  var buildPrompt = (task, preset, cliPath, children) => {
+    const cli = `node ${shellWord(cliPath)}`;
+    const id = shellWord(task.id);
+    const head = [`# Task: ${task.title}`, `Id: ${task.id}`, ...task.url !== null ? [`URL: ${task.url}`] : []].join("\n");
+    const tracker = [
+      "## Tracker",
+      isGithub(task) ? "This task is a GitHub issue of this repository." : "This task is a local issue file under .scratch/ in this repository.",
+      `Move it with the task-board CLI: ${cli} state ${id} <state>`,
+      `States: ${STATES2}. Set "done" only when the work is finished.`
+    ].join("\n");
+    const kids = children.length === 0 ? "" : [
+      "## Sub-tasks",
+      ...children.map((c) => `- ${c.id}: ${c.title} (${c.state})`),
+      "",
+      "Work until every sub-task is done; move each sub-task with the CLI as you go."
+    ].join("\n");
+    const instructions = preset.text.trim() === "" ? "" : `## Instructions (${preset.name})
+${preset.text.trim()}`;
+    const body = task.body.trim() === "" ? "No description." : task.body.trim();
+    const compose = (b) => [head, b, tracker, kids, instructions].filter((part) => part !== "").join("\n\n");
+    const full = compose(body);
+    if (full.length <= PROMPT_MAX) return full;
+    const note = `[\u2026] The description is cut here; read the full task with the CLI: ${cli} show ${id}`;
+    const room = PROMPT_MAX - compose(`
+
+${note}`).length;
+    const cut = room > 0 ? `${body.slice(0, room).trimEnd()}
+
+${note}` : note;
+    return compose(cut).slice(0, PROMPT_MAX);
+  };
+
+  // src/panel/ui/startForm.ts
+  var el4 = (tag, className, text2) => {
+    const node = document.createElement(tag);
+    node.className = className;
+    if (text2 !== void 0) node.textContent = text2;
+    return node;
+  };
+  var askStart = (title, initial, presets) => new Promise((resolve) => {
+    const options = { ...initial };
+    const backdrop = el4("div", "kb-backdrop kb-confirm-backdrop");
+    const box = el4("div", "kb-confirm");
+    box.setAttribute("role", "dialog");
+    box.setAttribute("aria-modal", "true");
+    box.append(el4("h2", "kb-confirm-title", `Start an agent on \u201C${title}\u201D`));
+    box.append(el4("p", "kb-confirm-body", "Empty model or agent uses your current selection in OpenChamber."));
+    const row1 = el4("div", "kb-fields");
+    const row2 = el4("div", "kb-fields");
+    const cells = [0, 1, 2, 3].map(() => el4("div", "kb-field"));
+    row1.append(cells[0], cells[1]);
+    row2.append(cells[2], cells[3]);
+    const actions = el4("div", "kb-actions");
+    box.append(row1, row2, actions);
+    backdrop.append(box);
+    const disposers = [];
+    const preset = mountSelect(cells[0], {
+      label: "Preset",
+      value: options.presetId,
+      options: presets.map((p) => ({ id: p.id, label: p.name })),
+      onChange: (id) => {
+        options.presetId = id;
+        preset.update({ value: id });
+      }
+    });
+    const location = mountSelect(cells[1], {
+      label: "Location",
+      value: options.location,
+      options: Object.keys(LOCATION_LABELS).map((id) => ({ id, label: LOCATION_LABELS[id] })),
+      onChange: (id) => {
+        options.location = id;
+        location.update({ value: id });
+      }
+    });
+    const text2 = (slot, label, key, placeholder) => {
+      const field2 = mountTextField(slot, {
+        label,
+        value: options[key] ?? "",
+        placeholder,
+        mono: true,
+        onChange: (v2) => {
+          field2.update({ value: v2 });
+          options[key] = v2.trim() === "" ? null : v2.trim();
+        }
+      });
+      disposers.push(field2.dispose);
+    };
+    text2(cells[2], "Model", "model", "Your current model");
+    text2(cells[3], "Agent", "agent", "Your current agent");
+    disposers.push(preset.dispose, location.dispose);
+    const done = (answer) => {
+      document.removeEventListener("keydown", onKey);
+      for (const d of disposers) d();
+      backdrop.remove();
+      resolve(answer);
+    };
+    const onKey = (e) => {
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      e.preventDefault();
+      e.stopPropagation();
+      done(null);
+    };
+    disposers.push(mountButton(actions, { label: "Start", size: "sm", onClick: () => done({ ...options }) }).dispose);
+    disposers.push(mountButton(actions, { label: "Cancel", variant: "outline", size: "sm", onClick: () => done(null) }).dispose);
+    backdrop.addEventListener("click", (e) => {
+      if (e.target === backdrop) done(null);
+    });
+    document.addEventListener("keydown", onKey);
+    document.body.append(backdrop);
+    actions.querySelector("button")?.focus();
+  });
+
+  // src/panel/starter.ts
+  var PENDING_LOOKBACK_MS = 12e4;
+  var PENDING_RELOADS_MS = [1e4, 3e4];
+  var NO_ANSWER = /* @__PURE__ */ new Set(["HOST_TIMEOUT", "REQUEST_FAILED"]);
+  var LIVE = /* @__PURE__ */ new Set(["running", "retrying", "waiting-permission", "waiting-question"]);
+  var errorText3 = (e) => e instanceof Error ? e.message : String(e);
+  var createStarter = (deps) => {
+    const { host: host2 } = deps;
+    const fail2 = (message) => void host2.toast({ kind: "error", message }).catch(() => {
+    });
+    const info = (message) => void host2.toast({ kind: "info", message }).catch(() => {
+    });
+    let links = [];
+    let queue = [];
+    let shown = null;
+    const currentId = () => deps.project()?.id ?? null;
+    const hasLiveSession = (taskId) => {
+      const s = sessionForTask(taskId, deps.sessions(), links);
+      return s !== null && LIVE.has(s.activity);
+    };
+    let cli = null;
+    const cliPath = async (directory) => {
+      if (cli?.directory === directory) return cli.path;
+      const path = await createApi(host2, directory).cliPath();
+      cli = { directory, path };
+      return path;
+    };
+    const settleNow = () => {
+      const sessions = deps.sessions();
+      return launcher.settle(
+        (id) => sessions.some((s) => s.id === id) || links.some((l) => l.sessionId === id),
+        (taskId, since) => links.some((l) => l.taskId === taskId && (l.createdAt ?? 0) >= since - PENDING_LOOKBACK_MS)
+      );
+    };
+    const reloadLinks = async (projectId, directory) => {
+      try {
+        const fresh = await createApi(host2, directory).listLinks();
+        if (currentId() !== projectId) return;
+        links = fresh;
+        shown = projectId;
+        settleNow();
+        deps.draw();
+      } catch {
+      }
+    };
+    const startTask = async (task, opts, prompt) => {
+      const p = deps.project();
+      if (p === null) throw new Error("No project is open");
+      const api = createApi(host2, p.directory);
+      if (opts.model !== null || opts.agent !== null || task.id.length > GUEST_ATTACH_ID_MAX) {
+        try {
+          const r = await api.startSession({
+            taskId: task.id,
+            title: task.title,
+            prompt,
+            model: opts.model,
+            agent: opts.agent,
+            location: opts.location
+          });
+          void reloadLinks(p.id, p.directory);
+          return { sessionId: r.sessionId };
+        } catch (e) {
+          if (!(e instanceof ApiError) || !NO_ANSWER.has(e.code)) throw e;
+          for (const ms of PENDING_RELOADS_MS) setTimeout(() => void reloadLinks(p.id, p.directory), ms);
+          void reloadLinks(p.id, p.directory);
+          return { sessionId: null, pending: true };
+        }
+      }
+      const result = await host2.startSession(
+        clampStartSessionRequest({
+          providerId: "icf-kanban",
+          id: task.id,
+          title: task.title,
+          url: task.url ?? `https://icf-kanban.local/t/${encodeURIComponent(task.id)}`,
+          text: prompt,
+          projectId: p.id,
+          worktree: opts.location === "worktree" ? true : false,
+          navigation: "preserve"
+        })
+      );
+      if (result.sessionId === null) {
+        const what = result.failure === "bootstrap-failed" ? "setting up the worktree failed" : "the session could not be created";
+        void host2.toast({
+          kind: "error",
+          message: `Could not start \u201C${task.title}\u201D: ${what}. The worktree ${result.worktree.directory || result.directory} is kept.`,
+          persistent: true
+        }).catch(() => {
+        });
+        return { sessionId: null };
+      }
+      if (result.sent === "no-model" || result.sent === "failed") {
+        const why = result.sent === "no-model" ? "no model is selected" : "sending failed";
+        fail2(`The session for \u201C${task.title}\u201D was created, but its first message was not sent (${why}). Open it and send the task yourself.`);
+      }
+      if (result.linked === false) fail2(`The session for \u201C${task.title}\u201D started, but the card could not be linked to it; the card will not follow it.`);
+      const sessionId = result.sessionId;
+      void api.addLink(task.id, sessionId, result.directory ?? result.worktree?.directory ?? null).then(() => reloadLinks(p.id, p.directory)).catch(() => {
+      });
+      return { sessionId };
+    };
+    const buildFor = async (task, opts) => {
+      const p = deps.project();
+      if (p === null) throw new Error("No project is open");
+      const ctx = deps.context();
+      const presets = ctx?.presets ?? [];
+      const preset = presets.find((x) => x.id === opts.presetId) ?? presets.find((x) => x.id === "implement") ?? presets[0];
+      if (preset === void 0) throw new Error("Settings are loading, try again in a moment");
+      const children = (deps.tasks() ?? []).filter((t) => t.parentId === task.id);
+      return buildPrompt(task, preset, await cliPath(p.directory), children);
+    };
+    const isStarting = /* @__PURE__ */ new Set();
+    const launcher = createLauncher({
+      isStarting,
+      hasLiveSession,
+      start: startTask,
+      prompt: buildFor,
+      onError: (task, e) => fail2(`Could not start \u201C${task.title}\u201D: ${errorText3(e)}`)
+    });
+    const report = (task, result) => {
+      if (result === "already") info(`\u201C${task.title}\u201D already has an agent working on it`);
+      else if (result === "started") void host2.toast({ kind: "success", message: `Started an agent on \u201C${task.title}\u201D` }).catch(() => {
+      });
+      else if (result === "pending")
+        info(`Starting \u201C${task.title}\u201D is taking longer than expected; the card follows its session once it shows up`);
+    };
+    const queuedIds = () => new Set(shown === currentId() ? queue.map((e) => e.taskId) : []);
+    const occupied = () => {
+      const ids = new Set(isStarting);
+      for (const t of deps.tasks() ?? []) if (hasLiveSession(t.id)) ids.add(t.id);
+      return ids.size;
+    };
+    let draining = false;
+    let again = false;
+    const drainOnce = async () => {
+      const ctx = deps.context();
+      const p = deps.project();
+      const list = deps.tasks();
+      if (ctx === null || p === null || p.id !== ctx.projectId || list === null || shown !== p.id || queue.length === 0) return;
+      const api = createApi(host2, p.directory);
+      const max = ctx.settings.maxParallel;
+      let r;
+      try {
+        r = await api.takeFromQueue(max, launcher.starting());
+      } catch {
+        return;
+      }
+      if (currentId() !== p.id) {
+        for (const e of r.taken) await api.addToQueue(e, max).catch(() => {
+        });
+        return;
+      }
+      queue = r.queue;
+      for (const e of r.taken) {
+        const task = list.find((t) => t.id === e.taskId);
+        if (task === void 0 || task.state === "done") {
+          void api.removeFromQueue(e.taskId).catch(() => {
+          });
+          continue;
+        }
+        const opts = { presetId: "", model: e.model, agent: e.agent, location: e.location };
+        void launcher.launch(task, opts, e.prompt).then((result) => {
+          if (result === "failed" || result === "already") void api.removeFromQueue(e.taskId).catch(() => {
+          });
+          if (result !== "already") report(task, result);
+          deps.draw();
+        });
+      }
+      deps.draw();
+    };
+    const drain = async () => {
+      if (draining) {
+        again = true;
+        return;
+      }
+      draining = true;
+      try {
+        do {
+          again = false;
+          await drainOnce();
+        } while (again);
+      } finally {
+        draining = false;
+      }
+    };
+    const enqueue = async (task, opts, ctx) => {
+      const p = deps.project();
+      if (p === null || p.id !== ctx.projectId) return;
+      let prompt;
+      try {
+        prompt = await buildFor(task, opts);
+      } catch (e) {
+        fail2(`Could not queue \u201C${task.title}\u201D: ${errorText3(e)}`);
+        return;
+      }
+      const entry = {
+        taskId: task.id,
+        title: task.title,
+        prompt,
+        model: opts.model,
+        agent: opts.agent,
+        location: opts.location,
+        queuedAt: Date.now()
+      };
+      try {
+        const fresh = await createApi(host2, p.directory).addToQueue(entry, ctx.settings.maxParallel);
+        if (currentId() !== p.id) return;
+        queue = fresh;
+        shown = p.id;
+      } catch (e) {
+        fail2(`Could not queue \u201C${task.title}\u201D: ${errorText3(e)}`);
+        return;
+      }
+      deps.draw();
+      await drain();
+      if (queue.some((e) => e.taskId === task.id)) {
+        info(`\u201C${task.title}\u201D is queued; it starts when fewer than ${ctx.settings.maxParallel} agents are running`);
+      }
+    };
+    const onStart = async (task) => {
+      const ctx = deps.context();
+      if (ctx === null) {
+        info("Settings are loading, try again in a moment");
+        return;
+      }
+      if (isStarting.has(task.id) || hasLiveSession(task.id)) {
+        info(`\u201C${task.title}\u201D already has an agent working on it`);
+        return;
+      }
+      if (queuedIds().has(task.id)) {
+        info(`\u201C${task.title}\u201D is already queued`);
+        return;
+      }
+      let card;
+      try {
+        card = await deps.loadCard(ctx.projectId, task.id);
+      } catch (e) {
+        fail2(`Could not read the card's start options: ${errorText3(e)}`);
+        return;
+      }
+      let opts = resolveStart(ctx.settings, task, card, ctx.presets);
+      if (!ctx.settings.autoStart) {
+        const picked = await askStart(task.title, opts, ctx.presets);
+        if (picked === null) return;
+        opts = picked;
+      }
+      if (currentId() !== ctx.projectId) return;
+      if (queuedIds().size > 0 || occupied() >= ctx.settings.maxParallel) {
+        await enqueue(task, opts, ctx);
+        return;
+      }
+      const pending = launcher.launch(task, opts);
+      deps.draw();
+      report(task, await pending);
+      deps.draw();
+    };
+    const leaveQueue = async (taskId) => {
+      const p = deps.project();
+      if (p === null || !queuedIds().has(taskId)) return true;
+      try {
+        const fresh = await createApi(host2, p.directory).removeFromQueue(taskId);
+        if (currentId() === p.id) queue = fresh;
+        deps.draw();
+        return true;
+      } catch (e) {
+        fail2(`Could not take the card out of the queue: ${errorText3(e)}`);
+        return false;
+      }
+    };
+    const refresh = async (projectId, directory) => {
+      const api = createApi(host2, directory);
+      const [freshLinks, freshQueue] = await Promise.all([api.listLinks().catch(() => null), api.listQueue().catch(() => null)]);
+      if (currentId() !== projectId) return;
+      if (shown !== projectId) {
+        links = [];
+        queue = [];
+      }
+      shown = projectId;
+      if (freshLinks !== null) links = freshLinks;
+      if (freshQueue !== null) queue = freshQueue;
+      settleNow();
+    };
+    const onSnapshot = () => {
+      settleNow();
+      void drain();
+    };
+    const reset = () => {
+      launcher.reset();
+      links = [];
+      queue = [];
+      shown = null;
+    };
+    return {
+      isStarting,
+      links: () => shown === currentId() ? links : [],
+      queuedIds,
+      hasLiveSession,
+      onStart,
+      leaveQueue,
+      refresh,
+      onSnapshot,
+      reset
+    };
+  };
+
   // src/panel/ui/card.ts
   var typeTone = (type) => type === "bug" ? "error" : type === "enhancement" ? "info" : "neutral";
   var sessionBadge = (s) => {
@@ -4451,7 +4874,9 @@ ${note}` : note;
     const badge2 = (label, tone2) => {
       disposers.push(mountBadge(badges, { label, tone: tone2 }).dispose);
     };
-    if (model.session !== null) {
+    if (model.queued) {
+      badge2("Queued", "neutral");
+    } else if (model.session !== null) {
       const b = sessionBadge(model.session);
       badge2(b.label, b.tone);
     } else if (model.starting) {
@@ -4622,86 +5047,6 @@ ${note}` : note;
     action: { label: model.action, onClick: onAction }
   }).dispose;
 
-  // src/panel/ui/startForm.ts
-  var el4 = (tag, className, text2) => {
-    const node = document.createElement(tag);
-    node.className = className;
-    if (text2 !== void 0) node.textContent = text2;
-    return node;
-  };
-  var askStart = (title, initial, presets) => new Promise((resolve) => {
-    const options = { ...initial };
-    const backdrop = el4("div", "kb-backdrop kb-confirm-backdrop");
-    const box = el4("div", "kb-confirm");
-    box.setAttribute("role", "dialog");
-    box.setAttribute("aria-modal", "true");
-    box.append(el4("h2", "kb-confirm-title", `Start an agent on \u201C${title}\u201D`));
-    box.append(el4("p", "kb-confirm-body", "Empty model or agent uses your current selection in OpenChamber."));
-    const row1 = el4("div", "kb-fields");
-    const row2 = el4("div", "kb-fields");
-    const cells = [0, 1, 2, 3].map(() => el4("div", "kb-field"));
-    row1.append(cells[0], cells[1]);
-    row2.append(cells[2], cells[3]);
-    const actions = el4("div", "kb-actions");
-    box.append(row1, row2, actions);
-    backdrop.append(box);
-    const disposers = [];
-    const preset = mountSelect(cells[0], {
-      label: "Preset",
-      value: options.presetId,
-      options: presets.map((p) => ({ id: p.id, label: p.name })),
-      onChange: (id) => {
-        options.presetId = id;
-        preset.update({ value: id });
-      }
-    });
-    const location = mountSelect(cells[1], {
-      label: "Location",
-      value: options.location,
-      options: Object.keys(LOCATION_LABELS).map((id) => ({ id, label: LOCATION_LABELS[id] })),
-      onChange: (id) => {
-        options.location = id;
-        location.update({ value: id });
-      }
-    });
-    const text2 = (slot, label, key, placeholder) => {
-      const field2 = mountTextField(slot, {
-        label,
-        value: options[key] ?? "",
-        placeholder,
-        mono: true,
-        onChange: (v2) => {
-          field2.update({ value: v2 });
-          options[key] = v2.trim() === "" ? null : v2.trim();
-        }
-      });
-      disposers.push(field2.dispose);
-    };
-    text2(cells[2], "Model", "model", "Your current model");
-    text2(cells[3], "Agent", "agent", "Your current agent");
-    disposers.push(preset.dispose, location.dispose);
-    const done = (answer) => {
-      document.removeEventListener("keydown", onKey);
-      for (const d of disposers) d();
-      backdrop.remove();
-      resolve(answer);
-    };
-    const onKey = (e) => {
-      if (e.key !== "Escape" || e.defaultPrevented) return;
-      e.preventDefault();
-      e.stopPropagation();
-      done(null);
-    };
-    disposers.push(mountButton(actions, { label: "Start", size: "sm", onClick: () => done({ ...options }) }).dispose);
-    disposers.push(mountButton(actions, { label: "Cancel", variant: "outline", size: "sm", onClick: () => done(null) }).dispose);
-    backdrop.addEventListener("click", (e) => {
-      if (e.target === backdrop) done(null);
-    });
-    document.addEventListener("keydown", onKey);
-    document.body.append(backdrop);
-    actions.querySelector("button")?.focus();
-  });
-
   // src/panel/ui/styles.ts
   var CSS2 = `
 html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg); font-family: var(--oc-font); }
@@ -4863,7 +5208,6 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     pinned: false,
     hostDirectory: null,
     sessions: [],
-    links: [],
     config: null,
     tasks: null,
     hideSubtasks: false,
@@ -4994,7 +5338,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
       board.render(null);
       return;
     }
-    const model = groupTasks(state.tasks, state.sessions, isStarting, state.hideSubtasks, state.links);
+    const model = groupTasks(state.tasks, state.sessions, starter.isStarting, state.hideSubtasks, starter.links(), starter.queuedIds());
     for (const [column, cards] of Object.entries(model)) for (const c of cards) state.columns.set(c.task.id, column);
     setBadge(model.review.length || null);
     board.render(model, editor.busy);
@@ -5091,14 +5435,14 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
         showWizard(api, remote);
         return;
       }
-      const [tasks, links] = await Promise.all([api.list(), api.listLinks().catch(() => null)]);
+      const [tasks] = await Promise.all([api.list(), starter.refresh(p.id, p.directory)]);
       if (mine !== generation) return;
       state.config = result.config;
       state.tasks = tasks;
-      if (links !== null) state.links = links;
       state.view = "board";
       draw();
       editor.refresh();
+      starter.onSnapshot();
     } catch (e) {
       if (mine !== generation) return;
       showNotice(loadNotice(failureOf(e)));
@@ -5118,8 +5462,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     state.projectSettings = {};
     if (id !== null) void loadProjectSettings(id);
     state.sessions = [];
-    state.links = [];
-    launcher.reset();
+    starter.reset();
     state.config = null;
     state.tasks = null;
     board.setProjects(projectOptions(), id);
@@ -5131,7 +5474,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
       const unsubscribe = await host.onSessions(id, (snapshot) => {
         if (snapshot.projectId !== state.projectId) return;
         state.sessions = snapshot.sessions;
-        launcher.settle((id2) => state.sessions.some((s) => s.id === id2));
+        starter.onSnapshot();
         draw();
       });
       if (state.projectId === id) unsubscribeSessions = unsubscribe;
@@ -5146,129 +5489,24 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     const next = projectFor(state.hostDirectory) ?? current ?? state.projects[0] ?? null;
     void selectProject(next?.id ?? null);
   };
-  var info = (message) => void host.toast({ kind: "info", message }).catch(() => {
-  });
-  var errorText3 = (e) => e instanceof Error ? e.message : String(e);
+  var errorText4 = (e) => e instanceof Error ? e.message : String(e);
   var startContext = () => {
     const id = state.projectId;
     return id === null || !globalLoaded || state.settingsFor !== id ? null : { projectId: id, settings: settings(), presets: listPresets(state.presets) };
   };
-  var LIVE = /* @__PURE__ */ new Set(["running", "retrying", "waiting-permission", "waiting-question"]);
-  var hasLiveSession = (taskId) => {
-    const s = sessionForTask(taskId, state.sessions, state.links);
-    return s !== null && LIVE.has(s.activity);
-  };
-  var cli = null;
-  var cliPath = async (directory) => {
-    if (cli?.directory === directory) return cli.path;
-    const path = await createApi(host, directory).cliPath();
-    cli = { directory, path };
-    return path;
-  };
-  var reloadLinks = async (projectId, directory) => {
-    try {
-      const links = await createApi(host, directory).listLinks();
-      if (state.projectId !== projectId) return;
-      state.links = links;
-      draw();
-    } catch {
-    }
-  };
-  var startTask = async (task, opts, prompt) => {
-    const p = project();
-    if (p === null) throw new Error("No project is open");
-    if (opts.model !== null || opts.agent !== null || task.id.length > GUEST_ATTACH_ID_MAX) {
-      const r = await createApi(host, p.directory).startSession({
-        taskId: task.id,
-        title: task.title,
-        prompt,
-        model: opts.model,
-        agent: opts.agent,
-        location: opts.location
-      });
-      void reloadLinks(p.id, p.directory);
-      return { sessionId: r.sessionId };
-    }
-    const result = await host.startSession(
-      clampStartSessionRequest({
-        providerId: "icf-kanban",
-        id: task.id,
-        title: task.title,
-        url: task.url ?? `https://icf-kanban.local/t/${encodeURIComponent(task.id)}`,
-        text: prompt,
-        projectId: p.id,
-        worktree: opts.location === "worktree" ? true : false,
-        navigation: "preserve"
-      })
-    );
-    if (result.sessionId === null) {
-      const what = result.failure === "bootstrap-failed" ? "setting up the worktree failed" : "the session could not be created";
-      void host.toast({
-        kind: "error",
-        message: `Could not start \u201C${task.title}\u201D: ${what}. The worktree ${result.worktree.directory || result.directory} is kept.`,
-        persistent: true
-      }).catch(() => {
-      });
-      return { sessionId: null };
-    }
-    if (result.sent === "no-model" || result.sent === "failed") {
-      const why = result.sent === "no-model" ? "no model is selected" : "sending failed";
-      fail(`The session for \u201C${task.title}\u201D was created, but its first message was not sent (${why}). Open it and send the task yourself.`);
-    }
-    if (result.linked === false) fail(`The session for \u201C${task.title}\u201D started, but the card could not be linked to it; the card will not follow it.`);
-    return { sessionId: result.sessionId };
-  };
-  var isStarting = /* @__PURE__ */ new Set();
-  var launcher = createLauncher({
-    isStarting,
-    hasLiveSession,
-    start: startTask,
-    prompt: async (task, opts) => {
-      const p = project();
-      if (p === null) throw new Error("No project is open");
-      const presets = listPresets(state.presets);
-      const preset = presets.find((x) => x.id === opts.presetId) ?? presets.find((x) => x.id === "implement") ?? presets[0];
-      const children = (state.tasks ?? []).filter((t) => t.parentId === task.id);
-      return buildPrompt(task, preset, await cliPath(p.directory), children);
-    },
-    onError: (task, e) => fail(`Could not start \u201C${task.title}\u201D: ${errorText3(e)}`)
+  var starter = createStarter({
+    host,
+    project,
+    tasks: () => state.tasks,
+    sessions: () => state.sessions,
+    context: startContext,
+    loadCard: (projectId, taskId) => store.loadCard(projectId, taskId),
+    draw: () => draw()
   });
-  var onStart = async (task) => {
-    const ctx = startContext();
-    if (ctx === null) {
-      info("Settings are loading, try again in a moment");
-      return;
-    }
-    if (isStarting.has(task.id) || hasLiveSession(task.id)) {
-      info(`\u201C${task.title}\u201D already has an agent working on it`);
-      return;
-    }
-    let card;
-    try {
-      card = await store.loadCard(ctx.projectId, task.id);
-    } catch (e) {
-      fail(`Could not read the card's start options: ${errorText3(e)}`);
-      return;
-    }
-    let opts = resolveStart(ctx.settings, task, card, ctx.presets);
-    if (!ctx.settings.autoStart) {
-      const picked = await askStart(task.title, opts, ctx.presets);
-      if (picked === null) return;
-      opts = picked;
-    }
-    if (state.projectId !== ctx.projectId) return;
-    const pending = launcher.launch(task, opts);
-    draw();
-    const result = await pending;
-    if (result === "already") info(`\u201C${task.title}\u201D already has an agent working on it`);
-    else if (result === "started") void host.toast({ kind: "success", message: `Started an agent on \u201C${task.title}\u201D` }).catch(() => {
-    });
-    draw();
-  };
   var openCard = (taskId) => {
-    const s = sessionForTask(taskId, state.sessions, state.links);
+    const s = sessionForTask(taskId, state.sessions, starter.links());
     if (s === null) return false;
-    void host.openSession(s.id).catch((e) => fail(`Could not open the session: ${errorText3(e)}`));
+    void host.openSession(s.id).catch((e) => fail(`Could not open the session: ${errorText4(e)}`));
     return true;
   };
   var start = (ctx) => {
@@ -5304,7 +5542,8 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
       columnOf: (id) => state.columns.get(id) ?? null,
       reload: load,
       redraw: draw,
-      onStart: (task) => void onStart(task),
+      onStart: (task) => void starter.onStart(task),
+      beforeMove: (task) => starter.leaveQueue(task.id),
       openCard,
       baseTypes: () => settings().types,
       start: {

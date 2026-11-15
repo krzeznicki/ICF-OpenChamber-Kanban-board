@@ -51,9 +51,9 @@ function installGuestScrollbarActivity(doc) {
       return;
     if (!target.hasAttribute("data-oc-scrolling"))
       target.setAttribute("data-oc-scrolling", "");
-    const pending = timers.get(target);
-    if (pending !== void 0)
-      clearTimeout(pending);
+    const pending2 = timers.get(target);
+    if (pending2 !== void 0)
+      clearTimeout(pending2);
     timers.set(target, setTimeout(() => {
       timers.delete(target);
       target.removeAttribute("data-oc-scrolling");
@@ -78,8 +78,80 @@ var GUEST_SESSION_EVENT_TYPES = [
   "session-archived",
   "session-deleted"
 ];
+var SESSION_EVENTS_PATH = "/session-events";
+var SESSION_EVENTS_WIRE_VERSION = 1;
 var SESSION_EVENTS_IDLE_MS = 10 * 6e4;
 var EVENT_TYPES = new Set(GUEST_SESSION_EVENT_TYPES);
+var isGuestSessionEventType = (value) => EVENT_TYPES.has(value);
+var readSessionEventRequest = (body) => {
+  let wire;
+  try {
+    const parsed = JSON.parse(body);
+    if (Object(parsed) !== parsed || parsed === null)
+      return null;
+    wire = parsed;
+  } catch {
+    return null;
+  }
+  const { v, requestId, event, content: content2 } = wire;
+  if (v !== SESSION_EVENTS_WIRE_VERSION)
+    return null;
+  if (String(requestId) !== requestId || requestId.length === 0)
+    return null;
+  if (Object(event) !== event || event === void 0)
+    return null;
+  const { id, type, at, session, project, linked, permission, question } = event;
+  if (String(id) !== id || id.length === 0)
+    return null;
+  if (String(type) !== type || !isGuestSessionEventType(type))
+    return null;
+  if (!Number.isFinite(at))
+    return null;
+  if (Object(session) !== session || session === void 0)
+    return null;
+  const sessionId = session.id;
+  if (String(sessionId) !== sessionId || sessionId.length === 0)
+    return null;
+  const parentId = session.parentId;
+  if (parentId !== null && (String(parentId) !== parentId || parentId.length === 0))
+    return null;
+  if (Object(project) !== project || project === void 0)
+    return null;
+  const directory = project.directory;
+  if (directory !== null && (String(directory) !== directory || directory.length === 0))
+    return null;
+  if (!Array.isArray(linked))
+    return null;
+  const request = {
+    v: SESSION_EVENTS_WIRE_VERSION,
+    requestId,
+    event: { id, type, at: Number(at), session: { id: sessionId, parentId }, project: { directory }, linked }
+  };
+  if (permission !== void 0) {
+    if (Object(permission) !== permission)
+      return null;
+    const permissionRequestId = permission.requestId;
+    if (String(permissionRequestId) !== permissionRequestId || permissionRequestId.length === 0)
+      return null;
+    request.event.permission = { requestId: permissionRequestId };
+  }
+  if (question !== void 0) {
+    if (Object(question) !== question)
+      return null;
+    const { kind, id: questionId } = question;
+    if (kind !== "form" && kind !== "page")
+      return null;
+    if (String(questionId) !== questionId || questionId.length === 0)
+      return null;
+    request.event.question = { kind, id: questionId };
+  }
+  if (content2 !== void 0) {
+    if (Object(content2) !== content2 || content2.type !== type)
+      return null;
+    request.content = content2;
+  }
+  return request;
+};
 
 // node_modules/@openchamber/sdk/dist/service-host.js
 var SERVICE_HOST_PATH = "/service/call";
@@ -90,10 +162,10 @@ var MENTIONS_IDLE_MS = 10 * 6e4;
 var ServiceHostError = class extends Error {
   code;
   status;
-  constructor(message2, code, status) {
+  constructor(message2, code2, status) {
     super(message2);
     this.name = "ServiceHostError";
-    this.code = code;
+    this.code = code2;
     this.status = status;
   }
 };
@@ -208,11 +280,11 @@ var realExec = (cmd, args, opts) => new Promise((resolve) => {
         resolve({ code: 0, stdout, stderr });
         return;
       }
-      const code = error2.code;
-      if (code === "ENOENT") {
+      const code2 = error2.code;
+      if (code2 === "ENOENT") {
         resolve({ code: 127, stdout: "", stderr: `${cmd}: command not found` });
-      } else if (typeof code === "number") {
-        resolve({ code, stdout, stderr });
+      } else if (typeof code2 === "number") {
+        resolve({ code: code2, stdout, stderr });
       } else {
         resolve({ code: 1, stdout, stderr: stderr || error2.message });
       }
@@ -240,10 +312,10 @@ var TEMPLATES = {
 var TrackerError = class extends Error {
   // Declared explicitly: Node's type stripping does not support constructor parameter properties.
   code;
-  constructor(code, message2) {
+  constructor(code2, message2) {
     super(message2);
     this.name = "TrackerError";
-    this.code = code;
+    this.code = code2;
   }
 };
 
@@ -1001,24 +1073,164 @@ var openTracker = async (root, exec) => {
   return createGithubTracker(root, exec, config.labels);
 };
 
-// src/service/sessions.ts
+// src/service/queue.ts
+import { homedir } from "node:os";
+import { join as join3 } from "node:path";
+
+// src/core/queue.ts
+var nextToStart = (queued, running, maxParallel) => queued.slice(0, Math.max(0, maxParallel - running));
+
+// src/service/store.ts
 import { randomBytes } from "node:crypto";
 import { mkdir as mkdir3, readFile as readFile3, rename, writeFile as writeFile3 } from "node:fs/promises";
-import { homedir } from "node:os";
-import { basename, dirname, join as join3 } from "node:path";
+import { dirname } from "node:path";
+var code = (e) => e?.code;
+var readJson = async (file, now = Date.now) => {
+  let text;
+  try {
+    text = await readFile3(file, "utf8");
+  } catch (e) {
+    if (code(e) === "ENOENT") return null;
+    throw e;
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    try {
+      await rename(file, `${file}.corrupt-${now()}`);
+    } catch (e) {
+      if (code(e) !== "ENOENT") throw e;
+    }
+    return null;
+  }
+};
+var writeJson = async (file, data) => {
+  await mkdir3(dirname(file), { recursive: true });
+  const tmp = `${file}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
+  await writeFile3(tmp, `${JSON.stringify(data, null, 2)}
+`, "utf8");
+  await rename(tmp, file);
+};
+var chains = /* @__PURE__ */ new Map();
+var serial = (file, fn) => {
+  const run = (chains.get(file) ?? Promise.resolve()).then(fn);
+  const tail = run.catch(() => {
+  });
+  chains.set(file, tail);
+  void tail.then(() => {
+    if (chains.get(file) === tail) chains.delete(file);
+  });
+  return run;
+};
+
+// src/service/queue.ts
+var defaultQueueFile = () => join3(homedir(), ".icf-kanban", "queue.json");
+var DEFAULT_MAX_PARALLEL = 3;
+var MAX_PARALLEL_LIMIT = 10;
+var RESERVE_MS = 18e4;
+var isEntry = (v) => {
+  const e = v;
+  return typeof e === "object" && e !== null && typeof e.taskId === "string" && typeof e.title === "string" && typeof e.prompt === "string" && (e.model === null || typeof e.model === "string") && (e.agent === null || typeof e.agent === "string") && (e.location === "worktree" || e.location === "project") && typeof e.queuedAt === "number";
+};
+var clampMax = (n) => typeof n === "number" && Number.isFinite(n) ? Math.min(MAX_PARALLEL_LIMIT, Math.max(1, Math.round(n))) : DEFAULT_MAX_PARALLEL;
+var readQueueFile = async (file) => {
+  const raw = await readJson(file);
+  const projects = {};
+  const src = raw?.projects;
+  if (typeof src === "object" && src !== null && !Array.isArray(src)) {
+    for (const [dir, q] of Object.entries(src)) {
+      const p = q;
+      if (typeof p !== "object" || p === null || !Array.isArray(p.entries)) continue;
+      projects[dir] = { maxParallel: clampMax(p.maxParallel), entries: p.entries.filter(isEntry) };
+    }
+  }
+  return { version: 1, projects };
+};
+var update = (file, dir, fn) => serial(file, async () => {
+  const data = await readQueueFile(file);
+  const q = data.projects[dir] ?? { maxParallel: DEFAULT_MAX_PARALLEL, entries: [] };
+  const before = JSON.stringify(data.projects[dir] ?? null);
+  const result = await fn(q);
+  if (q.entries.length === 0) delete data.projects[dir];
+  else data.projects[dir] = q;
+  if (JSON.stringify(data.projects[dir] ?? null) !== before) await writeJson(file, data);
+  return result;
+});
+var listQueue = async (file, dir) => (await readQueueFile(file)).projects[dir]?.entries ?? [];
+var queuedProjects = async (file) => Object.entries((await readQueueFile(file)).projects).filter(([, q]) => q.entries.length > 0).map(([dir]) => dir);
+var addToQueue = (file, dir, entry, maxParallel) => update(file, dir, (q) => {
+  if (maxParallel !== void 0) q.maxParallel = clampMax(maxParallel);
+  if (!q.entries.some((e) => e.taskId === entry.taskId)) q.entries.push(entry);
+  return [...q.entries];
+});
+var removeFromQueue = (file, dir, taskId) => {
+  release(file, dir, taskId);
+  return update(file, dir, (q) => {
+    q.entries = q.entries.filter((e) => e.taskId !== taskId);
+    return [...q.entries];
+  });
+};
+var pending = /* @__PURE__ */ new Map();
+var pendingFor = (file, dir) => {
+  const key = `${file}\0${dir}`;
+  let p = pending.get(key);
+  if (p === void 0) {
+    p = { reserved: /* @__PURE__ */ new Map(), inFlight: /* @__PURE__ */ new Map() };
+    pending.set(key, p);
+  }
+  return p;
+};
+var release = (file, dir, taskId) => {
+  pendingFor(file, dir).reserved.delete(taskId);
+};
+var inFlight = async (file, dir, taskId, fn) => {
+  const p = pendingFor(file, dir);
+  p.inFlight.set(taskId, (p.inFlight.get(taskId) ?? 0) + 1);
+  try {
+    return await fn();
+  } finally {
+    const n = (p.inFlight.get(taskId) ?? 1) - 1;
+    if (n <= 0) p.inFlight.delete(taskId);
+    else p.inFlight.set(taskId, n);
+  }
+};
+var runningNow = (links, p, starting, now) => {
+  for (const [taskId, at] of p.reserved) if (now - at >= RESERVE_MS) p.reserved.delete(taskId);
+  const live = links.filter((l) => l.status === "busy" || l.status === "waiting");
+  const liveTasks = new Set(live.map((l) => l.taskId));
+  const starts = /* @__PURE__ */ new Set([...p.reserved.keys(), ...p.inFlight.keys(), ...starting]);
+  let n = new Set(live.map((l) => l.sessionId)).size;
+  for (const id of starts) if (!liveTasks.has(id)) n++;
+  return n;
+};
+var takeFromQueue = (file, dir, input) => update(file, dir, async (q) => {
+  if (input.maxParallel !== void 0) q.maxParallel = clampMax(input.maxParallel);
+  if (q.entries.length === 0) return { taken: [], queue: [] };
+  const links = await input.links();
+  const live = new Set(links.filter((l) => l.status === "busy" || l.status === "waiting").map((l) => l.taskId));
+  q.entries = q.entries.filter((e) => !live.has(e.taskId));
+  const now = (input.now ?? Date.now)();
+  const p = pendingFor(file, dir);
+  const running = runningNow(links, p, input.starting ?? [], now);
+  const ids = new Set(nextToStart(q.entries.map((e) => e.taskId), running, q.maxParallel));
+  const taken = q.entries.filter((e) => ids.has(e.taskId));
+  q.entries = q.entries.filter((e) => !ids.has(e.taskId));
+  for (const e of taken) p.reserved.set(e.taskId, now);
+  return { taken, queue: [...q.entries] };
+});
+
+// src/service/sessions.ts
+import { randomBytes as randomBytes2 } from "node:crypto";
+import { homedir as homedir2 } from "node:os";
+import { basename, dirname as dirname2, join as join4, sep } from "node:path";
 var LINKS_PER_PROJECT = 500;
-var defaultLinksFile = () => join3(homedir(), ".icf-kanban", "links.json");
+var defaultLinksFile = () => join4(homedir2(), ".icf-kanban", "links.json");
 var isLink = (v) => {
   const l = v;
   return typeof l === "object" && l !== null && typeof l.taskId === "string" && typeof l.sessionId === "string" && typeof l.directory === "string" && typeof l.createdAt === "number";
 };
 var readLinksFile = async (file) => {
-  let raw;
-  try {
-    raw = JSON.parse(await readFile3(file, "utf8"));
-  } catch {
-    return { version: 1, projects: {} };
-  }
+  const raw = await readJson(file);
   const projects = {};
   const src = raw?.projects;
   if (typeof src === "object" && src !== null && !Array.isArray(src)) {
@@ -1027,34 +1239,55 @@ var readLinksFile = async (file) => {
   return { version: 1, projects };
 };
 var listLinks = async (file, directory) => (await readLinksFile(file)).projects[directory] ?? [];
-var queue = Promise.resolve();
-var addLink = (file, project, link) => {
-  const run = queue.then(async () => {
-    const data = await readLinksFile(file);
-    const list = [...data.projects[project] ?? [], link];
-    data.projects[project] = list.slice(-LINKS_PER_PROJECT);
-    await mkdir3(dirname(file), { recursive: true });
-    const tmp = `${file}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
-    await writeFile3(tmp, `${JSON.stringify(data, null, 2)}
-`, "utf8");
-    await rename(tmp, file);
-  });
-  queue = run.catch(() => {
-  });
-  return run;
+var addLink = (file, project, link) => serial(file, async () => {
+  const data = await readLinksFile(file);
+  const list = [...data.projects[project] ?? [], link];
+  data.projects[project] = list.slice(-LINKS_PER_PROJECT);
+  await writeJson(file, data);
+});
+var STATUS_CHECK_MAX = 50;
+var STATUS_CONCURRENCY = 8;
+var linkStatuses = async (links, sessions) => {
+  const out = /* @__PURE__ */ new Map();
+  const status = sessions?.status;
+  if (status === void 0) return out;
+  const newest = /* @__PURE__ */ new Map();
+  for (const l of links) {
+    const n = newest.get(l.taskId);
+    if (n === void 0 || l.createdAt >= n.createdAt) newest.set(l.taskId, l);
+  }
+  const ask = [...newest.values()].sort((a, b) => b.createdAt - a.createdAt).slice(0, STATUS_CHECK_MAX);
+  let next = 0;
+  const worker = async () => {
+    while (next < ask.length) {
+      const l = ask[next++];
+      try {
+        out.set(l.sessionId, await status(l.sessionId));
+      } catch {
+        out.set(l.sessionId, "unknown");
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(STATUS_CONCURRENCY, ask.length) }, worker));
+  return out;
 };
-var worktreeSlug = (taskId, title, suffix = randomBytes(3).toString("hex")) => {
+var withStatus = async (links, sessions) => {
+  const statuses = await linkStatuses(links, sessions);
+  return links.map((l) => ({ ...l, status: statuses.get(l.sessionId) ?? "unknown" }));
+};
+var isInside = (dir, root) => dir === root || dir.startsWith(root.endsWith(sep) ? root : `${root}${sep}`);
+var worktreeSlug = (taskId, title, suffix = randomBytes2(3).toString("hex")) => {
   const base = (s) => s.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40).replace(/-+$/, "");
   const name = base(title) || base(taskId.replace(/^.*\//, "").replace(/\.md$/, "")) || "task";
   return `${name}-${suffix}`;
 };
-var worktreesRoot = (directory) => join3(dirname(directory), `${basename(directory)}-worktrees`);
+var worktreesRoot = (directory) => join4(dirname2(directory), `${basename(directory)}-worktrees`);
 var message = (e) => e instanceof Error ? e.message : String(e);
 var startSession = async (input, deps2) => {
   let worktree = null;
   if (input.location === "worktree") {
     const slug = worktreeSlug(input.taskId, input.title, deps2.suffix?.());
-    const path = join3(worktreesRoot(input.directory), slug);
+    const path = join4(worktreesRoot(input.directory), slug);
     const r = await deps2.exec("git", ["-C", input.directory, "worktree", "add", "-b", `icf/${slug}`, path], { cwd: input.directory });
     if (r.code !== 0) {
       throw new TrackerError("FAILED", `Could not create the worktree ${path}: ${(r.stderr || r.stdout).trim() || `git exited ${r.code}`}`);
@@ -1094,7 +1327,7 @@ var InvalidRequest = class extends Error {
 var invalid = (message2) => {
   throw new InvalidRequest(message2);
 };
-var error = (status, code, message2) => ({ status, json: { error: { code, message: message2 } } });
+var error = (status, code2, message2) => ({ status, json: { error: { code: code2, message: message2 } } });
 var isObject = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
 var optional = (body, key) => {
   const v = body[key];
@@ -1131,6 +1364,66 @@ var newTask = (v) => {
   return task;
 };
 var defaultCliPath = () => fileURLToPath(new URL("../build/cli/task-board.mjs", import.meta.url));
+var linksFile = (deps2) => deps2.linksFile ?? defaultLinksFile();
+var queueFile = (deps2) => deps2.queueFile ?? defaultQueueFile();
+var location = (v, key) => v === "worktree" || v === "project" ? v : invalid(`"${key}" must be "worktree" or "project"`);
+var queueEntry = (v) => {
+  if (!isObject(v)) return invalid('"entry" must be an object');
+  const queuedAt = v.queuedAt;
+  return {
+    taskId: str(v, "taskId"),
+    title: str(v, "title"),
+    prompt: str(v, "prompt"),
+    model: optional(v, "model"),
+    agent: optional(v, "agent"),
+    location: location(v.location, "entry.location"),
+    queuedAt: queuedAt === void 0 ? Date.now() : typeof queuedAt === "number" ? queuedAt : invalid('"entry.queuedAt" must be a number')
+  };
+};
+var maxParallelOf = (body) => body.maxParallel === void 0 ? void 0 : typeof body.maxParallel === "number" ? clampMax(body.maxParallel) : invalid('"maxParallel" must be a number');
+var start = async (dir, input, deps2) => {
+  if (deps2.sessions === void 0) throw new TrackerError("FAILED", "Starting sessions from the service is not available");
+  const sessions = deps2.sessions;
+  try {
+    return await inFlight(
+      queueFile(deps2),
+      dir,
+      input.taskId,
+      () => startSession(
+        { directory: dir, ...input },
+        { exec: deps2.exec, sessions, linksFile: linksFile(deps2), ...deps2.suffix ? { suffix: deps2.suffix } : {} }
+      )
+    );
+  } finally {
+    release(queueFile(deps2), dir, input.taskId);
+  }
+};
+var liveLinks = async (dir, deps2) => withStatus(await listLinks(linksFile(deps2), dir), deps2.sessions);
+var drainProject = async (dir, deps2) => {
+  if (deps2.sessions?.status === void 0) return;
+  const { taken } = await takeFromQueue(queueFile(deps2), dir, { links: () => liveLinks(dir, deps2) });
+  const log = deps2.log ?? ((m) => console.error(m));
+  await Promise.all(
+    taken.map(async (e) => {
+      try {
+        await start(dir, { taskId: e.taskId, title: e.title, prompt: e.prompt, model: e.model, agent: e.agent, location: e.location }, deps2);
+      } catch (err) {
+        log(`icf-kanban: could not start the queued task ${e.taskId}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    })
+  );
+};
+var DRAIN_EVENTS = /* @__PURE__ */ new Set(["turn-finished", "turn-failed"]);
+var onSessionEvent = async (req, deps2) => {
+  const { event } = req;
+  if (!DRAIN_EVENTS.has(event.type) || event.session.parentId !== null) return;
+  const dir = event.project.directory;
+  for (const project of await queuedProjects(queueFile(deps2))) {
+    const links = await listLinks(linksFile(deps2), project);
+    const ours = links.some((l) => l.sessionId === event.session.id) || dir !== null && (isInside(dir, project) || isInside(dir, worktreesRoot(project)) || links.some((l) => isInside(dir, l.directory)));
+    if (ours) await drainProject(project, deps2);
+  }
+};
 var tracker = (dir, deps2) => openTracker(dir, deps2.exec);
 var existingConfig = async (dir) => {
   try {
@@ -1215,15 +1508,30 @@ var POST = {
     const prompt = str(body, "prompt");
     const model = optional(body, "model");
     const agent = optional(body, "agent");
-    const location = body.location;
-    if (location !== "worktree" && location !== "project") return invalid('"location" must be "worktree" or "project"');
-    if (deps2.sessions === void 0) throw new TrackerError("FAILED", "Starting sessions from the service is not available");
-    return startSession(
-      { directory: dir, taskId, title, prompt, model, agent, location },
-      { exec: deps2.exec, sessions: deps2.sessions, linksFile: deps2.linksFile ?? defaultLinksFile(), ...deps2.suffix ? { suffix: deps2.suffix } : {} }
-    );
+    const where = location(body.location, "location");
+    return start(dir, { taskId, title, prompt, model, agent, location: where }, deps2);
   },
-  "/links/list": async (_body, dir, deps2) => ({ links: await listLinks(deps2.linksFile ?? defaultLinksFile(), dir) })
+  /** Links with the live status of their session (idle, busy, waiting, unknown). */
+  "/links/list": async (_body, dir, deps2) => ({ links: await liveLinks(dir, deps2) }),
+  /** A session the panel started itself (path A), so the queue counts it while it runs. */
+  "/links/add": async (body, dir, deps2) => {
+    const taskId = str(body, "taskId");
+    const sessionId = str(body, "sessionId");
+    const at = optional(body, "sessionDirectory");
+    if (at !== null && !isAbsolute(at)) return invalid('"sessionDirectory" must be an absolute path');
+    await addLink(linksFile(deps2), dir, { taskId, sessionId, directory: at ?? dir, createdAt: Date.now() });
+    release(queueFile(deps2), dir, taskId);
+    return {};
+  },
+  "/queue/list": async (_body, dir, deps2) => ({ queue: await listQueue(queueFile(deps2), dir) }),
+  "/queue/add": async (body, dir, deps2) => ({ queue: await addToQueue(queueFile(deps2), dir, queueEntry(body.entry), maxParallelOf(body)) }),
+  "/queue/remove": async (body, dir, deps2) => ({ queue: await removeFromQueue(queueFile(deps2), dir, str(body, "taskId")) }),
+  "/queue/take": async (body, dir, deps2) => {
+    const s = body.starting;
+    const starting = s === void 0 ? [] : Array.isArray(s) && s.every((id) => typeof id === "string") ? s : invalid('"starting" must be an array of task ids');
+    const max = maxParallelOf(body);
+    return takeFromQueue(queueFile(deps2), dir, { ...max !== void 0 ? { maxParallel: max } : {}, starting, links: () => liveLinks(dir, deps2) });
+  }
 };
 var GET = {
   "/health": () => ({}),
@@ -1234,6 +1542,12 @@ var handle = async (method, path, body, deps2) => {
     const m = method.toUpperCase();
     const get = GET[path];
     const post = POST[path];
+    if (path === SESSION_EVENTS_PATH) {
+      if (m !== "POST") return error(405, "INVALID", `${path} does not accept ${m}`);
+      const req = readSessionEventRequest(JSON.stringify(body ?? null));
+      if (req === null) return error(400, "INVALID", "Not a session event of a known wire version");
+      return { status: 200, json: { ok: true }, after: () => onSessionEvent(req, deps2) };
+    }
     if (get === void 0 && post === void 0) return error(404, "NOT_FOUND", `No route ${path}`);
     if (m === "GET" && get !== void 0) return { status: 200, json: get(deps2) };
     if (m === "POST" && post !== void 0) {
@@ -1258,7 +1572,10 @@ if (token === "" || !Number.isInteger(port) || port <= 0) {
 }
 var expected = Buffer.from(`Bearer ${token}`);
 var host = createServiceHost({ env: process.env });
-var deps = { exec: realExec, sessions: { start: (input) => host.sessions.start(input) } };
+var deps = {
+  exec: realExec,
+  sessions: { start: (input) => host.sessions.start(input), status: async (id) => (await host.sessions.status(id)).status }
+};
 var authorized = (req) => {
   const got = Buffer.from(req.headers.authorization ?? "");
   return got.length === expected.length && timingSafeEqual(got, expected);
@@ -1296,6 +1613,7 @@ var server = createServer((req, res) => {
     }
     const reply = await handle(req.method ?? "GET", path, body, deps);
     send(res, reply.status, reply.json);
+    await reply.after?.().catch((e) => console.error(`icf-kanban: ${e instanceof Error ? e.message : String(e)}`));
   })().catch((e) => {
     if (!res.headersSent) send(res, 500, { error: { code: "FAILED", message: e instanceof Error ? e.message : String(e) } });
     else res.destroy();

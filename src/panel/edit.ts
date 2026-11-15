@@ -30,6 +30,8 @@ export type EditorDeps = {
   redraw: () => void;
   /** Dropping on In Progress (also "Move to In Progress" in the detail): starts an agent. */
   onStart: (task: Task) => void;
+  /** Before a move that writes (Backlog, Ready, Done): e.g. leave the start queue. False cancels the move. */
+  beforeMove?: (task: Task) => Promise<boolean>;
   /** A click or Enter on a card; true when it was handled (a card with a session opens it), else the detail opens. */
   openCard: (taskId: string) => boolean;
   /** The base types offered in the type selects (settings' `types`). */
@@ -141,6 +143,7 @@ export const createEditor = (deps: EditorDeps) => {
       if (answer === null) return;
       withChildren = answer === 'all';
     }
+    if (deps.beforeMove !== undefined && !(await deps.beforeMove(task))) return;
     await run(task.id, (api) => api.close(task.id, withChildren));
   };
 
@@ -153,7 +156,10 @@ export const createEditor = (deps: EditorDeps) => {
         deps.onStart(task);
         return;
       case 'setState':
-        void run(task.id, (api) => api.setState(task.id, move.state));
+        void (async () => {
+          if (deps.beforeMove !== undefined && !(await deps.beforeMove(task))) return;
+          await run(task.id, (api) => api.setState(task.id, move.state));
+        })();
         return;
       case 'close':
         void close(task, move.askChildren);

@@ -18,9 +18,13 @@ if (token === '' || !Number.isInteger(port) || port <= 0) {
   process.exit(1);
 }
 const expected = Buffer.from(`Bearer ${token}`);
-// The way back into OpenChamber (contributes.sessionControl): path B session starts.
+// The way back into OpenChamber (contributes.sessionControl): path B session starts and the live
+// status of linked sessions (the queue's running count).
 const host = createServiceHost({ env: process.env });
-const deps: Deps = { exec: realExec, sessions: { start: (input) => host.sessions.start(input) } };
+const deps: Deps = {
+  exec: realExec,
+  sessions: { start: (input) => host.sessions.start(input), status: async (id) => (await host.sessions.status(id)).status },
+};
 
 const authorized = (req: IncomingMessage): boolean => {
   const got = Buffer.from(req.headers.authorization ?? '');
@@ -62,6 +66,8 @@ const server = createServer((req, res) => {
     }
     const reply = await handle(req.method ?? 'GET', path, body, deps);
     send(res, reply.status, reply.json);
+    // Session events are answered first (OpenChamber waits at most 10 s), then drained.
+    await reply.after?.().catch((e: unknown) => console.error(`icf-kanban: ${e instanceof Error ? e.message : String(e)}`));
   })().catch((e: unknown) => {
     if (!res.headersSent) send(res, 500, { error: { code: 'FAILED', message: e instanceof Error ? e.message : String(e) } });
     else res.destroy();

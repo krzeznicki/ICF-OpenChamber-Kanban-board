@@ -50,7 +50,13 @@
           ]
         }
       },
-      "sessionControl": {}
+      "sessionControl": {},
+      "sessionEvents": {
+        "events": [
+          "turn-finished",
+          "turn-failed"
+        ]
+      }
     }
   }
 }

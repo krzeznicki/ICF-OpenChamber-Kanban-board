@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import type { Exec } from '../src/core/types.ts';
@@ -73,7 +73,8 @@ test('/sessions/start with a worktree: git worktree add next to the repo, then s
 
   const listed = await handle('POST', '/links/list', { directory }, deps);
   assert.equal(listed.status, 200);
-  assert.deepEqual((listed.json as { links: unknown[] }).links, links);
+  // Without sessions.status the live status is unknown.
+  assert.deepEqual((listed.json as { links: unknown[] }).links, links.map((l) => ({ ...l, status: 'unknown' })));
 });
 
 test('/sessions/start in the project folder runs no git and passes the agent', async (t) => {
@@ -131,12 +132,23 @@ test('links are kept per project, and concurrent starts keep every link', async 
   assert.deepEqual(theirs.links.map((l) => l.taskId), ['c']);
 });
 
-test('/links/list: no file is an empty list; a corrupt file is too', async (t) => {
+test('/links/list: no file is an empty list; a corrupt file is set aside, then empty', async (t) => {
   const { directory, linksFile, deps } = await setup(t);
   assert.deepEqual((await handle('POST', '/links/list', { directory }, deps)).json, { links: [] });
   await mkdir(dirname(linksFile), { recursive: true });
   await writeFile(linksFile, '{not json');
   assert.deepEqual((await handle('POST', '/links/list', { directory }, deps)).json, { links: [] });
+  const kept = (await readdir(dirname(linksFile))).filter((f) => f.startsWith('links.json.corrupt-'));
+  assert.equal(kept.length, 1);
+  assert.equal(await readFile(join(dirname(linksFile), kept[0]!), 'utf8'), '{not json');
+  await assert.rejects(readFile(linksFile, 'utf8'));
+});
+
+test('/links/list: an unreadable links file (not a missing one) is an error, never an empty list', async (t) => {
+  const { directory, linksFile, deps } = await setup(t);
+  await mkdir(linksFile, { recursive: true }); // a folder where the file should be: EISDIR
+  const r = await handle('POST', '/links/list', { directory }, deps);
+  assert.equal(r.status, 500);
 });
 
 test('worktree names: slug from the title, else the file name, plus the suffix; root next to the repo', () => {

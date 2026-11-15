@@ -1,7 +1,10 @@
 // Typed client for the extension's local service. The page has no network: every call goes
 // through host.serviceRequest, and every POST body carries the project's absolute `directory`.
 import type { HostClient } from '@openchamber/sdk';
+import type { LinkStatus, QueueEntry } from '../core/queue.ts';
 import type { NewTask, Task, TaskState } from '../core/types.ts';
+
+export type LinkRecord = { taskId: string; sessionId: string; directory: string; createdAt: number; status: LinkStatus };
 
 /** Mirrors core/config.ts's ProjectConfig without pulling Node code into the page's type graph. */
 export type ProjectConfig = { tracker: 'local' | 'github'; labels: Record<string, string> };
@@ -77,11 +80,19 @@ export const createApi = (host: HostClient, directory: string) => {
       agent: string | null;
       location: 'worktree' | 'project';
     }) => call<{ sessionId: string; directory: string; worktree: string | null }>('POST', '/sessions/start', input),
-    /** Sessions the service started for this project's tasks. */
-    listLinks: () =>
-      call<{ links: Array<{ taskId: string; sessionId: string; directory: string; createdAt: number }> }>('POST', '/links/list').then(
-        (r) => r.links,
-      ),
+    /** Sessions linked to this project's tasks (path B, and path A the panel recorded), with their live status. */
+    listLinks: () => call<{ links: LinkRecord[] }>('POST', '/links/list').then((r) => r.links),
+    /** Records a session the panel started (path A), so the queue counts it while it runs. */
+    addLink: (taskId: string, sessionId: string, sessionDirectory: string | null) =>
+      call<Record<string, never>>('POST', '/links/add', { taskId, sessionId, sessionDirectory }).then(() => undefined),
+    listQueue: () => call<{ queue: QueueEntry[] }>('POST', '/queue/list').then((r) => r.queue),
+    /** Idempotent per task; `maxParallel` is stored so the service drains with the same limit. */
+    addToQueue: (entry: QueueEntry, maxParallel: number) =>
+      call<{ queue: QueueEntry[] }>('POST', '/queue/add', { entry, maxParallel }).then((r) => r.queue),
+    removeFromQueue: (taskId: string) => call<{ queue: QueueEntry[] }>('POST', '/queue/remove', { taskId }).then((r) => r.queue),
+    /** Atomically removes and returns the entries that may start now. */
+    takeFromQueue: (maxParallel: number, starting: string[]) =>
+      call<{ taken: QueueEntry[]; queue: QueueEntry[] }>('POST', '/queue/take', { maxParallel, starting }),
   };
 };
 

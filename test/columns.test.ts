@@ -177,3 +177,31 @@ test('groupTasks: a linked session moves its card; a queued card without a sessi
   assert.deepEqual(ids(board.in_progress), ['b']);
   assert.equal(board.in_progress[0]?.starting, true);
 });
+
+test('sessionForTask: a linked session missing from the snapshot follows its live status', () => {
+  const link = (status: 'idle' | 'busy' | 'waiting' | 'unknown', createdAt = 1) => ({ taskId: 't1', sessionId: `s_${status}`, status, createdAt });
+  assert.equal(sessionForTask('t1', [], [link('busy')])?.activity, 'running');
+  assert.equal(sessionForTask('t1', [], [link('waiting')])?.activity, 'waiting-question');
+  assert.deepEqual(sessionForTask('t1', [], [link('idle')]), { id: 's_idle', activity: 'idle', outcome: 'completed', archived: false });
+  assert.equal(sessionForTask('t1', [], [link('unknown')]), null);
+  // The newest link wins; a snapshot session (archived too) is never overridden by its link.
+  assert.equal(sessionForTask('t1', [], [link('busy', 1), link('idle', 2)])?.id, 's_idle');
+  const archived = record('s_busy', [], { archivedAt: 3 });
+  assert.equal(sessionForTask('t1', [archived], [link('busy')]), null);
+});
+
+test('groupTasks: link status columns (busy in progress, waiting and idle review); queued cards are marked', () => {
+  const tasks = [t('a', 'ready-for-agent'), t('b', 'ready-for-agent'), t('c', 'ready-for-agent'), t('q', 'ready-for-agent'), t('d', 'done')];
+  const links = [
+    { taskId: 'a', sessionId: 'sa', status: 'busy' as const },
+    { taskId: 'b', sessionId: 'sb', status: 'waiting' as const },
+    { taskId: 'c', sessionId: 'sc', status: 'idle' as const },
+  ];
+  const board = groupTasks(tasks, [], new Set(), false, links, new Set(['q', 'd']));
+  assert.deepEqual(ids(board.in_progress), ['a', 'q']);
+  assert.deepEqual(ids(board.review), ['b', 'c']);
+  assert.deepEqual(ids(board.done), ['d']);
+  assert.equal(board.in_progress.find((c) => c.task.id === 'q')?.queued, true);
+  assert.equal(board.in_progress.find((c) => c.task.id === 'q')?.starting, false);
+  assert.equal(board.done[0]?.queued, false);
+});

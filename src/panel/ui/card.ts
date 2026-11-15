@@ -54,7 +54,9 @@ export const renderCard = (model: CardModel, busy = false, onDetails?: (taskId: 
   const badge = (label: string, tone: Tone): void => {
     disposers.push(mountBadge(badges, { label, tone }).dispose);
   };
-  if (model.session !== null) {
+  if (model.queued) {
+    badge('Queued', 'neutral');
+  } else if (model.session !== null) {
     const b = sessionBadge(model.session);
     badge(b.label, b.tone);
   } else if (model.starting) {

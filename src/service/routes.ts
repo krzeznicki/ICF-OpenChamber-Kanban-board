@@ -3,12 +3,34 @@
 import { stat } from 'node:fs/promises';
 import { isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readSessionEventRequest, SESSION_EVENTS_PATH, type GuestSessionEventRequest } from '@openchamber/sdk';
 import { readConfig, readLabels, writeConfig, type ProjectConfig } from '../core/config.ts';
 import { createGithubTracker } from '../core/githubTracker.ts';
 import { openTracker } from '../core/openTracker.ts';
 import type { Exec, NewTask, TaskState, Tracker } from '../core/types.ts';
 import { TrackerError } from '../core/types.ts';
-import { defaultLinksFile, listLinks, startSession, type SessionHost } from './sessions.ts';
+import type { QueueEntry } from '../core/queue.ts';
+import {
+  addToQueue,
+  clampMax,
+  defaultQueueFile,
+  inFlight,
+  listQueue,
+  queuedProjects,
+  release,
+  removeFromQueue,
+  takeFromQueue,
+} from './queue.ts';
+import {
+  addLink,
+  defaultLinksFile,
+  isInside,
+  listLinks,
+  startSession,
+  withStatus,
+  worktreesRoot,
+  type SessionHost,
+} from './sessions.ts';
 
 export type Deps = {
   exec: Exec;
@@ -18,10 +40,15 @@ export type Deps = {
   sessions?: SessionHost;
   /** Where task -> session links are kept; defaults to ~/.icf-kanban/links.json. */
   linksFile?: string;
+  /** Where the start queue is kept; defaults to ~/.icf-kanban/queue.json. */
+  queueFile?: string;
   /** The worktree name's unique suffix; tests fix it. */
   suffix?: () => string;
+  /** Where background failures (a queued start after a session event) are reported. */
+  log?: (message: string) => void;
 };
-export type Reply = { status: number; json: unknown };
+/** `after` runs once the answer is sent (session events: answer first, then work). */
+export type Reply = { status: number; json: unknown; after?: () => Promise<void> };
 
 const STATES: readonly TaskState[] = ['needs-triage', 'needs-info', 'ready-for-agent', 'ready-for-human', 'wontfix', 'done'];
 
@@ -87,6 +114,84 @@ const newTask = (v: unknown): NewTask => {
 const defaultCliPath = (): string => fileURLToPath(new URL('../build/cli/task-board.mjs', import.meta.url));
 
 type Route = (body: Body, dir: string, deps: Deps) => Promise<unknown>;
+
+const linksFile = (deps: Deps): string => deps.linksFile ?? defaultLinksFile();
+const queueFile = (deps: Deps): string => deps.queueFile ?? defaultQueueFile();
+
+const location = (v: unknown, key: string): 'worktree' | 'project' =>
+  v === 'worktree' || v === 'project' ? v : invalid(`"${key}" must be "worktree" or "project"`);
+
+const queueEntry = (v: unknown): QueueEntry => {
+  if (!isObject(v)) return invalid('"entry" must be an object');
+  const queuedAt = v.queuedAt;
+  return {
+    taskId: str(v, 'taskId'),
+    title: str(v, 'title'),
+    prompt: str(v, 'prompt'),
+    model: optional(v, 'model'),
+    agent: optional(v, 'agent'),
+    location: location(v.location, 'entry.location'),
+    queuedAt: queuedAt === undefined ? Date.now() : typeof queuedAt === 'number' ? queuedAt : invalid('"entry.queuedAt" must be a number'),
+  };
+};
+
+const maxParallelOf = (body: Body): number | undefined =>
+  body.maxParallel === undefined ? undefined : typeof body.maxParallel === 'number' ? clampMax(body.maxParallel) : invalid('"maxParallel" must be a number');
+
+/** Path B, counted as starting for the queue until it ends; its link frees the queue's reservation. */
+const start = async (dir: string, input: Omit<Parameters<typeof startSession>[0], 'directory'>, deps: Deps) => {
+  if (deps.sessions === undefined) throw new TrackerError('FAILED', 'Starting sessions from the service is not available');
+  const sessions = deps.sessions;
+  try {
+    return await inFlight(queueFile(deps), dir, input.taskId, () =>
+      startSession(
+        { directory: dir, ...input },
+        { exec: deps.exec, sessions, linksFile: linksFile(deps), ...(deps.suffix ? { suffix: deps.suffix } : {}) },
+      ),
+    );
+  } finally {
+    release(queueFile(deps), dir, input.taskId);
+  }
+};
+
+const liveLinks = async (dir: string, deps: Deps) => withStatus(await listLinks(linksFile(deps), dir), deps.sessions);
+
+/** Takes what may start now from the project's queue and starts it by path B (the board may be closed). */
+export const drainProject = async (dir: string, deps: Deps): Promise<void> => {
+  if (deps.sessions?.status === undefined) return;
+  const { taken } = await takeFromQueue(queueFile(deps), dir, { links: () => liveLinks(dir, deps) });
+  const log = deps.log ?? ((m: string) => console.error(m));
+  await Promise.all(
+    taken.map(async (e) => {
+      try {
+        await start(dir, { taskId: e.taskId, title: e.title, prompt: e.prompt, model: e.model, agent: e.agent, location: e.location }, deps);
+      } catch (err) {
+        log(`icf-kanban: could not start the queued task ${e.taskId}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }),
+  );
+};
+
+const DRAIN_EVENTS = new Set(['turn-finished', 'turn-failed']);
+
+/**
+ * A session finished a turn somewhere (events cover every project): drain each queued project the
+ * session belongs to: its directory is the project, inside it, in its worktrees folder or in a
+ * linked session's directory, or the session is one of its links.
+ */
+export const onSessionEvent = async (req: GuestSessionEventRequest, deps: Deps): Promise<void> => {
+  const { event } = req;
+  if (!DRAIN_EVENTS.has(event.type) || event.session.parentId !== null) return;
+  const dir = event.project.directory;
+  for (const project of await queuedProjects(queueFile(deps))) {
+    const links = await listLinks(linksFile(deps), project);
+    const ours =
+      links.some((l) => l.sessionId === event.session.id) ||
+      (dir !== null &&
+        (isInside(dir, project) || isInside(dir, worktreesRoot(project)) || links.some((l) => isInside(dir, l.directory))));
+    if (ours) await drainProject(project, deps);
+  }
+};
 
 const tracker = (dir: string, deps: Deps): Promise<Tracker> => openTracker(dir, deps.exec);
 
@@ -180,15 +285,35 @@ const POST: Record<string, Route> = {
     const prompt = str(body, 'prompt');
     const model = optional(body, 'model');
     const agent = optional(body, 'agent');
-    const location = body.location;
-    if (location !== 'worktree' && location !== 'project') return invalid('"location" must be "worktree" or "project"');
-    if (deps.sessions === undefined) throw new TrackerError('FAILED', 'Starting sessions from the service is not available');
-    return startSession(
-      { directory: dir, taskId, title, prompt, model, agent, location },
-      { exec: deps.exec, sessions: deps.sessions, linksFile: deps.linksFile ?? defaultLinksFile(), ...(deps.suffix ? { suffix: deps.suffix } : {}) },
-    );
+    const where = location(body.location, 'location');
+    return start(dir, { taskId, title, prompt, model, agent, location: where }, deps);
   },
-  '/links/list': async (_body, dir, deps) => ({ links: await listLinks(deps.linksFile ?? defaultLinksFile(), dir) }),
+  /** Links with the live status of their session (idle, busy, waiting, unknown). */
+  '/links/list': async (_body, dir, deps) => ({ links: await liveLinks(dir, deps) }),
+  /** A session the panel started itself (path A), so the queue counts it while it runs. */
+  '/links/add': async (body, dir, deps) => {
+    const taskId = str(body, 'taskId');
+    const sessionId = str(body, 'sessionId');
+    const at = optional(body, 'sessionDirectory');
+    if (at !== null && !isAbsolute(at)) return invalid('"sessionDirectory" must be an absolute path');
+    await addLink(linksFile(deps), dir, { taskId, sessionId, directory: at ?? dir, createdAt: Date.now() });
+    release(queueFile(deps), dir, taskId);
+    return {};
+  },
+  '/queue/list': async (_body, dir, deps) => ({ queue: await listQueue(queueFile(deps), dir) }),
+  '/queue/add': async (body, dir, deps) => ({ queue: await addToQueue(queueFile(deps), dir, queueEntry(body.entry), maxParallelOf(body)) }),
+  '/queue/remove': async (body, dir, deps) => ({ queue: await removeFromQueue(queueFile(deps), dir, str(body, 'taskId')) }),
+  '/queue/take': async (body, dir, deps) => {
+    const s = body.starting;
+    const starting =
+      s === undefined
+        ? []
+        : Array.isArray(s) && s.every((id) => typeof id === 'string')
+          ? (s as string[])
+          : invalid('"starting" must be an array of task ids');
+    const max = maxParallelOf(body);
+    return takeFromQueue(queueFile(deps), dir, { ...(max !== undefined ? { maxParallel: max } : {}), starting, links: () => liveLinks(dir, deps) });
+  },
 };
 
 const GET: Record<string, (deps: Deps) => unknown> = {
@@ -201,6 +326,12 @@ export const handle = async (method: string, path: string, body: unknown, deps: 
     const m = method.toUpperCase();
     const get = GET[path];
     const post = POST[path];
+    if (path === SESSION_EVENTS_PATH) {
+      if (m !== 'POST') return error(405, 'INVALID', `${path} does not accept ${m}`);
+      const req = readSessionEventRequest(JSON.stringify(body ?? null));
+      if (req === null) return error(400, 'INVALID', 'Not a session event of a known wire version');
+      return { status: 200, json: { ok: true }, after: () => onSessionEvent(req, deps) };
+    }
     if (get === undefined && post === undefined) return error(404, 'NOT_FOUND', `No route ${path}`);
     if (m === 'GET' && get !== undefined) return { status: 200, json: get(deps) };
     if (m === 'POST' && post !== undefined) {

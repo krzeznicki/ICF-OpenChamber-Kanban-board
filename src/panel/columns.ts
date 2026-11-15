@@ -32,12 +32,30 @@ export const columnFor = (task: Task, session: SessionInfo | null, queued: boole
   return task.state === 'ready-for-agent' ? 'ready' : 'backlog';
 };
 
-/** A session the service started for a task (path B): such a session carries no items. */
-export type SessionLink = { taskId: string; sessionId: string };
+/**
+ * A session the service knows works on a task: started by the service (path B, no items) or
+ * recorded by the panel (path A). `status` is its live state from the service, when known.
+ */
+export type SessionLink = { taskId: string; sessionId: string; createdAt?: number; status?: 'idle' | 'busy' | 'waiting' | 'unknown' };
+
+/** A linked session missing from the snapshot (e.g. in a sibling worktree project), from its live status. */
+const fromLink = (link: SessionLink): SessionInfo | null => {
+  switch (link.status) {
+    case 'busy':
+      return { id: link.sessionId, activity: 'running', outcome: null, archived: false };
+    case 'waiting':
+      return { id: link.sessionId, activity: 'waiting-question', outcome: null, archived: false };
+    case 'idle':
+      return { id: link.sessionId, activity: 'idle', outcome: 'completed', archived: false };
+    default:
+      return null;
+  }
+};
 
 /**
  * The newest non-archived session that carries this task as one of its items, or that the
- * service's links name for it.
+ * service's links name for it. When the snapshot has none, the newest link whose session is not in
+ * the snapshot at all speaks through its live status (busy: in progress; waiting, idle: review).
  */
 export const sessionForTask = (
   taskId: string,
@@ -53,7 +71,13 @@ export const sessionForTask = (
       best = s;
     }
   }
-  return best === null ? null : { id: best.id, activity: best.activity, outcome: best.outcome, archived: false };
+  if (best !== null) return { id: best.id, activity: best.activity, outcome: best.outcome, archived: false };
+  let newest: SessionLink | null = null;
+  for (const l of links) {
+    if (l.taskId !== taskId || fromLink(l) === null || sessions.some((s) => s.id === l.sessionId)) continue;
+    if (newest === null || (l.createdAt ?? 0) >= (newest.createdAt ?? 0)) newest = l;
+  }
+  return newest === null ? null : fromLink(newest);
 };
 
 export type CardModel = {
@@ -67,6 +91,8 @@ export type CardModel = {
   child: boolean;
   /** Its start is in flight, or its new session has not shown up yet. */
   starting: boolean;
+  /** It waits in the start queue (over the limit of running sessions). */
+  queued: boolean;
 };
 
 export type BoardModel = Record<Column, CardModel[]>;
@@ -74,13 +100,15 @@ export type BoardModel = Record<Column, CardModel[]>;
 /**
  * Sort tasks into columns. Within a column the service's order is kept, except that a sub-task
  * whose parent sits in the same column follows it directly. `hideSubtasks` drops every task with a parent.
+ * `starting` (starts in flight) and `queued` (the start queue) both put a card in In Progress.
  */
 export const groupTasks = (
   tasks: Task[],
   sessions: GuestSessionRecord[],
-  queued: ReadonlySet<string>,
+  starting: ReadonlySet<string>,
   hideSubtasks: boolean,
   links: readonly SessionLink[] = [],
+  queued: ReadonlySet<string> = new Set(),
 ): BoardModel => {
   const byId = new Map(tasks.map((t) => [t.id, t]));
   const children = new Map<string, Task[]>();
@@ -97,7 +125,7 @@ export const groupTasks = (
     const session = sessionForTask(task.id, sessions, links);
     const kids = children.get(task.id) ?? [];
     cards.set(task.id, {
-      column: columnFor(task, session, queued.has(task.id)),
+      column: columnFor(task, session, starting.has(task.id) || (queued.has(task.id) && task.state !== 'done')),
       card: {
         task,
         session,
@@ -107,7 +135,8 @@ export const groupTasks = (
         }),
         progress: kids.length === 0 ? null : { done: kids.filter((k) => k.state === 'done').length, total: kids.length },
         child: false,
-        starting: queued.has(task.id) && session === null,
+        starting: starting.has(task.id) && session === null,
+        queued: queued.has(task.id) && !starting.has(task.id) && task.state !== 'done',
       },
     });
   }

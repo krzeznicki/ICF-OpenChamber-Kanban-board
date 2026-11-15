@@ -3,11 +3,12 @@
 // and remembers which session works on which task, because such a session carries no items.
 // The links live in ~/.icf-kanban/links.json, outside the package (a write inside it reloads the extension).
 import { randomBytes } from 'node:crypto';
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, join, sep } from 'node:path';
+import type { LinkStatus } from '../core/queue.ts';
 import type { Exec } from '../core/types.ts';
 import { TrackerError } from '../core/types.ts';
+import { readJson, serial, writeJson } from './store.ts';
 
 export type Link = { taskId: string; sessionId: string; directory: string; createdAt: number };
 
@@ -20,6 +21,8 @@ export type SessionHost = {
     model?: string;
     agent?: string;
   }) => Promise<{ sessionId: string; directory: string | null }>;
+  /** `idle`, `busy`, or `waiting` when only the user can move it on; throws for an unknown session. */
+  status?: (sessionId: string) => Promise<'idle' | 'busy' | 'waiting'>;
 };
 
 export type StartInput = {
@@ -51,13 +54,9 @@ const isLink = (v: unknown): v is Link => {
   );
 };
 
+/** A missing file is empty; a corrupt one is set aside (store.ts); other read errors throw. */
 const readLinksFile = async (file: string): Promise<LinksFile> => {
-  let raw: unknown;
-  try {
-    raw = JSON.parse(await readFile(file, 'utf8'));
-  } catch {
-    return { version: 1, projects: {} }; // missing or unreadable: start over
-  }
+  const raw = await readJson(file);
   const projects: Record<string, Link[]> = {};
   const src = (raw as { projects?: unknown } | null)?.projects;
   if (typeof src === 'object' && src !== null && !Array.isArray(src)) {
@@ -69,22 +68,66 @@ const readLinksFile = async (file: string): Promise<LinksFile> => {
 export const listLinks = async (file: string, directory: string): Promise<Link[]> =>
   (await readLinksFile(file)).projects[directory] ?? [];
 
-/** Writes are queued so two starts never drop each other's link. */
-let queue: Promise<unknown> = Promise.resolve();
-
-export const addLink = (file: string, project: string, link: Link): Promise<void> => {
-  const run = queue.then(async () => {
+/** Writes are serialised per file so two starts never drop each other's link. */
+export const addLink = (file: string, project: string, link: Link): Promise<void> =>
+  serial(file, async () => {
     const data = await readLinksFile(file);
     const list = [...(data.projects[project] ?? []), link];
     data.projects[project] = list.slice(-LINKS_PER_PROJECT);
-    await mkdir(dirname(file), { recursive: true });
-    const tmp = `${file}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`;
-    await writeFile(tmp, `${JSON.stringify(data, null, 2)}\n`, 'utf8');
-    await rename(tmp, file);
+    await writeJson(file, data);
   });
-  queue = run.catch(() => {});
-  return run;
+
+/** How many tasks' newest sessions get their live status asked; older links answer `unknown`. */
+export const STATUS_CHECK_MAX = 50;
+const STATUS_CONCURRENCY = 8;
+
+/**
+ * The live status of each link's session: the newest link of each task (the newest
+ * STATUS_CHECK_MAX tasks) is asked through sessions.status; the rest, and a session the host
+ * does not know, are `unknown`.
+ */
+export const linkStatuses = async (links: readonly Link[], sessions: SessionHost | undefined): Promise<Map<string, LinkStatus>> => {
+  const out = new Map<string, LinkStatus>();
+  const status = sessions?.status;
+  if (status === undefined) return out;
+  const newest = new Map<string, Link>();
+  for (const l of links) {
+    const n = newest.get(l.taskId);
+    if (n === undefined || l.createdAt >= n.createdAt) newest.set(l.taskId, l);
+  }
+  const ask = [...newest.values()].sort((a, b) => b.createdAt - a.createdAt).slice(0, STATUS_CHECK_MAX);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < ask.length) {
+      const l = ask[next++]!;
+      try {
+        out.set(l.sessionId, await status(l.sessionId));
+      } catch {
+        out.set(l.sessionId, 'unknown');
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(STATUS_CONCURRENCY, ask.length) }, worker));
+  return out;
 };
+
+export const withStatus = async (
+  links: readonly Link[],
+  sessions: SessionHost | undefined,
+): Promise<Array<Link & { status: LinkStatus }>> => {
+  const statuses = await linkStatuses(links, sessions);
+  return links.map((l) => ({ ...l, status: statuses.get(l.sessionId) ?? 'unknown' }));
+};
+
+/** Sessions working right now (busy, or waiting on the user) among a project's links. */
+export const runningCount = async (links: readonly Link[], sessions: SessionHost | undefined): Promise<number> => {
+  let n = 0;
+  for (const s of (await linkStatuses(links, sessions)).values()) if (s === 'busy' || s === 'waiting') n++;
+  return n;
+};
+
+/** `dir` is `root` or inside it. */
+export const isInside = (dir: string, root: string): boolean => dir === root || dir.startsWith(root.endsWith(sep) ? root : `${root}${sep}`);
 
 /** A branch- and folder-safe name: the task's title (or id) and a short unique suffix. */
 export const worktreeSlug = (taskId: string, title: string, suffix = randomBytes(3).toString('hex')): string => {

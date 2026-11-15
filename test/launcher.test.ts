@@ -106,3 +106,35 @@ test('settle releases a task once its session is known, or after SETTLE_MS', asy
   assert.equal(launcher.settle(() => false), true);
   assert.equal(isStarting.size, 0);
 });
+
+test('a pending start (timed-out path B) keeps the task starting until a session for it shows up', async () => {
+  const { launcher, isStarting, tick } = setup({ start: async () => ({ sessionId: null, pending: true }) });
+  tick(100);
+  assert.equal(await launcher.launch(task, opts), 'pending');
+  assert.ok(isStarting.has('#7'));
+  // A second drop does not start a second session.
+  assert.equal(await launcher.launch(task, opts), 'already');
+  assert.equal(launcher.settle(() => true), false, 'a session id check alone cannot release it');
+  assert.equal(launcher.settle(() => false, (id, since) => id === '#7' && since === 100), true);
+  assert.equal(isStarting.size, 0);
+});
+
+test('a given prompt (a queued entry) is used as is; starting() lists starts in flight', async () => {
+  let release: () => void = () => {};
+  const gate = new Promise<void>((r) => (release = r));
+  const { launcher, calls } = setup({
+    prompt: async () => assert.fail('not asked'),
+    start: async (t, o, prompt) => {
+      calls.push({ task: t, opts: o, prompt });
+      await gate;
+      return { sessionId: 'ses_9' };
+    },
+  });
+  const pending = launcher.launch(task, opts, 'queued prompt');
+  await Promise.resolve();
+  assert.deepEqual(launcher.starting(), ['#7']);
+  release();
+  assert.equal(await pending, 'started');
+  assert.deepEqual(launcher.starting(), []);
+  assert.equal(calls[0]?.prompt, 'queued prompt');
+});

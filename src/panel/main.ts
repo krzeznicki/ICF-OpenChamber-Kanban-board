@@ -1,33 +1,29 @@
 // Entry for both the rail panel (panel/index.html) and the full-screen page (panel/page.html).
 // The layout follows ctx.surface through the data-oc-surface attribute applyHostReady sets.
 // Data: projects and sessions from the host, tasks from our service via host.serviceRequest.
-// Writes (drag and drop, detail, Add task) live in edit.ts; onStart below runs a drop on In Progress:
-// it starts an agent session (launcher.ts) and the card then follows that session. Settings (global, per project, presets, per card) come from the
+// Writes (drag and drop, detail, Add task) live in edit.ts; a drop on In Progress goes to starter.ts:
+// it starts an agent session (or queues it over the limit) and the card then follows that session. Settings (global, per project, presets, per card) come from the
 // extension's storage through settings.ts and are edited in the Settings sheet.
-import { clampStartSessionRequest, connectHost, GUEST_ATTACH_ID_MAX } from '@openchamber/sdk';
+import { connectHost } from '@openchamber/sdk';
 import type { GuestProject, GuestSessionRecord, HostReadyContext } from '@openchamber/sdk';
 import { applyHostReady } from '@openchamber/sdk/ui';
 import type { Task } from '../core/types.ts';
 import { ApiError, createApi, type Api, type ConfigResult, type ProjectConfig } from './api.ts';
-import { groupTasks, sessionForTask, type Column, type SessionLink } from './columns.ts';
+import { groupTasks, sessionForTask, type Column } from './columns.ts';
 import { createEditor, type Editor } from './edit.ts';
-import { createLauncher } from './launcher.ts';
 import { listPresets, parseStoredPresets, type Preset, type StoredPresets } from './presets.ts';
-import { buildPrompt } from './prompt.ts';
 import {
   createLatestSaver,
   createSettingsStore,
   resolveSettings,
-  resolveStart,
   type Settings,
   type SettingsLayer,
-  type StartOptions,
 } from './settings.ts';
 import { defaultChoice, loadNotice, setupOutcome, type ApiFailure, type NoticeModel, type TrackerChoice } from './setup.ts';
+import { createStarter } from './starter.ts';
 import { createBoard, type Board } from './ui/board.ts';
 import { mountNotice } from './ui/notice.ts';
 import { openSettings } from './ui/settingsView.ts';
-import { askStart } from './ui/startForm.ts';
 import { injectStyles } from './ui/styles.ts';
 import { mountWizard } from './ui/wizard.ts';
 
@@ -42,8 +38,6 @@ type State = {
   pinned: boolean;
   hostDirectory: string | null;
   sessions: GuestSessionRecord[];
-  /** Sessions the service started for tasks (path B); they carry no items. */
-  links: SessionLink[];
   config: ProjectConfig | null;
   tasks: Task[] | null;
   hideSubtasks: boolean;
@@ -66,7 +60,6 @@ const state: State = {
   pinned: false,
   hostDirectory: null,
   sessions: [],
-  links: [],
   config: null,
   tasks: null,
   hideSubtasks: false,
@@ -216,7 +209,7 @@ const draw = (): void => {
     board.render(null);
     return;
   }
-  const model = groupTasks(state.tasks, state.sessions, isStarting, state.hideSubtasks, state.links);
+  const model = groupTasks(state.tasks, state.sessions, starter.isStarting, state.hideSubtasks, starter.links(), starter.queuedIds());
   for (const [column, cards] of Object.entries(model)) for (const c of cards) state.columns.set(c.task.id, column as Column);
   // The attention mark: sessions that finished or wait for the user.
   setBadge(model.review.length || null);
@@ -325,15 +318,15 @@ const load = async (): Promise<void> => {
       showWizard(api, remote);
       return;
     }
-    // The links come from the service's own file; without them only path A sessions are followed.
-    const [tasks, links] = await Promise.all([api.list(), api.listLinks().catch(() => null)]);
+    // Links and the start queue come from the service's own files (starter.ts).
+    const [tasks] = await Promise.all([api.list(), starter.refresh(p.id, p.directory)]);
     if (mine !== generation) return;
     state.config = result.config;
     state.tasks = tasks;
-    if (links !== null) state.links = links;
     state.view = 'board';
     draw();
     editor.refresh();
+    starter.onSnapshot(); // drain the queue now that the tasks are known
   } catch (e) {
     if (mine !== generation) return;
     showNotice(loadNotice(failureOf(e)));
@@ -356,8 +349,7 @@ const selectProject = async (id: string | null): Promise<void> => {
   state.projectSettings = {};
   if (id !== null) void loadProjectSettings(id);
   state.sessions = [];
-  state.links = [];
-  launcher.reset();
+  starter.reset();
   state.config = null;
   state.tasks = null;
   board.setProjects(projectOptions(), id);
@@ -369,7 +361,7 @@ const selectProject = async (id: string | null): Promise<void> => {
     const unsubscribe = await host.onSessions(id, (snapshot) => {
       if (snapshot.projectId !== state.projectId) return;
       state.sessions = snapshot.sessions;
-      launcher.settle((id) => state.sessions.some((s) => s.id === id));
+      starter.onSnapshot();
       draw();
     });
     // The user may have switched again while the subscription registered.
@@ -389,9 +381,8 @@ const followHost = (): void => {
   void selectProject(next?.id ?? null);
 };
 
-// --- starting agents ---
+// --- starting agents (starter.ts) ---
 
-const info = (message: string): void => void host.toast({ kind: 'info', message }).catch(() => {});
 const errorText = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
 /** What a start needs from the settings; null while the shown project's settings are loading. */
@@ -400,136 +391,19 @@ const startContext = (): { projectId: string; settings: Settings; presets: Prese
   return id === null || !globalLoaded || state.settingsFor !== id ? null : { projectId: id, settings: settings(), presets: listPresets(state.presets) };
 };
 
-const LIVE = new Set(['running', 'retrying', 'waiting-permission', 'waiting-question']);
-const hasLiveSession = (taskId: string): boolean => {
-  const s = sessionForTask(taskId, state.sessions, state.links);
-  return s !== null && LIVE.has(s.activity);
-};
-
-/** The built CLI's absolute path, asked from the service once per project directory. */
-let cli: { directory: string; path: string } | null = null;
-const cliPath = async (directory: string): Promise<string> => {
-  if (cli?.directory === directory) return cli.path;
-  const path = await createApi(host, directory).cliPath();
-  cli = { directory, path };
-  return path;
-};
-
-const reloadLinks = async (projectId: string, directory: string): Promise<void> => {
-  try {
-    const links = await createApi(host, directory).listLinks();
-    if (state.projectId !== projectId) return;
-    state.links = links;
-    draw();
-  } catch {
-    // The next load tries again.
-  }
-};
-
-/**
- * Path A (the panel's host.startSession) when the card sets no model and no agent: OpenChamber
- * makes the worktree and the session carries the card as its item. Otherwise path B: the service
- * makes the worktree with git, starts the session with the model/agent and records the link.
- * An id too long to be an item (GUEST_ATTACH_ID_MAX) also takes path B, so the card can follow it.
- */
-const startTask = async (task: Task, opts: StartOptions, prompt: string): Promise<{ sessionId: string | null }> => {
-  const p = project();
-  if (p === null) throw new Error('No project is open');
-  if (opts.model !== null || opts.agent !== null || task.id.length > GUEST_ATTACH_ID_MAX) {
-    const r = await createApi(host, p.directory).startSession({
-      taskId: task.id,
-      title: task.title,
-      prompt,
-      model: opts.model,
-      agent: opts.agent,
-      location: opts.location,
-    });
-    void reloadLinks(p.id, p.directory);
-    return { sessionId: r.sessionId };
-  }
-  const result = await host.startSession(
-    clampStartSessionRequest({
-      providerId: 'icf-kanban',
-      id: task.id,
-      title: task.title,
-      url: task.url ?? `https://icf-kanban.local/t/${encodeURIComponent(task.id)}`,
-      text: prompt,
-      projectId: p.id,
-      worktree: opts.location === 'worktree' ? true : false,
-      navigation: 'preserve',
-    }),
-  );
-  if (result.sessionId === null) {
-    const what = result.failure === 'bootstrap-failed' ? 'setting up the worktree failed' : 'the session could not be created';
-    void host
-      .toast({
-        kind: 'error',
-        message: `Could not start “${task.title}”: ${what}. The worktree ${result.worktree.directory || result.directory} is kept.`,
-        persistent: true,
-      })
-      .catch(() => {});
-    return { sessionId: null };
-  }
-  if (result.sent === 'no-model' || result.sent === 'failed') {
-    const why = result.sent === 'no-model' ? 'no model is selected' : 'sending failed';
-    fail(`The session for “${task.title}” was created, but its first message was not sent (${why}). Open it and send the task yourself.`);
-  }
-  if (result.linked === false) fail(`The session for “${task.title}” started, but the card could not be linked to it; the card will not follow it.`);
-  return { sessionId: result.sessionId };
-};
-
-const isStarting = new Set<string>();
-const launcher = createLauncher({
-  isStarting,
-  hasLiveSession,
-  start: startTask,
-  prompt: async (task, opts) => {
-    const p = project();
-    if (p === null) throw new Error('No project is open');
-    const presets = listPresets(state.presets);
-    const preset = presets.find((x) => x.id === opts.presetId) ?? presets.find((x) => x.id === 'implement') ?? presets[0]!;
-    const children = (state.tasks ?? []).filter((t) => t.parentId === task.id);
-    return buildPrompt(task, preset, await cliPath(p.directory), children);
-  },
-  onError: (task, e) => fail(`Could not start “${task.title}”: ${errorText(e)}`),
+const starter = createStarter({
+  host,
+  project,
+  tasks: () => state.tasks,
+  sessions: () => state.sessions,
+  context: startContext,
+  loadCard: (projectId, taskId) => store.loadCard(projectId, taskId),
+  draw: () => draw(),
 });
-
-/** A drop on In Progress: resolve the start options, ask first when "Start automatically" is off, then launch. */
-const onStart = async (task: Task): Promise<void> => {
-  const ctx = startContext();
-  if (ctx === null) {
-    info('Settings are loading, try again in a moment');
-    return;
-  }
-  if (isStarting.has(task.id) || hasLiveSession(task.id)) {
-    info(`“${task.title}” already has an agent working on it`);
-    return;
-  }
-  let card: Partial<StartOptions>;
-  try {
-    card = await store.loadCard(ctx.projectId, task.id);
-  } catch (e) {
-    fail(`Could not read the card's start options: ${errorText(e)}`);
-    return;
-  }
-  let opts = resolveStart(ctx.settings, task, card, ctx.presets);
-  if (!ctx.settings.autoStart) {
-    const picked = await askStart(task.title, opts, ctx.presets);
-    if (picked === null) return;
-    opts = picked;
-  }
-  if (state.projectId !== ctx.projectId) return;
-  const pending = launcher.launch(task, opts);
-  draw(); // the card shows in In Progress while it starts
-  const result = await pending;
-  if (result === 'already') info(`“${task.title}” already has an agent working on it`);
-  else if (result === 'started') void host.toast({ kind: 'success', message: `Started an agent on “${task.title}”` }).catch(() => {});
-  draw();
-};
 
 /** A click on a card with a session opens the session; the detail stays on its Details button. */
 const openCard = (taskId: string): boolean => {
-  const s = sessionForTask(taskId, state.sessions, state.links);
+  const s = sessionForTask(taskId, state.sessions, starter.links());
   if (s === null) return false;
   void host.openSession(s.id).catch((e: unknown) => fail(`Could not open the session: ${errorText(e)}`));
   return true;
@@ -569,7 +443,8 @@ const start = (ctx: HostReadyContext): void => {
     columnOf: (id) => state.columns.get(id) ?? null,
     reload: load,
     redraw: draw,
-    onStart: (task) => void onStart(task),
+    onStart: (task) => void starter.onStart(task),
+    beforeMove: (task) => starter.leaveQueue(task.id),
     openCard,
     baseTypes: () => settings().types,
     start: {
