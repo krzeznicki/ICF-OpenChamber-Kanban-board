@@ -62,19 +62,29 @@ const fromLink = (link: SessionLink): SessionInfo | null => {
 };
 
 /**
+ * When the user dragged a card with a session to Backlog or Ready (task id -> ms timestamp):
+ * sessions and links created before it no longer speak for the card, which then follows its state.
+ */
+export type Detached = ReadonlyMap<string, number>;
+
+const NONE: Detached = new Map();
+
+/**
  * The newest non-archived session that carries this task as one of its items, or that the
  * service's links name for it. When the snapshot has none, the newest link whose session is not in
  * the snapshot at all speaks through its live status (busy: in progress; waiting, idle: review).
+ * With `detachedAt` (see Detached), sessions and links created before it are ignored.
  */
 export const sessionForTask = (
   taskId: string,
   sessions: GuestSessionRecord[],
   links: readonly SessionLink[] = [],
+  detachedAt = 0,
 ): SessionInfo | null => {
   const linked = new Set(links.filter((l) => l.taskId === taskId).map((l) => l.sessionId));
   let best: GuestSessionRecord | null = null;
   for (const s of sessions) {
-    if (s.archivedAt !== null) continue;
+    if (s.archivedAt !== null || s.createdAt < detachedAt) continue;
     if (!linked.has(s.id) && !s.items.some((item) => item.id === taskId)) continue;
     if (best === null || s.createdAt > best.createdAt || (s.createdAt === best.createdAt && s.updatedAt > best.updatedAt)) {
       best = s;
@@ -83,7 +93,7 @@ export const sessionForTask = (
   if (best !== null) return { id: best.id, activity: best.activity, outcome: best.outcome, archived: false };
   let newest: SessionLink | null = null;
   for (const l of links) {
-    if (l.taskId !== taskId || fromLink(l) === null || sessions.some((s) => s.id === l.sessionId)) continue;
+    if (l.taskId !== taskId || (l.createdAt ?? 0) < detachedAt || fromLink(l) === null || sessions.some((s) => s.id === l.sessionId)) continue;
     if (newest === null || (l.createdAt ?? 0) >= (newest.createdAt ?? 0)) newest = l;
   }
   return newest === null ? null : fromLink(newest);
@@ -97,7 +107,9 @@ export const ledByOrchestrator = (
   task: Task,
   sessions: GuestSessionRecord[],
   links: readonly SessionLink[] = [],
-): boolean => task.parentId !== null && task.state !== 'done' && isWorking(sessionForTask(task.parentId, sessions, links));
+  detached: Detached = NONE,
+): boolean =>
+  task.parentId !== null && task.state !== 'done' && isWorking(sessionForTask(task.parentId, sessions, links, detached.get(task.parentId)));
 
 export type CardModel = {
   task: Task;
@@ -133,6 +145,7 @@ export const groupTasks = (
   links: readonly SessionLink[] = [],
   queued: ReadonlySet<string> = new Set(),
   queueErrors: ReadonlyMap<string, string> = new Map(),
+  detached: Detached = NONE,
 ): BoardModel => {
   const byId = new Map(tasks.map((t) => [t.id, t]));
   const children = new Map<string, Task[]>();
@@ -148,7 +161,7 @@ export const groupTasks = (
     if (parentId === null) return false;
     let running = parentWorking.get(parentId);
     if (running === undefined) {
-      running = isWorking(sessionForTask(parentId, sessions, links));
+      running = isWorking(sessionForTask(parentId, sessions, links, detached.get(parentId)));
       parentWorking.set(parentId, running);
     }
     return running;
@@ -157,7 +170,7 @@ export const groupTasks = (
   const cards = new Map<string, { column: Column; card: CardModel }>();
   for (const task of tasks) {
     if (hideSubtasks && task.parentId !== null) continue;
-    const session = sessionForTask(task.id, sessions, links);
+    const session = sessionForTask(task.id, sessions, links, detached.get(task.id));
     const kids = children.get(task.id) ?? [];
     const led = task.state !== 'done' && parentRunning(task.parentId);
     cards.set(task.id, {

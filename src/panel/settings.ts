@@ -180,7 +180,28 @@ export const STORAGE_KEYS = {
   project: (projectId: string): string => fit(`settings:project:${projectId}`),
   presets: 'presets',
   card: (projectId: string, taskId: string): string => fit(`card:${projectId}:${taskId}`),
+  /** Per project: task id -> when the user dragged the card away from its session (columns.ts Detached). */
+  detached: (projectId: string): string => fit(`detached:${projectId}`),
 } as const;
+
+/** Detach marks kept per project; the oldest go first. */
+export const DETACHED_MAX = 200;
+
+/** The stored detach marks, read defensively: anything but a positive finite number is dropped. */
+export const parseDetached = (raw: unknown): Map<string, number> => {
+  const out = new Map<string, number>();
+  const r = record(raw);
+  if (r !== null) for (const [id, at] of Object.entries(r)) if (typeof at === 'number' && Number.isFinite(at) && at > 0) out.set(id, at);
+  return out;
+};
+
+/** A copy with `taskId` marked at `at`, keeping the `max` newest marks. */
+export const withDetach = (marks: ReadonlyMap<string, number>, taskId: string, at: number, max = DETACHED_MAX): Map<string, number> => {
+  const next = new Map(marks);
+  next.delete(taskId);
+  next.set(taskId, at);
+  return new Map([...next].sort((a, b) => a[1] - b[1]).slice(-max));
+};
 
 export type SettingsStorage = {
   get: (key: string) => Promise<unknown>;
@@ -217,6 +238,9 @@ export const createSettingsStore = (storage: SettingsStorage) => {
       const clean = parseCardOptions(card);
       return put(STORAGE_KEYS.card(projectId, taskId), clean, Object.keys(clean).length === 0);
     },
+    loadDetached: async (projectId: string): Promise<Map<string, number>> => parseDetached(await storage.get(STORAGE_KEYS.detached(projectId))),
+    saveDetached: (projectId: string, marks: ReadonlyMap<string, number>): Promise<void> =>
+      put(STORAGE_KEYS.detached(projectId), Object.fromEntries(marks), marks.size === 0),
   };
 };
 

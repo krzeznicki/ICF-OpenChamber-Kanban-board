@@ -19,6 +19,8 @@ import {
   resolveSettings,
   type Settings,
   type SettingsLayer,
+  STORAGE_KEYS,
+  withDetach,
 } from './settings.ts';
 import { defaultChoice, loadNotice, setupOutcome, type ApiFailure, type NoticeModel, type TrackerChoice } from './setup.ts';
 import { createStarter } from './starter.ts';
@@ -56,6 +58,9 @@ type State = {
   projectSettings: SettingsLayer;
   settingsFor: string | null;
   presets: StoredPresets;
+  /** Cards the user dragged away from their sessions (columns.ts Detached); `detachedFor` is their project. */
+  detached: Map<string, number>;
+  detachedFor: string | null;
 };
 
 const state: State = {
@@ -74,10 +79,16 @@ const state: State = {
   projectSettings: {},
   settingsFor: null,
   presets: parseStoredPresets(undefined),
+  detached: new Map(),
+  detachedFor: null,
 };
 
 const store = createSettingsStore(host.storage);
 const fail = (message: string): void => void host.toast({ kind: 'error', message }).catch(() => {});
+const info = (message: string): void => void host.toast({ kind: 'info', message }).catch(() => {});
+
+/** The shown project's detach marks (empty while another project's are loaded). */
+const detached = (): Map<string, number> => (state.detachedFor === state.projectId ? state.detached : new Map());
 // Every field reports each keystroke; only the newest value per key is written.
 const saver = createLatestSaver<() => Promise<void>>(
   (_key, run) => run(),
@@ -220,7 +231,7 @@ const draw = (): void => {
     board.render(null);
     return;
   }
-  const model = groupTasks(state.tasks, state.sessions, starter.isStarting, state.hideSubtasks, starter.links(), starter.queuedIds(), starter.queueErrors());
+  const model = groupTasks(state.tasks, state.sessions, starter.isStarting, state.hideSubtasks, starter.links(), starter.queuedIds(), starter.queueErrors(), detached());
   for (const [column, cards] of Object.entries(model)) for (const c of cards) state.columns.set(c.task.id, column as Column);
   // The attention mark: sessions that finished or wait for the user.
   setBadge(model.review.length || null);
@@ -330,8 +341,19 @@ const load = async (): Promise<void> => {
       return;
     }
     // Links and the start queue come from the service's own files (starter.ts).
-    const [tasks] = await Promise.all([api.list(), starter.refresh(p.id, p.directory)]);
+    const [tasks, marks] = await Promise.all([
+      api.list(),
+      store.loadDetached(p.id).catch(() => null),
+      starter.refresh(p.id, p.directory),
+    ]);
     if (mine !== generation) return;
+    // Stored marks (also those of the board's other frame) join this frame's own; unreadable ones keep memory.
+    if (marks !== null) {
+      const merged = new Map(detached());
+      for (const [taskId, at] of marks) if (at > (merged.get(taskId) ?? 0)) merged.set(taskId, at);
+      state.detached = merged;
+      state.detachedFor = p.id;
+    }
     state.config = result.config;
     state.tasks = tasks;
     state.view = 'board';
@@ -361,6 +383,8 @@ const selectProject = async (id: string | null): Promise<void> => {
   state.projectSettings = {};
   if (id !== null) void loadProjectSettings(id);
   state.sessions = [];
+  state.detached = new Map();
+  state.detachedFor = null;
   starter.reset();
   state.config = null;
   state.tasks = null;
@@ -469,12 +493,29 @@ const starter = createStarter({
   sessions: () => state.sessions,
   context: startContext,
   loadCard: (projectId, taskId) => store.loadCard(projectId, taskId),
+  detached,
   draw: () => draw(),
 });
 
+/**
+ * A card with a session was dragged to Backlog or Ready and its state written: the card stops
+ * following that session (and any older one) until it is started again. The session keeps running.
+ */
+const detach = async (task: Task, from: Column): Promise<void> => {
+  const id = state.projectId;
+  if (id === null || (from !== 'in_progress' && from !== 'review')) return;
+  const marks = detached();
+  if (sessionForTask(task.id, state.sessions, starter.links(), marks.get(task.id)) === null) return;
+  state.detached = withDetach(marks, task.id, Date.now());
+  state.detachedFor = id;
+  const saved = state.detached;
+  saver.save(STORAGE_KEYS.detached(id), () => store.saveDetached(id, saved));
+  info('Moved; the agent session keeps running — open it from the session list');
+};
+
 /** A click on a card with a session opens the session; the detail stays on its Details button. */
 const openCard = (taskId: string): boolean => {
-  const s = sessionForTask(taskId, state.sessions, starter.links());
+  const s = sessionForTask(taskId, state.sessions, starter.links(), detached().get(taskId));
   if (s === null) return false;
   void host.openSession(s.id).catch((e: unknown) => fail(`Could not open the session: ${errorText(e)}`));
   return true;
@@ -516,6 +557,7 @@ const start = (ctx: HostReadyContext): void => {
     redraw: draw,
     onStart: (task) => void starter.onStart(task),
     beforeMove: (task) => starter.leaveQueue(task.id),
+    afterSetState: detach,
     openCard,
     baseTypes: () => settings().types,
     start: {

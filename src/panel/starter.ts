@@ -10,7 +10,7 @@ import { clampStartSessionRequest, GUEST_ATTACH_ID_MAX } from '@openchamber/sdk'
 import type { GuestProject, GuestSessionRecord, HostClient } from '@openchamber/sdk';
 import type { Task } from '../core/types.ts';
 import { ApiError, createApi } from './api.ts';
-import { ledByOrchestrator, sessionForTask, type SessionLink } from './columns.ts';
+import { ledByOrchestrator, sessionForTask, type Detached, type SessionLink } from './columns.ts';
 import { createLauncher } from './launcher.ts';
 import type { Preset } from './presets.ts';
 import { buildPrompt } from './prompt.ts';
@@ -37,6 +37,8 @@ export type StarterDeps = {
   /** Null while the shown project's settings are loading. */
   context: () => StartContext | null;
   loadCard: (projectId: string, taskId: string) => Promise<Partial<StartOptions>>;
+  /** Cards the user dragged away from their sessions (columns.ts Detached) in the shown project. */
+  detached: () => Detached;
   draw: () => void;
 };
 
@@ -56,7 +58,7 @@ export const createStarter = (deps: StarterDeps) => {
   const currentId = (): string | null => deps.project()?.id ?? null;
 
   const hasLiveSession = (taskId: string): boolean => {
-    const s = sessionForTask(taskId, deps.sessions(), links);
+    const s = sessionForTask(taskId, deps.sessions(), links, deps.detached().get(taskId));
     return s !== null && LIVE.has(s.activity);
   };
 
@@ -298,7 +300,7 @@ export const createStarter = (deps: StarterDeps) => {
   /** A drop on In Progress: resolve the start options, ask first when "Start automatically" is off, then launch or queue. */
   const onStart = async (task: Task): Promise<void> => {
     // A sub-task of a running orchestrator gets no session of its own.
-    if (ledByOrchestrator(task, deps.sessions(), links)) {
+    if (ledByOrchestrator(task, deps.sessions(), links, deps.detached())) {
       info('The orchestrator leads this task');
       return;
     }

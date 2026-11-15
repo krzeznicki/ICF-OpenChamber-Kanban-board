@@ -337,3 +337,19 @@ test('latest saver: one save per key at a time, the newest waiting value next', 
   assert.equal(errors.length, 1);
   assert.deepEqual(saved.at(-1), 'k=d');
 });
+
+test('detached marks: parsed defensively, newest kept, stored under detached:<projectId>', async () => {
+  const { parseDetached, withDetach, STORAGE_KEYS: K, createSettingsStore: create } = await import('../src/panel/settings.ts');
+  assert.deepEqual([...parseDetached({ a: 5, b: 'x', c: -1, d: Number.NaN })], [['a', 5]]);
+  assert.deepEqual([...parseDetached(null)], []);
+  const m = withDetach(new Map([['a', 1]]), 'b', 2);
+  assert.deepEqual([...m], [['a', 1], ['b', 2]]);
+  const capped = withDetach(new Map(Array.from({ length: 5 }, (_, i) => [`t${i}`, i] as [string, number])), 'new', 10, 3);
+  assert.deepEqual([...capped.keys()].sort(), ['new', 't3', 't4']);
+  assert.equal(K.detached('p1'), 'detached:p1');
+  const data = new Map<string, unknown>();
+  const store = create({ get: async (k) => data.get(k), set: async (k, v) => void data.set(k, v), delete: async (k) => void data.delete(k) });
+  await store.saveDetached('p1', new Map([['t', 7]]));
+  assert.deepEqual(data.get('detached:p1'), { t: 7 });
+  assert.deepEqual([...(await store.loadDetached('p1'))], [['t', 7]]);
+});

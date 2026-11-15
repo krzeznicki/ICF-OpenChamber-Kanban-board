@@ -32,6 +32,8 @@ export type EditorDeps = {
   onStart: (task: Task) => void;
   /** Before a move that writes (Backlog, Ready, Done): e.g. leave the start queue. False cancels the move. */
   beforeMove?: (task: Task) => Promise<boolean>;
+  /** A move to Backlog or Ready was written, before the reload (e.g. detach the card from its session). */
+  afterSetState?: (task: Task, from: Column) => Promise<void>;
   /** A click or Enter on a card; true when it was handled (a card with a session opens it), else the detail opens. */
   openCard: (taskId: string) => boolean;
   /** The base types offered in the type selects (settings' `types`). */
@@ -156,7 +158,7 @@ export const createEditor = (deps: EditorDeps) => {
     await run(task.id, (api) => api.close(task.id, withChildren));
   };
 
-  const apply = (task: Task, move: Move): void => {
+  const apply = (task: Task, from: Column, move: Move): void => {
     switch (move.kind) {
       case 'none':
         info(move.reason);
@@ -167,7 +169,10 @@ export const createEditor = (deps: EditorDeps) => {
       case 'setState':
         void (async () => {
           if (deps.beforeMove !== undefined && !(await deps.beforeMove(task))) return;
-          await run(task.id, (api) => api.setState(task.id, move.state));
+          await run(task.id, async (api) => {
+            await api.setState(task.id, move.state);
+            await deps.afterSetState?.(task, from);
+          });
         })();
         return;
       case 'close':
@@ -180,7 +185,7 @@ export const createEditor = (deps: EditorDeps) => {
     const task = find(id);
     // Dropping back on its own column is not a move; say nothing.
     if (task === null || moving.has(id) || from === to) return;
-    apply(task, planMove(task, from, to, openChildren(task, deps.tasks())));
+    apply(task, from, planMove(task, from, to, openChildren(task, deps.tasks())));
   };
 
   const closeDetail = (): void => {

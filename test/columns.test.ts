@@ -265,3 +265,50 @@ test('ledByOrchestrator: a not-done child whose parent session runs or retries',
   assert.equal(ledByOrchestrator({ ...child, state: 'done' }, [record('orch', ['p'], { activity: 'running' })]), false);
   assert.equal(ledByOrchestrator(t('x', 'ready-for-agent'), [record('orch', ['p'], { activity: 'running' })]), false);
 });
+
+// --- Detach: a card dragged out of In Progress / Review to Backlog or Ready ---
+
+test('sessionForTask: sessions and links created before detachedAt are ignored; newer ones count', () => {
+  const t = '.scratch/f/issues/01-a.md';
+  const old = record('old', [t], { activity: 'running', createdAt: 100 });
+  assert.equal(sessionForTask(t, [old], [], 200), null);
+  assert.equal(sessionForTask(t, [old], [], 0)?.id, 'old');
+  const linked = record('lk', [], { activity: 'running', createdAt: 150 });
+  assert.equal(sessionForTask(t, [linked], [{ taskId: t, sessionId: 'lk', createdAt: 160 }], 200), null);
+  // A link-only session (missing from the snapshot) created before the detach is ignored too.
+  assert.equal(sessionForTask(t, [], [{ taskId: t, sessionId: 'gone', createdAt: 150, status: 'busy' }], 200), null);
+  assert.equal(sessionForTask(t, [], [{ taskId: t, sessionId: 'gone', status: 'busy' }], 200), null, 'a link without createdAt is older');
+  // Started again after the detach: the new session counts.
+  const fresh = record('new', [t], { activity: 'running', createdAt: 300 });
+  assert.equal(sessionForTask(t, [old, fresh], [], 200)?.id, 'new');
+});
+
+test('groupTasks: after a detach the card follows its state (Ready / Backlog), not the older session', () => {
+  const ready = task('ready-for-agent', 'r');
+  const triage = task('needs-triage', 'b');
+  const sessions = [
+    record('s-r', ['r'], { activity: 'idle', outcome: 'completed', createdAt: 10 }),
+    record('s-b', ['b'], { activity: 'running', createdAt: 10 }),
+  ];
+  const before = groupTasks([ready, triage], sessions, new Set(), false);
+  assert.deepEqual(before.review.map((c) => c.task.id), ['r']);
+  assert.deepEqual(before.in_progress.map((c) => c.task.id), ['b']);
+  const detached = new Map([
+    ['r', 20],
+    ['b', 20],
+  ]);
+  const after = groupTasks([ready, triage], sessions, new Set(), false, [], new Set(), new Map(), detached);
+  assert.deepEqual(after.ready.map((c) => c.task.id), ['r']);
+  assert.deepEqual(after.backlog.map((c) => c.task.id), ['b']);
+  assert.equal(after.ready[0]!.session, null);
+});
+
+test('ledByOrchestrator / groupTasks: a detached parent session no longer leads its children', () => {
+  const parent = { ...task('ready-for-agent', 'p'), kind: 'parent' as const };
+  const kid = { ...task('ready-for-agent', 'k'), parentId: 'p', claimed: true };
+  const sessions = [record('sp', ['p'], { activity: 'running', createdAt: 10 })];
+  assert.equal(ledByOrchestrator(kid, sessions, []), true);
+  assert.equal(ledByOrchestrator(kid, sessions, [], new Map([['p', 20]])), false);
+  const g = groupTasks([parent, kid], sessions, new Set(), false, [], new Set(), new Map(), new Map([['p', 20]]));
+  assert.deepEqual(g.ready.map((c) => c.task.id), ['p', 'k']);
+});

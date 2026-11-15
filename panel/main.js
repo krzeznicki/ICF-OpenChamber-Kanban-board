@@ -2770,11 +2770,12 @@ ${GUEST_UI_LOOK_CSS}`;
         return null;
     }
   };
-  var sessionForTask = (taskId, sessions, links = []) => {
+  var NONE = /* @__PURE__ */ new Map();
+  var sessionForTask = (taskId, sessions, links = [], detachedAt = 0) => {
     const linked = new Set(links.filter((l) => l.taskId === taskId).map((l) => l.sessionId));
     let best = null;
     for (const s of sessions) {
-      if (s.archivedAt !== null) continue;
+      if (s.archivedAt !== null || s.createdAt < detachedAt) continue;
       if (!linked.has(s.id) && !s.items.some((item) => item.id === taskId)) continue;
       if (best === null || s.createdAt > best.createdAt || s.createdAt === best.createdAt && s.updatedAt > best.updatedAt) {
         best = s;
@@ -2783,13 +2784,13 @@ ${GUEST_UI_LOOK_CSS}`;
     if (best !== null) return { id: best.id, activity: best.activity, outcome: best.outcome, archived: false };
     let newest = null;
     for (const l of links) {
-      if (l.taskId !== taskId || fromLink(l) === null || sessions.some((s) => s.id === l.sessionId)) continue;
+      if (l.taskId !== taskId || (l.createdAt ?? 0) < detachedAt || fromLink(l) === null || sessions.some((s) => s.id === l.sessionId)) continue;
       if (newest === null || (l.createdAt ?? 0) >= (newest.createdAt ?? 0)) newest = l;
     }
     return newest === null ? null : fromLink(newest);
   };
-  var ledByOrchestrator = (task, sessions, links = []) => task.parentId !== null && task.state !== "done" && isWorking(sessionForTask(task.parentId, sessions, links));
-  var groupTasks = (tasks, sessions, starting, hideSubtasks, links = [], queued = /* @__PURE__ */ new Set(), queueErrors = /* @__PURE__ */ new Map()) => {
+  var ledByOrchestrator = (task, sessions, links = [], detached2 = NONE) => task.parentId !== null && task.state !== "done" && isWorking(sessionForTask(task.parentId, sessions, links, detached2.get(task.parentId)));
+  var groupTasks = (tasks, sessions, starting, hideSubtasks, links = [], queued = /* @__PURE__ */ new Set(), queueErrors = /* @__PURE__ */ new Map(), detached2 = NONE) => {
     const byId = new Map(tasks.map((t) => [t.id, t]));
     const children = /* @__PURE__ */ new Map();
     for (const t of tasks) {
@@ -2803,7 +2804,7 @@ ${GUEST_UI_LOOK_CSS}`;
       if (parentId === null) return false;
       let running = parentWorking.get(parentId);
       if (running === void 0) {
-        running = isWorking(sessionForTask(parentId, sessions, links));
+        running = isWorking(sessionForTask(parentId, sessions, links, detached2.get(parentId)));
         parentWorking.set(parentId, running);
       }
       return running;
@@ -2811,7 +2812,7 @@ ${GUEST_UI_LOOK_CSS}`;
     const cards = /* @__PURE__ */ new Map();
     for (const task of tasks) {
       if (hideSubtasks && task.parentId !== null) continue;
-      const session = sessionForTask(task.id, sessions, links);
+      const session = sessionForTask(task.id, sessions, links, detached2.get(task.id));
       const kids = children.get(task.id) ?? [];
       const led = task.state !== "done" && parentRunning(task.parentId);
       cards.set(task.id, {
@@ -3340,7 +3341,24 @@ ${ref}`,
     global: "settings:global",
     project: (projectId) => fit(`settings:project:${projectId}`),
     presets: "presets",
-    card: (projectId, taskId) => fit(`card:${projectId}:${taskId}`)
+    card: (projectId, taskId) => fit(`card:${projectId}:${taskId}`),
+    /** Per project: task id -> when the user dragged the card away from its session (columns.ts Detached). */
+    detached: (projectId) => fit(`detached:${projectId}`)
+  };
+  var DETACHED_MAX = 200;
+  var parseDetached = (raw) => {
+    const out = /* @__PURE__ */ new Map();
+    const r = record2(raw);
+    if (r !== null) {
+      for (const [id, at] of Object.entries(r)) if (typeof at === "number" && Number.isFinite(at) && at > 0) out.set(id, at);
+    }
+    return out;
+  };
+  var withDetach = (marks, taskId, at, max = DETACHED_MAX) => {
+    const next = new Map(marks);
+    next.delete(taskId);
+    next.set(taskId, at);
+    return new Map([...next].sort((a, b) => a[1] - b[1]).slice(-max));
   };
   var isEmptyLayer = (layer) => Object.entries(layer).every(([, v2]) => v2 === void 0 || record2(v2) !== null && Object.keys(v2).length === 0);
   var createSettingsStore = (storage) => {
@@ -3366,7 +3384,9 @@ ${ref}`,
       saveCard: (projectId, taskId, card) => {
         const clean2 = parseCardOptions(card);
         return put(STORAGE_KEYS.card(projectId, taskId), clean2, Object.keys(clean2).length === 0);
-      }
+      },
+      loadDetached: async (projectId) => parseDetached(await storage.get(STORAGE_KEYS.detached(projectId))),
+      saveDetached: (projectId, marks) => put(STORAGE_KEYS.detached(projectId), Object.fromEntries(marks), marks.size === 0)
     };
   };
   var createLatestSaver = (save, onError) => {
@@ -3419,7 +3439,7 @@ ${ref}`,
   };
 
   // src/panel/ui/add.ts
-  var NONE = "";
+  var NONE2 = "";
   var mountAddForm = (root, model, callbacks) => {
     const form = document.createElement("form");
     form.className = "kb-add";
@@ -3444,7 +3464,7 @@ ${ref}`,
     let title = "";
     let body = "";
     let type = "enhancement";
-    let parent = NONE;
+    let parent = NONE2;
     let busy = false;
     let errorDispose = null;
     const titleField = mountTextField(titleSlot, {
@@ -3459,7 +3479,7 @@ ${ref}`,
     const typeSelect = mountSelect(typeSlot, {
       label: "Type",
       value: type,
-      options: [{ id: NONE, label: "No type" }, ...model.types.map((t) => ({ id: t, label: t }))],
+      options: [{ id: NONE2, label: "No type" }, ...model.types.map((t) => ({ id: t, label: t }))],
       onChange: (id) => {
         type = id;
         typeSelect.update({ value: id });
@@ -3469,7 +3489,7 @@ ${ref}`,
     const parentSelect = mountSelect(parentSlot, {
       label: "Parent",
       value: parent,
-      options: [{ id: NONE, label: noParent }, ...model.parents],
+      options: [{ id: NONE2, label: noParent }, ...model.parents],
       searchable: model.parents.length > 8,
       onChange: (id) => {
         parent = id;
@@ -3517,8 +3537,8 @@ ${ref}`,
         title: t,
         state: "needs-triage",
         ...body.trim() !== "" ? { body: body.trim() } : {},
-        ...type !== NONE ? { type } : {},
-        ...parent !== NONE ? { parentId: parent } : {}
+        ...type !== NONE2 ? { type } : {},
+        ...parent !== NONE2 ? { parentId: parent } : {}
       };
       void callbacks.onSubmit(input).then((error) => {
         if (!form.isConnected) return;
@@ -4246,8 +4266,8 @@ ${ref}`,
 
   // src/panel/drag.ts
   var THRESHOLD = 6;
-  var NONE2 = { kind: "none" };
-  var end = (press) => ({ press: null, effect: press?.dragging === true ? { kind: "cancel" } : NONE2 });
+  var NONE3 = { kind: "none" };
+  var end = (press) => ({ press: null, effect: press?.dragging === true ? { kind: "cancel" } : NONE3 });
   var step = (press, input) => {
     switch (input.type) {
       case "down": {
@@ -4257,22 +4277,22 @@ ${ref}`,
         return { press: next, effect: stale.effect };
       }
       case "move": {
-        if (press === null || input.pointerId !== press.pointerId) return { press, effect: NONE2 };
+        if (press === null || input.pointerId !== press.pointerId) return { press, effect: NONE3 };
         if ((input.buttons & 1) === 0) return end(press);
         if (press.dragging) return { press, effect: { kind: "follow" } };
-        if (Math.hypot(input.x - press.x, input.y - press.y) < THRESHOLD) return { press, effect: NONE2 };
-        if (!input.canDrag) return { press: null, effect: NONE2 };
+        if (Math.hypot(input.x - press.x, input.y - press.y) < THRESHOLD) return { press, effect: NONE3 };
+        if (!input.canDrag) return { press: null, effect: NONE3 };
         return { press: { ...press, dragging: true }, effect: { kind: "start" } };
       }
       case "up": {
-        if (press === null || input.pointerId !== press.pointerId) return { press, effect: NONE2 };
+        if (press === null || input.pointerId !== press.pointerId) return { press, effect: NONE3 };
         if (!press.dragging) return { press: null, effect: { kind: "open", taskId: press.taskId } };
         if (input.to === null) return end(press);
         return { press: null, effect: { kind: "drop", taskId: press.taskId, from: press.from, to: input.to } };
       }
       case "abort": {
-        if (press === null) return { press, effect: NONE2 };
-        if (input.pointerId !== void 0 && input.pointerId !== press.pointerId) return { press, effect: NONE2 };
+        if (press === null) return { press, effect: NONE3 };
+        if (input.pointerId !== void 0 && input.pointerId !== press.pointerId) return { press, effect: NONE3 };
         return end(press);
       }
     }
@@ -4419,7 +4439,7 @@ ${ref}`,
     let addDispose = null;
     let card = null;
     const find = (id) => deps.tasks().find((t) => t.id === id) ?? null;
-    const info = (message) => void deps.host.toast({ kind: "info", message }).catch(() => {
+    const info2 = (message) => void deps.host.toast({ kind: "info", message }).catch(() => {
     });
     const fail2 = (message) => void deps.host.toast({ kind: "error", message }).catch(() => {
     });
@@ -4502,10 +4522,10 @@ ${ref}`,
       if (deps.beforeMove !== void 0 && !await deps.beforeMove(task)) return;
       await run(task.id, (api) => api.close(task.id, withChildren));
     };
-    const apply = (task, move2) => {
+    const apply = (task, from, move2) => {
       switch (move2.kind) {
         case "none":
-          info(move2.reason);
+          info2(move2.reason);
           return;
         case "start":
           deps.onStart(task);
@@ -4513,7 +4533,10 @@ ${ref}`,
         case "setState":
           void (async () => {
             if (deps.beforeMove !== void 0 && !await deps.beforeMove(task)) return;
-            await run(task.id, (api) => api.setState(task.id, move2.state));
+            await run(task.id, async (api) => {
+              await api.setState(task.id, move2.state);
+              await deps.afterSetState?.(task, from);
+            });
           })();
           return;
         case "close":
@@ -4524,7 +4547,7 @@ ${ref}`,
     const move = (id, from, to) => {
       const task = find(id);
       if (task === null || moving.has(id) || from === to) return;
-      apply(task, planMove(task, from, to, openChildren(task, deps.tasks())));
+      apply(task, from, planMove(task, from, to, openChildren(task, deps.tasks())));
     };
     const closeDetail = () => {
       const d = detail;
@@ -4881,14 +4904,14 @@ ${note}` : note;
     const { host: host2 } = deps;
     const fail2 = (message) => void host2.toast({ kind: "error", message }).catch(() => {
     });
-    const info = (message) => void host2.toast({ kind: "info", message }).catch(() => {
+    const info2 = (message) => void host2.toast({ kind: "info", message }).catch(() => {
     });
     let links = [];
     let queue = [];
     let shown = null;
     const currentId = () => deps.project()?.id ?? null;
     const hasLiveSession = (taskId) => {
-      const s = sessionForTask(taskId, deps.sessions(), links);
+      const s = sessionForTask(taskId, deps.sessions(), links, deps.detached().get(taskId));
       return s !== null && LIVE.has(s.activity);
     };
     let cli = null;
@@ -4991,11 +5014,11 @@ ${note}` : note;
       onError: (task, e) => fail2(`Could not start \u201C${task.title}\u201D: ${errorText3(e)}`)
     });
     const report = (task, result) => {
-      if (result === "already") info(`\u201C${task.title}\u201D already has an agent working on it`);
+      if (result === "already") info2(`\u201C${task.title}\u201D already has an agent working on it`);
       else if (result === "started") void host2.toast({ kind: "success", message: `Started an agent on \u201C${task.title}\u201D` }).catch(() => {
       });
       else if (result === "pending")
-        info(`Starting \u201C${task.title}\u201D is taking longer than expected; the card follows its session once it shows up`);
+        info2(`Starting \u201C${task.title}\u201D is taking longer than expected; the card follows its session once it shows up`);
     };
     const queuedIds = () => new Set(shown === currentId() ? queue.map((e) => e.taskId) : []);
     const queueErrors = () => new Map(shown === currentId() ? queue.flatMap((e) => e.lastError !== void 0 ? [[e.taskId, e.lastError]] : []) : []);
@@ -5089,25 +5112,25 @@ ${note}` : note;
       deps.draw();
       await drain();
       if (queue.some((e) => e.taskId === task.id)) {
-        info(`\u201C${task.title}\u201D is queued; it starts when fewer than ${ctx.settings.maxParallel} agents are running`);
+        info2(`\u201C${task.title}\u201D is queued; it starts when fewer than ${ctx.settings.maxParallel} agents are running`);
       }
     };
     const onStart = async (task) => {
-      if (ledByOrchestrator(task, deps.sessions(), links)) {
-        info("The orchestrator leads this task");
+      if (ledByOrchestrator(task, deps.sessions(), links, deps.detached())) {
+        info2("The orchestrator leads this task");
         return;
       }
       const ctx = deps.context();
       if (ctx === null) {
-        info("Settings are loading, try again in a moment");
+        info2("Settings are loading, try again in a moment");
         return;
       }
       if (isStarting.has(task.id) || hasLiveSession(task.id)) {
-        info(`\u201C${task.title}\u201D already has an agent working on it`);
+        info2(`\u201C${task.title}\u201D already has an agent working on it`);
         return;
       }
       if (queuedIds().has(task.id)) {
-        info(`\u201C${task.title}\u201D is already queued`);
+        info2(`\u201C${task.title}\u201D is already queued`);
         return;
       }
       let card;
@@ -5589,11 +5612,16 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     globalSettings: {},
     projectSettings: {},
     settingsFor: null,
-    presets: parseStoredPresets(void 0)
+    presets: parseStoredPresets(void 0),
+    detached: /* @__PURE__ */ new Map(),
+    detachedFor: null
   };
   var store = createSettingsStore(host.storage);
   var fail = (message) => void host.toast({ kind: "error", message }).catch(() => {
   });
+  var info = (message) => void host.toast({ kind: "info", message }).catch(() => {
+  });
+  var detached = () => state.detachedFor === state.projectId ? state.detached : /* @__PURE__ */ new Map();
   var saver = createLatestSaver(
     (_key, run) => run(),
     (e) => fail(`Could not save settings: ${e instanceof Error ? e.message : String(e)}`)
@@ -5714,7 +5742,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
       board.render(null);
       return;
     }
-    const model = groupTasks(state.tasks, state.sessions, starter.isStarting, state.hideSubtasks, starter.links(), starter.queuedIds(), starter.queueErrors());
+    const model = groupTasks(state.tasks, state.sessions, starter.isStarting, state.hideSubtasks, starter.links(), starter.queuedIds(), starter.queueErrors(), detached());
     for (const [column, cards] of Object.entries(model)) for (const c of cards) state.columns.set(c.task.id, column);
     setBadge(model.review.length || null);
     board.render(model, editor.busy, (task) => summaries.get(task));
@@ -5811,8 +5839,18 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
         showWizard(api, remote);
         return;
       }
-      const [tasks] = await Promise.all([api.list(), starter.refresh(p.id, p.directory)]);
+      const [tasks, marks] = await Promise.all([
+        api.list(),
+        store.loadDetached(p.id).catch(() => null),
+        starter.refresh(p.id, p.directory)
+      ]);
       if (mine !== generation) return;
+      if (marks !== null) {
+        const merged = new Map(detached());
+        for (const [taskId, at] of marks) if (at > (merged.get(taskId) ?? 0)) merged.set(taskId, at);
+        state.detached = merged;
+        state.detachedFor = p.id;
+      }
       state.config = result.config;
       state.tasks = tasks;
       state.view = "board";
@@ -5839,6 +5877,8 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     state.projectSettings = {};
     if (id !== null) void loadProjectSettings(id);
     state.sessions = [];
+    state.detached = /* @__PURE__ */ new Map();
+    state.detachedFor = null;
     starter.reset();
     state.config = null;
     state.tasks = null;
@@ -5921,10 +5961,22 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     sessions: () => state.sessions,
     context: startContext,
     loadCard: (projectId, taskId) => store.loadCard(projectId, taskId),
+    detached,
     draw: () => draw()
   });
+  var detach = async (task, from) => {
+    const id = state.projectId;
+    if (id === null || from !== "in_progress" && from !== "review") return;
+    const marks = detached();
+    if (sessionForTask(task.id, state.sessions, starter.links(), marks.get(task.id)) === null) return;
+    state.detached = withDetach(marks, task.id, Date.now());
+    state.detachedFor = id;
+    const saved = state.detached;
+    saver.save(STORAGE_KEYS.detached(id), () => store.saveDetached(id, saved));
+    info("Moved; the agent session keeps running \u2014 open it from the session list");
+  };
   var openCard = (taskId) => {
-    const s = sessionForTask(taskId, state.sessions, starter.links());
+    const s = sessionForTask(taskId, state.sessions, starter.links(), detached().get(taskId));
     if (s === null) return false;
     void host.openSession(s.id).catch((e) => fail(`Could not open the session: ${errorText4(e)}`));
     return true;
@@ -5964,6 +6016,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
       redraw: draw,
       onStart: (task) => void starter.onStart(task),
       beforeMove: (task) => starter.leaveQueue(task.id),
+      afterSetState: detach,
       openCard,
       baseTypes: () => settings().types,
       start: {
