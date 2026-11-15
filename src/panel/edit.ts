@@ -3,13 +3,13 @@
 // drags of it are ignored), reports a failure in a toast and reloads the board afterwards.
 import type { HostClient } from '@openchamber/sdk';
 import type { NewTask, Task, TaskState } from '../core/types.ts';
-import { canAddSubtask, createWithSubtasks, parentChoices, partialMessage, subtaskTitles, toNewTask, type AddDraft } from './addTask.ts';
+import { canAddSubtask, createWithSubtasks, parentChoices, partialMessage, subtasksToCreate, toNewTask, type AddDraft } from './addTask.ts';
 import type { Api } from './api.ts';
 import type { Preset } from './presets.ts';
 import { resolveStart, type CardOptions, type Sections, type Settings } from './settings.ts';
 import { COLUMNS, type Column, type SessionLookup, type SessionTarget } from './columns.ts';
 import { openChildren, planMove, taskTypes, type Move } from './moves.ts';
-import { openAddModal, type AddResult } from './ui/addModal.ts';
+import { openAddModal, type AddModalStart, type AddResult } from './ui/addModal.ts';
 import type { Board } from './ui/board.ts';
 import { askChoice } from './ui/confirm.ts';
 import { openDetail, type DetailHandle, type DetailModel, type SessionView, type SummaryModel } from './ui/detail.ts';
@@ -86,7 +86,7 @@ const NEW_TASK: Task = {
 export const createEditor = (deps: EditorDeps) => {
   const moving = new Set<string>();
   let detail: { id: string; handle: DetailHandle } | null = null;
-  let addModal: { dispose: () => void } | null = null;
+  let addModal: { setStart: (start: AddModalStart | null) => void; dispose: () => void } | null = null;
   /** The open modal's stored start options; version bumps when they are (re)loaded. */
   let card: { taskId: string; projectId: string; options: CardOptions; version: number } | null = null;
   /** The open modal's lookup of a session known only from a link (SessionTarget `check`). */
@@ -346,10 +346,17 @@ export const createEditor = (deps: EditorDeps) => {
     const api = deps.api();
     if (api === null) return { kind: 'error', message: 'No project is open.' };
     const ctx = deps.start.context();
+    const tracker = deps.tracker();
+    const subtasks = subtasksToCreate(draft, tracker);
+    /** Never throws: the task exists by now, so a storage hiccup is a toast, not "could not create". */
     const saveStart = (taskId: string): void => {
       if (ctx === null || Object.keys(draft.start).length === 0) return;
-      deps.start.save(ctx.projectId, taskId, draft.start);
-      if (draft.start.summaryLanguage !== undefined) deps.summary.onLanguage(ctx.projectId, taskId, draft.start.summaryLanguage);
+      try {
+        deps.start.save(ctx.projectId, taskId, draft.start);
+        if (draft.start.summaryLanguage !== undefined) deps.summary.onLanguage(ctx.projectId, taskId, draft.start.summaryLanguage);
+      } catch (e) {
+        fail(`Could not save the start options of ${taskId}: ${errorText(e)}`);
+      }
     };
     let first = true;
     let result: Awaited<ReturnType<typeof createWithSubtasks>>;
@@ -358,12 +365,14 @@ export const createEditor = (deps: EditorDeps) => {
         async (input) => {
           const task = await api.create(input);
           // The first create is the task itself: its start options are stored once its id is known.
-          if (first) saveStart(task.id);
-          first = false;
+          if (first) {
+            first = false;
+            saveStart(task.id);
+          }
           return task;
         },
-        toNewTask(draft, deps.tracker()),
-        subtaskTitles(draft.subtasks),
+        toNewTask(draft, tracker),
+        subtasks,
       );
     } catch (e) {
       return { kind: 'error', message: errorText(e) };
@@ -371,7 +380,7 @@ export const createEditor = (deps: EditorDeps) => {
     const { task, failed } = result;
     if (failed.length === 0) {
       closeAdd();
-      const n = subtaskTitles(draft.subtasks).length;
+      const n = subtasks.length;
       void deps.host
         .toast({ kind: 'success', message: n === 0 ? `Created ${task.id}` : `Created ${task.id} with ${n} sub-task${n === 1 ? '' : 's'}` })
         .catch(() => {});
@@ -380,10 +389,22 @@ export const createEditor = (deps: EditorDeps) => {
     return failed.length === 0 ? null : { kind: 'partial', message: partialMessage(task.id, failed) };
   };
 
+  /** The add modal's start options; null while the project's settings are loading. */
+  const addStart = (): AddModalStart | null => {
+    const ctx = deps.start.context();
+    return ctx === null
+      ? null
+      : {
+          projectId: ctx.projectId,
+          presets: ctx.presets,
+          inherited: (type, kind) => resolveStart(ctx.settings, { ...NEW_TASK, type, kind }, {}, ctx.presets),
+          summaryLanguage: ctx.settings.summary.language,
+        };
+  };
+
   const showAdd = (): void => {
     if (addModal !== null) return;
     const tasks = deps.tasks();
-    const ctx = deps.start.context();
     addModal = openAddModal(
       {
         tracker: deps.tracker(),
@@ -391,14 +412,7 @@ export const createEditor = (deps: EditorDeps) => {
         parents: parentChoices(tasks),
         tasks,
         labels: deps.labels(),
-        start:
-          ctx === null
-            ? null
-            : {
-                presets: ctx.presets,
-                inherited: (type, kind) => resolveStart(ctx.settings, { ...NEW_TASK, type, kind }, {}, ctx.presets),
-                summaryLanguage: ctx.settings.summary.language,
-              },
+        start: addStart(),
         loadModels: deps.loadModels,
       },
       { onSubmit: submitAdd, onDismiss: closeAdd },
@@ -428,6 +442,8 @@ export const createEditor = (deps: EditorDeps) => {
       const ctx = deps.start.context();
       if (detail !== null && (card === null || ctx === null || card.projectId !== ctx.projectId)) loadCard(detail.id);
       refreshDetail();
+      // The project's settings may have arrived (or changed) while Add task is open.
+      addModal?.setStart(addStart());
     },
     dispose: () => {
       detachDrag();

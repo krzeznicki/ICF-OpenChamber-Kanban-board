@@ -121,6 +121,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
 .kb-add-modal { width: min(44rem, 100%); }
 .kb-add-form { display: flex; flex-direction: column; gap: 0.75rem; padding-top: 0.75rem; }
 .kb-add-group { gap: 0.5rem; }
+.kb-start.is-locked { opacity: 0.6; }
 .kb-add-checks { display: flex; flex-direction: column; gap: 0.25rem; max-height: 14rem; overflow-y: auto;
   padding: 0.25rem 0.5rem; border: 1px solid var(--oc-border); border-radius: var(--oc-radius); }
 .kb-add-check[hidden] { display: none; }

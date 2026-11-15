@@ -13,6 +13,7 @@ import {
   parentChoices,
   partialMessage,
   subtaskTitles,
+  subtasksToCreate,
   toNewTask,
   validateDraft,
   type AddDraft,
@@ -83,10 +84,22 @@ test('blockerChoices local: open tickets of the chosen feature only', () => {
   );
 });
 
-test('blockerChoices github: every open issue, whatever the parent', () => {
+test('blockerChoices github: every open issue', () => {
   assert.deepEqual(blockerChoices(GITHUB, 'github', '').map((c) => c.id), ['#1', '#2', '#3']);
-  assert.deepEqual(blockerChoices(GITHUB, 'github', '#1').map((c) => c.id), ['#1', '#2', '#3']);
   assert.deepEqual(blockerChoices(GITHUB, 'github', '')[0], { id: '#1', label: 'Epic', hint: '#1' });
+});
+
+test('blockerChoices github: the chosen parent is not offered as a blocker', () => {
+  assert.deepEqual(blockerChoices(GITHUB, 'github', '#1').map((c) => c.id), ['#2', '#3']);
+});
+
+test('subtasksToCreate: the rows, trimmed, when the new task may have sub-tasks', () => {
+  assert.deepEqual(subtasksToCreate(draft({ subtasks: [' a ', ''] }), 'local'), ['a']);
+  assert.deepEqual(subtasksToCreate(draft({ parentId: '#1', subtasks: ['a'] }), 'github'), ['a']);
+});
+
+test('subtasksToCreate: none for a local ticket (parent chosen), even with rows left from before', () => {
+  assert.deepEqual(subtasksToCreate(draft({ parentId: '.scratch/f/spec.md', subtasks: ['a', 'b'] }), 'local'), []);
 });
 
 test('keepOffered drops blockers that are no longer offered (parent changed)', () => {

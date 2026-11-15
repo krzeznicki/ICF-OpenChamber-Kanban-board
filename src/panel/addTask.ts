@@ -46,7 +46,8 @@ export const parentChoices = (tasks: readonly Task[]): Choice[] =>
 
 /** Open tasks the new task may be blocked by, given the chosen parent ('' = none). */
 export const blockerChoices = (tasks: readonly Task[], tracker: TrackerKind, parentId: string): Choice[] => {
-  if (tracker === 'github') return tasks.filter((t) => t.state !== 'done').map(choice);
+  // A sub-issue blocked by its own parent would never be unblocked: the parent waits for it.
+  if (tracker === 'github') return tasks.filter((t) => t.state !== 'done' && t.id !== parentId).map(choice);
   if (parentId === '') return [];
   return tasks.filter((t) => t.kind === 'ticket' && t.parentId === parentId && t.state !== 'done').map(choice);
 };
@@ -65,6 +66,10 @@ export const canAddSubtask = (task: Task, tracker: TrackerKind): boolean =>
   task.state !== 'done' && (tracker === 'github' || task.kind === 'parent');
 
 export const subtaskTitles = (rows: readonly string[]): string[] => rows.map((r) => r.trim()).filter((r) => r !== '');
+
+/** The sub-task titles to create under the new task: none when it may not have any (rows hidden, not cleared). */
+export const subtasksToCreate = (d: AddDraft, tracker: TrackerKind): string[] =>
+  canHaveSubtasks(tracker, d.parentId) ? subtaskTitles(d.subtasks) : [];
 
 /** What the new task will be, so its inherited start options (preset by kind) can be shown. */
 export const draftKind = (d: AddDraft, tracker: TrackerKind): TaskKind => {

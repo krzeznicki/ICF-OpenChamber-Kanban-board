@@ -33,14 +33,17 @@ export type AddModalModel = {
   tasks: readonly Task[];
   /** Role -> label in the repo; shown as a hint when it differs. */
   labels: Record<string, string>;
-  /** Null while the project's settings are loading: the start options are left out. */
-  start: {
-    presets: Preset[];
-    /** What a new task of this type and kind would start with. */
-    inherited: (type: string | null, kind: TaskKind) => StartOptions;
-    summaryLanguage: string;
-  } | null;
+  /** Null while the project's settings are loading (a muted line says so; setStart fills it in). */
+  start: AddModalStart | null;
   loadModels: () => Promise<string[]>;
+};
+
+export type AddModalStart = {
+  projectId: string;
+  presets: Preset[];
+  /** What a new task of this type and kind would start with. */
+  inherited: (type: string | null, kind: TaskKind) => StartOptions;
+  summaryLanguage: string;
 };
 
 /** null: created, close; `error`: nothing was created; `partial`: the task was, some sub-tasks were not. */
@@ -62,7 +65,10 @@ const el = <K extends keyof HTMLElementTagNameMap>(tag: K, className: string, te
   return node;
 };
 
-export const openAddModal = (model: AddModalModel, callbacks: AddModalCallbacks): { dispose: () => void } => {
+export const openAddModal = (
+  model: AddModalModel,
+  callbacks: AddModalCallbacks,
+): { setStart: (start: AddModalStart | null) => void; dispose: () => void } => {
   const d: AddDraft = emptyDraft();
   d.type = model.types.includes('enhancement') ? 'enhancement' : NONE;
   let busy = false;
@@ -305,22 +311,31 @@ export const openAddModal = (model: AddModalModel, callbacks: AddModalCallbacks)
     if (focusRow !== undefined && focusRow >= 0) subBox.querySelectorAll('input')[focusRow]?.focus();
   };
 
-  // --- start options: redrawn when what they inherit changes (type, kind) ---
+  // --- start options: redrawn when what they inherit changes (type, kind, the project's settings) ---
+  let start = model.start;
   let startDispose: (() => void) | null = null;
   let startKey: string | null = null;
+  const lockStart = (): void => {
+    // The kit's inherit fields have no disabled state: the block is inert while it may not change.
+    startBox.inert = locked();
+    startBox.classList.toggle('is-locked', locked());
+  };
   const drawStart = (): void => {
-    const s = model.start;
-    startBox.hidden = s === null;
-    if (s === null) return;
-    const inherited = s.inherited(d.type === NONE ? null : d.type, draftKind(d, model.tracker));
-    const key = JSON.stringify(inherited);
+    const s = start;
+    const inherited = s === null ? null : s.inherited(d.type === NONE ? null : d.type, draftKind(d, model.tracker));
+    const key =
+      s === null ? 'loading' : JSON.stringify([s.projectId, inherited, s.summaryLanguage, s.presets.map((p) => [p.id, p.name])]);
+    lockStart();
     if (key === startKey) return;
     startKey = key;
     startDispose?.();
-    startBox.replaceChildren(
-      el('h3', 'kb-settings-heading', 'Start options'),
-      el('p', 'kb-muted', 'Used when an agent starts on this task; unset fields follow the settings.'),
-    );
+    startDispose = null;
+    startBox.replaceChildren(el('h3', 'kb-settings-heading', 'Start options'));
+    if (s === null || inherited === null) {
+      startBox.append(el('p', 'kb-muted', 'Start options load with the project settings.'));
+      return;
+    }
+    startBox.append(el('p', 'kb-muted', 'Used when an agent starts on this task; unset fields follow the settings.'));
     startDispose = mountStartOptions(startBox, {
       presets: s.presets,
       card: d.start,
@@ -353,6 +368,7 @@ export const openAddModal = (model: AddModalModel, callbacks: AddModalCallbacks)
     for (const h of fixed) h.update({ disabled: next || finished });
     drawBlockers();
     drawSubtasks();
+    lockStart();
   };
 
   const submit = (): void => {
@@ -399,6 +415,10 @@ export const openAddModal = (model: AddModalModel, callbacks: AddModalCallbacks)
   titleSlot.querySelector('input')?.focus();
 
   return {
+    setStart: (next: AddModalStart | null) => {
+      start = next;
+      drawStart();
+    },
     dispose: () => {
       for (const x of [...disposers, ...blockerDisposers, ...subDisposers]) x();
       for (const h of fixed) h.dispose();

@@ -2958,7 +2958,7 @@ ${GUEST_UI_LOOK_CSS}`;
   var choice = (t) => ({ id: t.id, label: t.title, hint: t.id });
   var parentChoices = (tasks) => tasks.filter((t) => t.kind === "parent" && t.state !== "done").map(choice);
   var blockerChoices = (tasks, tracker, parentId) => {
-    if (tracker === "github") return tasks.filter((t) => t.state !== "done").map(choice);
+    if (tracker === "github") return tasks.filter((t) => t.state !== "done" && t.id !== parentId).map(choice);
     if (parentId === "") return [];
     return tasks.filter((t) => t.kind === "ticket" && t.parentId === parentId && t.state !== "done").map(choice);
   };
@@ -2969,6 +2969,7 @@ ${GUEST_UI_LOOK_CSS}`;
   var canHaveSubtasks = (tracker, parentId) => tracker === "github" || parentId === "";
   var canAddSubtask = (task, tracker) => task.state !== "done" && (tracker === "github" || task.kind === "parent");
   var subtaskTitles = (rows) => rows.map((r) => r.trim()).filter((r) => r !== "");
+  var subtasksToCreate = (d, tracker) => canHaveSubtasks(tracker, d.parentId) ? subtaskTitles(d.subtasks) : [];
   var draftKind = (d, tracker) => {
     if (tracker === "local") return d.parentId === "" ? "parent" : "ticket";
     return subtaskTitles(d.subtasks).length > 0 ? "parent" : "ticket";
@@ -4512,21 +4513,28 @@ ${ref}`,
       );
       if (focusRow !== void 0 && focusRow >= 0) subBox.querySelectorAll("input")[focusRow]?.focus();
     };
+    let start2 = model.start;
     let startDispose = null;
     let startKey = null;
+    const lockStart = () => {
+      startBox.inert = locked();
+      startBox.classList.toggle("is-locked", locked());
+    };
     const drawStart = () => {
-      const s = model.start;
-      startBox.hidden = s === null;
-      if (s === null) return;
-      const inherited = s.inherited(d.type === NONE2 ? null : d.type, draftKind(d, model.tracker));
-      const key = JSON.stringify(inherited);
+      const s = start2;
+      const inherited = s === null ? null : s.inherited(d.type === NONE2 ? null : d.type, draftKind(d, model.tracker));
+      const key = s === null ? "loading" : JSON.stringify([s.projectId, inherited, s.summaryLanguage, s.presets.map((p) => [p.id, p.name])]);
+      lockStart();
       if (key === startKey) return;
       startKey = key;
       startDispose?.();
-      startBox.replaceChildren(
-        el3("h3", "kb-settings-heading", "Start options"),
-        el3("p", "kb-muted", "Used when an agent starts on this task; unset fields follow the settings.")
-      );
+      startDispose = null;
+      startBox.replaceChildren(el3("h3", "kb-settings-heading", "Start options"));
+      if (s === null || inherited === null) {
+        startBox.append(el3("p", "kb-muted", "Start options load with the project settings."));
+        return;
+      }
+      startBox.append(el3("p", "kb-muted", "Used when an agent starts on this task; unset fields follow the settings."));
       startDispose = mountStartOptions(startBox, {
         presets: s.presets,
         card: d.start,
@@ -4556,6 +4564,7 @@ ${ref}`,
       for (const h of fixed) h.update({ disabled: next || finished });
       drawBlockers();
       drawSubtasks();
+      lockStart();
     };
     const submit = () => {
       if (busy || finished) return;
@@ -4597,6 +4606,10 @@ ${ref}`,
     drawStart();
     titleSlot.querySelector("input")?.focus();
     return {
+      setStart: (next) => {
+        start2 = next;
+        drawStart();
+      },
       dispose: () => {
         for (const x of [...disposers, ...blockerDisposers, ...subDisposers]) x();
         for (const h of fixed) h.dispose();
@@ -11165,10 +11178,16 @@ ${ref}`,
       const api = deps.api();
       if (api === null) return { kind: "error", message: "No project is open." };
       const ctx = deps.start.context();
+      const tracker = deps.tracker();
+      const subtasks = subtasksToCreate(draft, tracker);
       const saveStart = (taskId) => {
         if (ctx === null || Object.keys(draft.start).length === 0) return;
-        deps.start.save(ctx.projectId, taskId, draft.start);
-        if (draft.start.summaryLanguage !== void 0) deps.summary.onLanguage(ctx.projectId, taskId, draft.start.summaryLanguage);
+        try {
+          deps.start.save(ctx.projectId, taskId, draft.start);
+          if (draft.start.summaryLanguage !== void 0) deps.summary.onLanguage(ctx.projectId, taskId, draft.start.summaryLanguage);
+        } catch (e) {
+          fail2(`Could not save the start options of ${taskId}: ${errorText2(e)}`);
+        }
       };
       let first = true;
       let result;
@@ -11176,12 +11195,14 @@ ${ref}`,
         result = await createWithSubtasks(
           async (input) => {
             const task2 = await api.create(input);
-            if (first) saveStart(task2.id);
-            first = false;
+            if (first) {
+              first = false;
+              saveStart(task2.id);
+            }
             return task2;
           },
-          toNewTask(draft, deps.tracker()),
-          subtaskTitles(draft.subtasks)
+          toNewTask(draft, tracker),
+          subtasks
         );
       } catch (e) {
         return { kind: "error", message: errorText2(e) };
@@ -11189,17 +11210,25 @@ ${ref}`,
       const { task, failed } = result;
       if (failed.length === 0) {
         closeAdd();
-        const n = subtaskTitles(draft.subtasks).length;
+        const n = subtasks.length;
         void deps.host.toast({ kind: "success", message: n === 0 ? `Created ${task.id}` : `Created ${task.id} with ${n} sub-task${n === 1 ? "" : "s"}` }).catch(() => {
         });
       }
       await deps.reload();
       return failed.length === 0 ? null : { kind: "partial", message: partialMessage(task.id, failed) };
     };
+    const addStart = () => {
+      const ctx = deps.start.context();
+      return ctx === null ? null : {
+        projectId: ctx.projectId,
+        presets: ctx.presets,
+        inherited: (type, kind) => resolveStart(ctx.settings, { ...NEW_TASK, type, kind }, {}, ctx.presets),
+        summaryLanguage: ctx.settings.summary.language
+      };
+    };
     const showAdd = () => {
       if (addModal !== null) return;
       const tasks = deps.tasks();
-      const ctx = deps.start.context();
       addModal = openAddModal(
         {
           tracker: deps.tracker(),
@@ -11207,11 +11236,7 @@ ${ref}`,
           parents: parentChoices(tasks),
           tasks,
           labels: deps.labels(),
-          start: ctx === null ? null : {
-            presets: ctx.presets,
-            inherited: (type, kind) => resolveStart(ctx.settings, { ...NEW_TASK, type, kind }, {}, ctx.presets),
-            summaryLanguage: ctx.settings.summary.language
-          },
+          start: addStart(),
           loadModels: deps.loadModels
         },
         { onSubmit: submitAdd, onDismiss: closeAdd }
@@ -11238,6 +11263,7 @@ ${ref}`,
         const ctx = deps.start.context();
         if (detail !== null && (card === null || ctx === null || card.projectId !== ctx.projectId)) loadCard(detail.id);
         refreshDetail();
+        addModal?.setStart(addStart());
       },
       dispose: () => {
         detachDrag();
@@ -12126,6 +12152,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
 .kb-add-modal { width: min(44rem, 100%); }
 .kb-add-form { display: flex; flex-direction: column; gap: 0.75rem; padding-top: 0.75rem; }
 .kb-add-group { gap: 0.5rem; }
+.kb-start.is-locked { opacity: 0.6; }
 .kb-add-checks { display: flex; flex-direction: column; gap: 0.25rem; max-height: 14rem; overflow-y: auto;
   padding: 0.25rem 0.5rem; border: 1px solid var(--oc-border); border-radius: var(--oc-radius); }
 .kb-add-check[hidden] { display: none; }
