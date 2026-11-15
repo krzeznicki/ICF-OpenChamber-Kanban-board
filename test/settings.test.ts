@@ -353,3 +353,21 @@ test('detached marks: parsed defensively, newest kept, stored under detached:<pr
   assert.deepEqual(data.get('detached:p1'), { t: 7 });
   assert.deepEqual([...(await store.loadDetached('p1'))], [['t', 7]]);
 });
+
+test('detail sections: defaults (Settings collapsed), defensive parse, short key, stored through the store', async () => {
+  const { DEFAULT_SECTIONS, parseSections, STORAGE_KEYS: K, createSettingsStore: create } = await import('../src/panel/settings.ts');
+  assert.deepEqual(DEFAULT_SECTIONS, { summary: true, task: true, subtasks: true, settings: false });
+  assert.deepEqual(parseSections(undefined), DEFAULT_SECTIONS);
+  assert.deepEqual(parseSections({ settings: true, task: 'yes', bogus: false }), { ...DEFAULT_SECTIONS, settings: true });
+  assert.ok(K.detailSections.length <= 128);
+  const data = new Map<string, unknown>();
+  const storage: SettingsStorage = {
+    get: async (k) => data.get(k),
+    set: async (k, v) => void data.set(k, v),
+    delete: async (k) => void data.delete(k),
+  };
+  const s = create(storage);
+  assert.deepEqual(await s.loadSections(), DEFAULT_SECTIONS);
+  await s.saveSections({ ...DEFAULT_SECTIONS, task: false });
+  assert.deepEqual(await s.loadSections(), { ...DEFAULT_SECTIONS, task: false });
+});

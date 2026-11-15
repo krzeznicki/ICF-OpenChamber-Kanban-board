@@ -100,6 +100,39 @@ export const sessionForTask = (
 };
 
 /**
+ * What the task modal's "Open session" may do. Only a non-archived record of the project's own
+ * snapshot is `open`. A session known only from a link (`check`) must first be found, not archived,
+ * in a host snapshot (resolveSession): sessions.status answers `idle` for an archived session too,
+ * and host.openSession given an id it cannot open lands on some other session.
+ * `archived`: the task's sessions (after a detach) are all archived.
+ */
+export type SessionTarget = { kind: 'open'; id: string } | { kind: 'check'; id: string } | { kind: 'archived' } | { kind: 'none' };
+
+export const sessionTarget = (
+  taskId: string,
+  sessions: GuestSessionRecord[],
+  links: readonly SessionLink[] = [],
+  detachedAt = 0,
+): SessionTarget => {
+  const s = sessionForTask(taskId, sessions, links, detachedAt);
+  if (s !== null) return sessions.some((r) => r.id === s.id) ? { kind: 'open', id: s.id } : { kind: 'check', id: s.id };
+  const linked = new Set(links.filter((l) => l.taskId === taskId).map((l) => l.sessionId));
+  const archived = sessions.some(
+    (r) => r.archivedAt !== null && r.createdAt >= detachedAt && (linked.has(r.id) || r.items.some((item) => item.id === taskId)),
+  );
+  return archived ? { kind: 'archived' } : { kind: 'none' };
+};
+
+/** A session id looked up in host snapshots (every project's): only `open` may go to host.openSession. */
+export const resolveSession = (sessionId: string, snapshots: readonly (readonly GuestSessionRecord[])[]): 'open' | 'archived' | 'missing' => {
+  for (const list of snapshots) {
+    const r = list.find((s) => s.id === sessionId);
+    if (r !== undefined) return r.archivedAt === null ? 'open' : 'archived';
+  }
+  return 'missing';
+};
+
+/**
  * A not-done sub-task whose parent has a working orchestrator session: the orchestrator leads it,
  * so the board starts no session of its own for it.
  */

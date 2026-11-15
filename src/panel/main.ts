@@ -1,7 +1,7 @@
 // Entry for both the rail panel (panel/index.html) and the full-screen page (panel/page.html).
 // The layout follows ctx.surface through the data-oc-surface attribute applyHostReady sets.
 // Data: projects and sessions from the host, tasks from our service via host.serviceRequest.
-// Writes (drag and drop, detail, Add task) live in edit.ts; a drop on In Progress goes to starter.ts:
+// Writes (drag and drop, the task modal, Add task) live in edit.ts; a drop on In Progress goes to starter.ts:
 // it starts an agent session (or queues it over the limit) and the card then follows that session. Settings (global, per project, presets, per card) come from the
 // extension's storage through settings.ts and are edited in the Settings sheet. Personal summaries
 // (summaries.ts) are read or generated for the shown cards after each load.
@@ -10,13 +10,15 @@ import type { GuestProject, GuestSessionRecord, HostReadyContext } from '@opench
 import { applyHostReady } from '@openchamber/sdk/ui';
 import type { Task } from '../core/types.ts';
 import { ApiError, createApi, type Api, type ConfigResult, type ProjectConfig } from './api.ts';
-import { groupTasks, sessionForTask, type Column } from './columns.ts';
+import { groupTasks, resolveSession, sessionForTask, sessionTarget, type Column } from './columns.ts';
 import { createEditor, type Editor } from './edit.ts';
 import { listPresets, parseStoredPresets, type Preset, type StoredPresets } from './presets.ts';
 import {
   createLatestSaver,
   createSettingsStore,
+  DEFAULT_SECTIONS,
   resolveSettings,
+  type Sections,
   type Settings,
   type SettingsLayer,
   STORAGE_KEYS,
@@ -523,16 +525,33 @@ const detach = async (task: Task, from: Column): Promise<void> => {
   info('Moved; the agent session keeps running — open it from the session list');
 };
 
-/** A click on a card with a session opens the session; the detail stays on its Details button. */
-const openCard = (taskId: string): boolean => {
-  const s = sessionForTask(taskId, state.sessions, starter.links(), detached().get(taskId));
-  if (s === null) return false;
-  void host.openSession(s.id).catch((e: unknown) => fail(`Could not open the session: ${errorText(e)}`));
-  return true;
+/**
+ * A session known only from a link: looked up in every project's snapshot, so that
+ * host.openSession only ever gets an id the host lists, not archived (columns.ts SessionTarget).
+ */
+const checkSession = async (sessionId: string): Promise<'open' | 'archived' | 'missing'> => {
+  const lists = await Promise.allSettled(state.projects.map((p) => host.listSessions(p.id)));
+  return resolveSession(
+    sessionId,
+    lists.flatMap((r) => (r.status === 'fulfilled' ? [r.value.sessions] : [])),
+  );
+};
+
+/** Which task modal sections are open; read once at start, saved on every toggle. */
+let sections: Sections = { ...DEFAULT_SECTIONS };
+const saveSections = (next: Sections): void => {
+  sections = next;
+  saver.save(STORAGE_KEYS.detailSections, () => store.saveSections(next));
 };
 
 const start = (ctx: HostReadyContext): void => {
   injectStyles();
+  void store
+    .loadSections()
+    .then((s) => {
+      sections = s;
+    })
+    .catch(() => {});
   const root = document.getElementById('root') ?? document.body;
   state.hostDirectory = ctx.directory;
   board = createBoard(root, {
@@ -550,7 +569,6 @@ const start = (ctx: HostReadyContext): void => {
     onRefresh: () => void load(),
     onAdd: () => editor.showAdd(),
     onSettings: showSettings,
-    onDetails: (id) => editor.showDetail(id),
   });
   editor = createEditor({
     host,
@@ -569,7 +587,12 @@ const start = (ctx: HostReadyContext): void => {
     loadModels,
     beforeMove: (task) => starter.leaveQueue(task.id),
     afterSetState: detach,
-    openCard,
+    session: {
+      target: (task) => sessionTarget(task.id, state.sessions, starter.links(), detached().get(task.id)),
+      check: checkSession,
+      open: (id) => void host.openSession(id).catch((e: unknown) => fail(`Could not open the session: ${errorText(e)}`)),
+    },
+    sections: { get: () => sections, save: saveSections },
     baseTypes: () => settings().types,
     start: {
       context: startContext,

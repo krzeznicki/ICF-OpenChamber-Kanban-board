@@ -182,7 +182,23 @@ export const STORAGE_KEYS = {
   card: (projectId: string, taskId: string): string => fit(`card:${projectId}:${taskId}`),
   /** Per project: task id -> when the user dragged the card away from its session (columns.ts Detached). */
   detached: (projectId: string): string => fit(`detached:${projectId}`),
+  /** Which sections of the task modal are open (one entry for every task and project). */
+  detailSections: 'detail-sections',
 } as const;
+
+/** The task modal's collapsible sections: open (true) or collapsed. */
+export type Sections = { summary: boolean; task: boolean; subtasks: boolean; settings: boolean };
+
+/** Reading first: Summary, Task and Sub-tasks open, Settings collapsed. */
+export const DEFAULT_SECTIONS: Sections = Object.freeze({ summary: true, task: true, subtasks: true, settings: false });
+
+/** The stored section state, read defensively: unknown keys and non-booleans fall back to the defaults. */
+export const parseSections = (raw: unknown): Sections => {
+  const r = record(raw);
+  const out: Sections = { ...DEFAULT_SECTIONS };
+  if (r !== null) for (const k of Object.keys(out) as (keyof Sections)[]) if (typeof r[k] === 'boolean') out[k] = r[k] as boolean;
+  return out;
+};
 
 /** Detach marks kept per project; the oldest go first. */
 export const DETACHED_MAX = 200;
@@ -241,6 +257,12 @@ export const createSettingsStore = (storage: SettingsStorage) => {
     loadDetached: async (projectId: string): Promise<Map<string, number>> => parseDetached(await storage.get(STORAGE_KEYS.detached(projectId))),
     saveDetached: (projectId: string, marks: ReadonlyMap<string, number>): Promise<void> =>
       put(STORAGE_KEYS.detached(projectId), Object.fromEntries(marks), marks.size === 0),
+    loadSections: async (): Promise<Sections> => parseSections(await storage.get(STORAGE_KEYS.detailSections)),
+    saveSections: (sections: Sections): Promise<void> => {
+      const clean = parseSections(sections);
+      const pristine = (Object.keys(clean) as (keyof Sections)[]).every((k) => clean[k] === DEFAULT_SECTIONS[k]);
+      return put(STORAGE_KEYS.detailSections, clean, pristine);
+    },
   };
 };
 

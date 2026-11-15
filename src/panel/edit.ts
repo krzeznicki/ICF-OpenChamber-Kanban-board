@@ -1,17 +1,17 @@
-// The board's write side, kept out of main.ts: drag and drop, the detail sheet, the Add task form
+// The board's write side, kept out of main.ts: drag and drop, the task modal, the Add task form
 // and the in-panel confirms. Every write goes through `run`, which marks the card busy (further
 // drags of it are ignored), reports a failure in a toast and reloads the board afterwards.
 import type { HostClient } from '@openchamber/sdk';
 import type { NewTask, Task, TaskState } from '../core/types.ts';
 import type { Api } from './api.ts';
 import type { Preset } from './presets.ts';
-import { resolveStart, type CardOptions, type Settings } from './settings.ts';
-import { COLUMNS, type Column } from './columns.ts';
+import { resolveStart, type CardOptions, type Sections, type Settings } from './settings.ts';
+import { COLUMNS, type Column, type SessionTarget } from './columns.ts';
 import { openChildren, planMove, taskTypes, type Move } from './moves.ts';
 import { mountAddForm } from './ui/add.ts';
 import type { Board } from './ui/board.ts';
 import { askChoice } from './ui/confirm.ts';
-import { openDetail, type DetailHandle, type DetailModel, type SummaryModel } from './ui/detail.ts';
+import { openDetail, type DetailHandle, type DetailModel, type SessionView, type SummaryModel } from './ui/detail.ts';
 import { attachDrag } from './ui/dnd.ts';
 
 export type EditorDeps = {
@@ -36,18 +36,27 @@ export type EditorDeps = {
   beforeMove?: (task: Task) => Promise<boolean>;
   /** A move to Backlog or Ready was written, before the reload (e.g. detach the card from its session). */
   afterSetState?: (task: Task, from: Column) => Promise<void>;
-  /** A click or Enter on a card; true when it was handled (a card with a session opens it), else the detail opens. */
-  openCard: (taskId: string) => boolean;
+  /** The task modal's "Open session" (a click or Enter on a card always opens the modal). */
+  session: {
+    /** What the task's session allows (columns.ts sessionTarget). */
+    target: (task: Task) => SessionTarget;
+    /** A session known only from a link, looked up in every project's snapshot (columns.ts resolveSession). */
+    check: (sessionId: string) => Promise<'open' | 'archived' | 'missing'>;
+    /** Only ever called with an id that is `open` in a host snapshot. */
+    open: (sessionId: string) => void;
+  };
+  /** Which modal sections are open (device storage). */
+  sections: { get: () => Sections; save: (sections: Sections) => void };
   /** The base types offered in the type selects (settings' `types`). */
   baseTypes: () => string[];
-  /** The card start options in the detail sheet. */
+  /** The card start options in the task modal. */
   start: {
     /** Null while no project's settings are loaded. */
     context: () => { projectId: string; settings: Settings; presets: Preset[] } | null;
     load: (projectId: string, taskId: string) => Promise<CardOptions>;
     save: (projectId: string, taskId: string, card: CardOptions) => void;
   };
-  /** The personal summary in the detail sheet (summaries.ts). */
+  /** The personal summary in the task modal (summaries.ts). */
   summary: {
     model: (task: Task) => SummaryModel | null;
     summarise: (task: Task) => void;
@@ -62,12 +71,59 @@ export const createEditor = (deps: EditorDeps) => {
   const moving = new Set<string>();
   let detail: { id: string; handle: DetailHandle } | null = null;
   let addDispose: (() => void) | null = null;
-  /** The open sheet's stored start options; version bumps when they are (re)loaded. */
+  /** The open modal's stored start options; version bumps when they are (re)loaded. */
   let card: { taskId: string; projectId: string; options: CardOptions; version: number } | null = null;
+  /** The open modal's lookup of a session known only from a link (SessionTarget `check`). */
+  let lookup: { id: string; result: 'pending' | 'open' | 'archived' | 'missing' } | null = null;
 
   const find = (id: string): Task | null => deps.tasks().find((t) => t.id === id) ?? null;
   const info = (message: string): void => void deps.host.toast({ kind: 'info', message }).catch(() => {});
   const fail = (message: string): void => void deps.host.toast({ kind: 'error', message }).catch(() => {});
+
+  const runLookup = (id: string): void => {
+    const mine: NonNullable<typeof lookup> = { id, result: 'pending' };
+    lookup = mine;
+    deps.session
+      .check(id)
+      .catch(() => 'missing' as const)
+      .then((result) => {
+        if (lookup !== mine) return;
+        mine.result = result;
+        refreshDetail();
+      });
+  };
+
+  const sessionView = (task: Task): SessionView => {
+    const target = deps.session.target(task);
+    if (target.kind !== 'check') return target.kind;
+    if (lookup?.id !== target.id) runLookup(target.id);
+    const result = lookup?.result ?? 'pending';
+    return result === 'pending' ? 'checking' : result === 'missing' ? 'none' : result;
+  };
+
+  const openSession = (taskId: string): void => {
+    const task = find(taskId);
+    if (task === null) return;
+    const target = deps.session.target(task);
+    if (target.kind === 'open') {
+      deps.session.open(target.id);
+      return;
+    }
+    if (target.kind !== 'check') return;
+    // Looked up again on the click: it may have been archived since the modal opened.
+    const id = target.id;
+    void deps.session
+      .check(id)
+      .catch(() => 'missing' as const)
+      .then((result) => {
+        if (result === 'open') deps.session.open(id);
+        else info(result === 'archived' ? 'That session was archived.' : 'That session is no longer there.');
+        if (lookup?.id === id) {
+          lookup.result = result;
+          refreshDetail();
+        }
+      });
+  };
 
   const detailModel = (task: Task): DetailModel => {
     const tasks = deps.tasks();
@@ -94,6 +150,8 @@ export const createEditor = (deps: EditorDeps) => {
               version: mine?.version ?? -1,
             },
       summary: deps.summary.model(task),
+      session: sessionView(task),
+      children: tasks.filter((t) => t.parentId === task.id).map((t) => ({ id: t.id, title: t.title, state: t.state })),
     };
   };
 
@@ -116,7 +174,7 @@ export const createEditor = (deps: EditorDeps) => {
       .catch((e: unknown) => fail(`Could not read the card's start options: ${errorText(e)}`));
   };
 
-  /** After a reload: show the fresh task, or close the sheet when it left the list. */
+  /** After a reload: show the fresh task, or close the modal when it left the list. */
   const refreshDetail = (): void => {
     if (detail === null) return;
     const task = find(detail.id);
@@ -194,6 +252,7 @@ export const createEditor = (deps: EditorDeps) => {
     const d = detail;
     detail = null;
     card = null;
+    lookup = null;
     d?.handle.dispose();
   };
 
@@ -203,6 +262,9 @@ export const createEditor = (deps: EditorDeps) => {
     closeDetail();
     loadCard(id);
     const handle = openDetail(detailModel(task), {
+      onOpenSession: () => openSession(id),
+      onOpenTask: (child) => queueMicrotask(() => showDetail(child)),
+      onSections: deps.sections.save,
       loadModels: deps.loadModels,
       onStartOptions: (options) => {
         if (card === null || card.taskId !== id) return;
@@ -229,7 +291,7 @@ export const createEditor = (deps: EditorDeps) => {
       onType: (type) => void run(id, (api) => api.setType(id, type)),
       onOpenUrl: (url) => void deps.host.openUrl(url).catch((e: unknown) => fail(errorText(e))),
       onDismiss: closeDetail,
-    });
+    }, { sections: deps.sections.get() });
     detail = { id, handle };
   };
 
@@ -274,23 +336,21 @@ export const createEditor = (deps: EditorDeps) => {
   const detachDrag = attachDrag(deps.board.columns, {
     canDrag: (id) => !moving.has(id),
     onDrop: move,
-    onOpen: (id) => {
-      if (!deps.openCard(id)) showDetail(id);
-    },
+    onOpen: showDetail,
   });
 
   return {
     /** Ids whose write is in flight; the board draws them busy. */
     busy: moving as ReadonlySet<string>,
     showAdd,
-    /** The detail sheet of a task (a card's Details button). */
+    /** The task modal (also what a click or Enter on a card opens). */
     showDetail,
-    /** Project switch or the board went away: drop the sheet and the form. */
+    /** Project switch or the board went away: drop the modal and the form. */
     reset: () => {
       closeDetail();
       closeAdd();
     },
-    /** After a reload from elsewhere (poll, Refresh, settings): keep the open sheet current. */
+    /** After a reload from elsewhere (poll, Refresh, settings): keep the open modal current. */
     refresh: () => {
       // Settings for another project arrived (switch): the stored card options are someone else's.
       const ctx = deps.start.context();

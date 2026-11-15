@@ -17,7 +17,7 @@ Not taken yet: the extension has to be running in OpenChamber. To do, saved in [
 
 - [ ] `rail-icon.png`: the **Kanban Board** icon in the side rail
 - [ ] `board.png`: the board with cards in every column
-- [ ] `card-detail.png`: a card's detail sheet with its summary, Move to buttons and the × close button
+- [ ] `card-detail.png`: the task modal: summary, the task as formatted markdown, Settings collapsed, **Open session** at the top
 - [ ] `settings.png`: the Settings sheet
 - [ ] `wizard.png`: the setup wizard (Local or GitHub)
 
@@ -47,7 +47,7 @@ OpenChamber asks you to approve the permissions below. The board opens from the 
 
 | Permission | What Kanban Board uses it for |
 |---|---|
-| `sessions` | Reads the session list to place cards in In Progress and Review, and opens a card's session. |
+| `sessions` | Reads the session lists to place cards in In Progress and Review, and opens a task's session from its modal. |
 | `prompt` | Starts an agent session from a card (path A, see [Starting agents](#starting-agents)). |
 | `model` | Writes the card summaries with your model (`generate`). |
 | Service (`service/main.js`, runs on your machine) | Reads and writes the project's tracker files: `docs/agents/issue-tracker.md` and `.scratch/**`. Keeps its own files in `~/.icf-kanban/`: `links.json` (which session works on which card) and `queue.json` (the start queue). |
@@ -84,9 +84,23 @@ Types: `bug` and `enhancement` (a feature), plus your own (`chore` and `research
 - `ready-for-human` and `wontfix` show as badges on the card in Backlog.
 - A claimed ticket (`Status: claimed` locally, an assignee on GitHub) stays `ready-for-agent`.
 - To start a Done card, move it back to Backlog or Ready first.
-- To close a task, drag it to Done or use **Move to → Done** in its detail sheet (the × at the top right only closes the sheet, as does Escape).
+- To close a task, drag it to Done or use **Move to → Done** in its modal's Settings (the × at the top right only closes the modal, as does Escape).
 - A drop on Backlog or Ready changes one line of the task file (local) or swaps the state label (GitHub). The rest of the file is left as it is.
 - Dragging a card out of In Progress or Review to Backlog or Ready detaches it from its session: the card follows its state again, and the session keeps running (open it from the session list). Starting the card again later links it to the new session.
+
+## The task modal
+
+A click on any card (or Enter on a focused card) opens the task in a modal, in every column; a click never jumps to a session. Reading comes first:
+
+- **Header**: title, id, state and type badges and the × close. **Open session** opens the task's agent session (running, waiting or finished) when it has one that is not archived; **Session archived** says that its only session was archived.
+- **Summary**: the personal summary (see [Summaries](#summaries)), or a **Summarise** button.
+- **Task**: the full body as formatted markdown: headings, lists, task-list checkboxes (read-only), code, quotes, tables, links. Raw HTML in a body is shown as text; only `http` and `https` links are links, opened in your browser; images are not loaded but shown as links.
+- **Sub-tasks** (parents): the children with their states; a click opens that task.
+- **Settings**, collapsed by default: state and type, **Move to**, **Open on GitHub**, and the card's start options.
+
+Sections fold open and shut; which ones are open is remembered on this device for every task.
+
+The session behind **Open session** is checked before it opens. A session the board knows only from `~/.icf-kanban/links.json` (path B) is looked up in every project's session list first and opens only when it is there and not archived. (In 0.1 a click on a Review or Done card whose session had been archived opened an unrelated session of another project: the link's live status reads `idle` for an archived session too, and OpenChamber was asked to open an id it no longer listed.) Such a card can still sit in Review until it is moved: its link reads as a finished session.
 
 ## Parents and orchestration
 
@@ -127,7 +141,7 @@ Three layers, each overriding the one before, field by field:
 
 1. **Global** (Settings → Global): your defaults for every project.
 2. **This project** (Settings → This project): overrides for the open project; a field left at **Use global** inherits.
-3. **The card** (its detail sheet, Start options): preset, location, model, agent and summary language for that card.
+3. **The card** (its modal, Settings → Start options): preset, location, model, agent and summary language for that card.
 
 All of them are per user and stored in the extension's storage.
 
@@ -155,7 +169,7 @@ The queue lives in `~/.icf-kanban/queue.json`. While the board is open it drains
 
 ## Summaries
 
-Each card can show a few plain sentences at the top, written by your model through OpenChamber (`model` permission). They are personal: stored in the extension's storage per user, never in the repository, and agents never see them. A summary is regenerated when the task's body, the language or the prompt changes. With **Summarise automatically** off, use the **Summarise** button in the card's detail sheet. The language can be set per card.
+Each card can show a few plain sentences at the top, written by your model through OpenChamber (`model` permission). They are personal: stored in the extension's storage per user, never in the repository, and agents never see them. A summary is regenerated when the task's body, the language or the prompt changes. With **Summarise automatically** off, use the **Summarise** button in the task modal. The language can be set per card.
 
 ## Agent skills and the `task-board` CLI
 
@@ -223,6 +237,7 @@ Not done yet; each needs the extension installed in OpenChamber:
 7. Deleting a linked session still lets the queue drain.
 8. Summaries: generated automatically, regenerated after a body edit, the Summarise button, per-card language.
 9. Agent skills: an agent finds the CLI from the instructions and creates, claims and closes a task with the skills.
+10. The task modal: a Review card whose path B session was archived shows **Session archived** and opens nothing; **Open session** on a live path B session in a worktree opens that session.
 
 ## Development
 

@@ -1,17 +1,23 @@
-// The task detail: a side sheet over the board. The personal summary comes first (or a Summarise
-// button when there is none), the full body as plain text sits collapsed under "Full task"; then state and type
-// selects and "Move to" buttons (the keyboard path for drag and drop; Done asks about open sub-tasks).
-// Below them, the card's options (preset, model, agent, location, summary language), each unset field showing
-// what it inherits from the settings. It draws what it is given and reports choices; the editor (edit.ts) runs them and asks to confirm.
-import { mountBadge, mountButton, mountSelect, mountSpinner } from '@openchamber/sdk/ui';
+// The task modal, opened by a click on any card: reading first. A header (title, id, state and type
+// badges, ×, and "Open session" when the task has a session that may be opened, or "Session
+// archived"), then collapsible sections: Summary (the personal summary or a Summarise button), Task
+// (the body as formatted markdown, ui/markdownView.ts), Sub-tasks (a parent's children; a click
+// opens that task) and Settings, collapsed by default: state and type selects, "Move to" buttons
+// (the keyboard path for drag and drop; Done asks about open sub-tasks), Open on GitHub, and the
+// card's start options (preset, model, agent, location, summary language), each unset field showing
+// what it inherits. Which sections are open is remembered (settings.ts Sections). It draws what it
+// is given and reports choices; the editor (edit.ts) runs them and asks to confirm.
+import { mountBadge, mountButton, mountList, mountSelect, mountSpinner } from '@openchamber/sdk/ui';
+import type { Tone } from '@openchamber/sdk/ui';
 import type { Task, TaskState } from '../../core/types.ts';
 import type { Column } from '../columns.ts';
 import type { Preset } from '../presets.ts';
-import type { CardOptions, Location, StartOptions } from '../settings.ts';
+import type { CardOptions, Location, Sections, StartOptions } from '../settings.ts';
 import type { SummaryStatus } from '../summaries.ts';
 import { mountCloseButton } from './closeButton.ts';
 import { defaultModelLabel } from '../models.ts';
 import { mountModelPicker } from './modelPicker.ts';
+import { renderMarkdown } from './markdownView.ts';
 import { LOCATION_LABELS, mountInheritSelect, mountInheritText } from './settingsView.ts';
 
 export const STATES: readonly TaskState[] = ['needs-triage', 'needs-info', 'ready-for-agent', 'ready-for-human', 'wontfix', 'done'];
@@ -30,7 +36,17 @@ export type DetailModel = {
   start: StartModel | null;
   /** The personal summary; null hides it (no project settings yet). */
   summary: SummaryModel | null;
+  /** What the header offers for the task's session (columns.ts sessionTarget, after any lookup). */
+  session: SessionView;
+  /** A parent's listed sub-tasks, in board order; empty hides the section. */
+  children: { id: string; title: string; state: TaskState }[];
 };
+
+/**
+ * `open`: an "Open session" button; `archived`: muted "Session archived"; `checking`: the session
+ * is being looked up; `none`: nothing.
+ */
+export type SessionView = 'open' | 'archived' | 'checking' | 'none';
 
 export type SummaryModel = {
   /** The summary of the task's current body, or null. */
@@ -62,8 +78,19 @@ export type DetailCallbacks = {
   onState: (state: TaskState) => void;
   onType: (type: string) => void;
   onOpenUrl: (url: string) => void;
+  /** The header's "Open session". */
+  onOpenSession: () => void;
+  /** A sub-task row. */
+  onOpenTask: (taskId: string) => void;
+  /** The user opened or collapsed a section. */
+  onSections: (sections: Sections) => void;
   onDismiss: () => void;
 };
+
+export type DetailOptions = { sections: Sections };
+
+const stateTone = (state: TaskState): Tone =>
+  state === 'done' ? 'success' : state === 'ready-for-agent' ? 'primary' : state === 'wontfix' ? 'neutral' : state === 'ready-for-human' ? 'info' : 'warning';
 
 export type DetailHandle = { update: (model: DetailModel) => void; dispose: () => void };
 
@@ -74,27 +101,50 @@ const el = <K extends keyof HTMLElementTagNameMap>(tag: K, className: string, te
   return node;
 };
 
-export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks): DetailHandle => {
-  const backdrop = el('div', 'kb-backdrop');
-  const sheet = el('aside', 'kb-sheet');
-  sheet.setAttribute('role', 'dialog');
-  sheet.setAttribute('aria-modal', 'true');
-  sheet.tabIndex = -1;
-  // Three parts: the top and the body redraw on every update; the start options only when what
-  // they show changes from outside, so a text field there keeps its focus across a reload.
-  const top = el('div', 'kb-sheet-part');
+export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, options: DetailOptions): DetailHandle => {
+  const backdrop = el('div', 'kb-backdrop kb-modal-backdrop');
+  const modal = el('div', 'kb-modal');
+  modal.setAttribute('role', 'dialog');
+  modal.setAttribute('aria-modal', 'true');
+  modal.tabIndex = -1;
+  const head = el('header', 'kb-modal-head');
+
+  // The sections stay in place across updates (their open state, a focused start option field and
+  // the reading position survive a reload); their contents redraw.
+  const open: Sections = { ...options.sections };
+  const section = (key: keyof Sections, title: string) => {
+    const box = el('details', 'kb-section');
+    box.open = open[key];
+    const label = el('summary', 'kb-section-head', title);
+    const content = el('div', 'kb-section-body');
+    box.append(label, content);
+    box.addEventListener('toggle', () => {
+      // Our own setting of `open` fires a toggle too; only a change from what we hold is the user's.
+      if (box.open === open[key]) return;
+      open[key] = box.open;
+      callbacks.onSections({ ...open });
+    });
+    return { box, label, content };
+  };
+  const summarySec = section('summary', 'Summary');
+  const taskSec = section('task', 'Task');
+  const subSec = section('subtasks', 'Sub-tasks');
+  const settingsSec = section('settings', 'Settings');
+  const settingsTop = el('div', 'kb-sheet-part');
   const startBox = el('section', 'kb-sheet-part kb-start');
-  const bodyBox = el('div', 'kb-sheet-part');
-  sheet.append(top, startBox, bodyBox);
-  backdrop.append(sheet);
+  settingsSec.content.append(settingsTop, startBox);
+  modal.append(head, summarySec.box, taskSec.box, subSec.box, settingsSec.box);
+  backdrop.append(modal);
   document.body.append(backdrop);
 
   let disposers: Array<() => void> = [];
   const clear = (): void => {
     for (const d of disposers) d();
     disposers = [];
-    top.replaceChildren();
-    bodyBox.replaceChildren();
+    head.replaceChildren();
+    summarySec.content.replaceChildren();
+    subSec.content.replaceChildren();
+    settingsTop.replaceChildren();
   };
   let startDisposers: Array<() => void> = [];
   let startKey: string | null = null;
@@ -182,14 +232,47 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks): De
     });
   };
 
-  /** "Full task" stays as the user left it across redraws; until then it is open only without a summary. */
-  let fullOpen: boolean | null = null;
+  const drawHead = (m: DetailModel): void => {
+    const { task } = m;
+    const top = el('div', 'kb-sheet-head');
+    const titles = el('div', 'kb-sheet-titles');
+    titles.append(el('h2', 'kb-sheet-title', task.title), el('div', 'kb-card-id', task.id));
+    const closeSlot = el('div', 'kb-sheet-x');
+    top.append(titles, closeSlot);
+    disposers.push(mountCloseButton(closeSlot, callbacks.onDismiss));
+    head.append(top);
+
+    const row = el('div', 'kb-modal-bar');
+    const badges = el('div', 'kb-badges');
+    const label = m.labels[task.state];
+    disposers.push(mountBadge(badges, { label: label !== undefined && label !== task.state ? label : task.state, tone: stateTone(task.state) }).dispose);
+    if (task.type !== null) disposers.push(mountBadge(badges, { label: task.type, tone: 'neutral' }).dispose);
+    if (task.kind === 'parent') disposers.push(mountBadge(badges, { label: 'parent', tone: 'primary' }).dispose);
+    if (m.busy) {
+      const spin = el('span', 'kb-inline-spin');
+      badges.append(spin);
+      disposers.push(mountSpinner(spin, { size: 'sm', label: 'Saving' }).dispose);
+    }
+    row.append(badges);
+    const session = el('div', 'kb-modal-session');
+    if (m.session === 'open') {
+      disposers.push(mountButton(session, { label: 'Open session', variant: 'default', size: 'sm', onClick: callbacks.onOpenSession }).dispose);
+    } else if (m.session === 'archived') {
+      session.append(el('span', 'kb-muted', 'Session archived'));
+    } else if (m.session === 'checking') {
+      const spin = el('span', 'kb-inline-spin');
+      session.append(spin);
+      disposers.push(mountSpinner(spin, { size: 'sm', label: 'Looking up the session' }).dispose);
+    }
+    row.append(session);
+    head.append(row);
+  };
 
   const drawSummary = (m: DetailModel): void => {
     const sum = m.summary;
+    summarySec.box.hidden = sum === null;
     if (sum === null) return;
-    const box = el('section', 'kb-summary');
-    box.setAttribute('aria-label', 'Summary');
+    const box = summarySec.content;
     if (sum.text !== null) {
       box.append(el('p', 'kb-summary-text', sum.text));
     } else if (sum.status === 'pending') {
@@ -212,33 +295,17 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks): De
       disposers.push(mountButton(slot, { label: 'Summarise', variant: 'outline', size: 'xs', onClick: callbacks.onSummarise }).dispose);
       box.append(slot);
     }
-    top.append(box);
   };
 
-  const draw = (m: DetailModel): void => {
-    clear();
+  /** The Task section redraws only when what it shows changes, so a reload keeps a text selection. */
+  let taskKey: string | null = null;
+  const drawTask = (m: DetailModel): void => {
     const { task } = m;
-    sheet.setAttribute('aria-label', task.title);
-    sheet.setAttribute('aria-busy', String(m.busy));
-
-    const head = el('div', 'kb-sheet-head');
-    const titles = el('div', 'kb-sheet-titles');
-    titles.append(el('h2', 'kb-sheet-title', task.title), el('div', 'kb-card-id', task.id));
-    const closeSlot = el('div', 'kb-sheet-x');
-    head.append(titles, closeSlot);
-    disposers.push(mountCloseButton(closeSlot, callbacks.onDismiss));
-    top.append(head);
-
-    const badges = el('div', 'kb-badges');
-    if (task.kind === 'parent') disposers.push(mountBadge(badges, { label: 'parent', tone: 'primary' }).dispose);
-    if (m.busy) {
-      const spin = el('span', 'kb-inline-spin');
-      badges.append(spin);
-      disposers.push(mountSpinner(spin, { size: 'sm', label: 'Saving' }).dispose);
-    }
-    top.append(badges);
-    drawSummary(m);
-
+    const key = JSON.stringify([task.id, task.body, task.parentId, task.blockedBy, m.openChildren]);
+    if (key === taskKey) return;
+    taskKey = key;
+    const box = taskSec.content;
+    box.replaceChildren();
     const meta = el('dl', 'kb-meta');
     const row = (term: string, value: string): void => {
       meta.append(el('dt', '', term), el('dd', '', value));
@@ -246,13 +313,32 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks): De
     if (task.parentId !== null) row('Parent', task.parentId);
     if (task.blockedBy.length > 0) row('Blocked by', task.blockedBy.join(', '));
     if (m.openChildren > 0) row('Open sub-tasks', String(m.openChildren));
-    if (meta.childElementCount > 0) top.append(meta);
+    if (meta.childElementCount > 0) box.append(meta);
+    if (task.body.trim() === '') box.append(el('p', 'kb-muted', 'No description.'));
+    else box.append(renderMarkdown(task.body, callbacks.onOpenUrl));
+  };
 
+  const drawChildren = (m: DetailModel): void => {
+    subSec.box.hidden = m.children.length === 0;
+    if (m.children.length === 0) return;
+    const done = m.children.filter((c) => c.state === 'done').length;
+    subSec.label.textContent = `Sub-tasks (${done}/${m.children.length} done)`;
+    disposers.push(
+      mountList(subSec.content, {
+        items: m.children.map((c) => ({ id: c.id, title: c.title, subtitle: c.id, badge: { label: c.state, tone: stateTone(c.state) } })),
+        onSelect: callbacks.onOpenTask,
+        ariaLabel: 'Sub-tasks',
+      }).dispose,
+    );
+  };
+
+  const drawSettings = (m: DetailModel): void => {
+    const { task } = m;
     const fields = el('div', 'kb-fields');
     const stateSlot = el('div', 'kb-field');
     const typeSlot = el('div', 'kb-field');
     fields.append(stateSlot, typeSlot);
-    top.append(fields);
+    settingsTop.append(fields);
     disposers.push(
       mountSelect(stateSlot, {
         label: 'State',
@@ -289,7 +375,7 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks): De
           mountButton(moveRow, { label, variant: 'outline', size: 'xs', disabled: m.busy, onClick: () => callbacks.onMove(to) }).dispose,
         );
       }
-      top.append(moveRow);
+      settingsTop.append(moveRow);
     }
 
     const url = task.url;
@@ -298,24 +384,20 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks): De
       disposers.push(
         mountButton(actions, { label: 'Open on GitHub', variant: 'ghost', size: 'sm', onClick: () => callbacks.onOpenUrl(url) }).dispose,
       );
-      top.append(actions);
+      settingsTop.append(actions);
     }
     drawStart(task.id, m.start);
+  };
 
-    // Plain text: textContent never interprets the markdown or any HTML in it.
-    const body = el('pre', 'kb-detail-body', task.body.trim() === '' ? 'No description.' : task.body);
-    if (task.body.trim() === '') body.classList.add('is-empty');
-    const full = el('details', 'kb-full-task');
-    full.append(el('summary', '', 'Full task'), body);
-    let shown = fullOpen ?? (m.summary === null || m.summary.text === null);
-    full.open = shown;
-    full.addEventListener('toggle', () => {
-      // Our own setting of `open` fires a toggle too; only a change from what we set is the user's.
-      if (full.open === shown) return;
-      shown = full.open;
-      fullOpen = shown;
-    });
-    bodyBox.append(full);
+  const draw = (m: DetailModel): void => {
+    clear();
+    modal.setAttribute('aria-label', m.task.title);
+    modal.setAttribute('aria-busy', String(m.busy));
+    drawHead(m);
+    drawSummary(m);
+    drawTask(m);
+    drawChildren(m);
+    drawSettings(m);
   };
 
   const onKey = (e: KeyboardEvent): void => {
@@ -330,7 +412,7 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks): De
 
   const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   draw(initial);
-  sheet.focus();
+  modal.focus();
 
   return {
     update: draw,

@@ -1,9 +1,8 @@
 // One task card: title, id, badges (session, led by orchestrator, type, ready-for-human, wontfix, blocked) and, for a parent,
-// its done/total sub-tasks with a progress bar. Focusable: Enter opens it (its agent session when it
-// has one, else the detail), and a press starts a drag (ui/dnd.ts). A card with a session also has a
-// Details button for the detail sheet. A card whose move is in flight is drawn busy. Under the title,
+// its done/total sub-tasks with a progress bar. Focusable: a click or Enter opens the task modal
+// (ui/detail.ts), and a press starts a drag (ui/dnd.ts). A card whose move is in flight is drawn busy. Under the title,
 // the task's personal summary (summaries.ts) when there is one for its current body, cut to three lines.
-import { mountBadge, mountButton, mountProgress } from '@openchamber/sdk/ui';
+import { mountBadge, mountProgress } from '@openchamber/sdk/ui';
 import type { Tone } from '@openchamber/sdk/ui';
 import type { CardModel, SessionInfo } from '../columns.ts';
 
@@ -32,7 +31,6 @@ export type CardHandle = { node: HTMLElement; dispose: () => void };
 export const renderCard = (
   model: CardModel,
   busy = false,
-  onDetails?: (taskId: string) => void,
   summary: string | null = null,
 ): CardHandle => {
   const { task } = model;
@@ -103,16 +101,6 @@ export const renderCard = (
       mountProgress(wrap, { value: Math.round((done / total) * 100), tone: done === total ? 'success' : 'primary' }).dispose,
     );
     node.append(wrap);
-  }
-
-  if (model.session !== null) {
-    node.title = 'Open the agent session';
-    const actions = document.createElement('div');
-    actions.className = 'kb-card-actions';
-    disposers.push(
-      mountButton(actions, { label: 'Details', variant: 'ghost', size: 'xs', onClick: () => onDetails?.(task.id) }).dispose,
-    );
-    node.append(actions);
   }
 
   return {

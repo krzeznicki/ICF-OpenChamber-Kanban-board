@@ -7,6 +7,9 @@
 - The model is picked from a searchable list of the available models (`opencode models`, through the service's new `/models/list`, cached 10 minutes) in the card's start options, the start form and Settings, instead of typed. The first entry, "Default (…)", keeps the inherited model; a stored model that is no longer listed still shows as "not in the list".
 - **Permissions change:** the service may now also run `opencode` (`service.permissions.exec`: `git`, `gh`, `opencode`), which the approval dialog lists (Settings → Extensions). It only lists the models.
 - The detail sheet's Close / Close with sub-tasks buttons are gone: close a task by dragging it to Done or with Move to → Done, which still asks about open sub-tasks.
+- A click on any card opens the task as a large modal (it fills the rail panel): header with **Open session** or "Session archived", then collapsible Summary, Task (the body as formatted markdown via `markdown-it`, raw HTML shown as text, only http(s) links, images not loaded, read-only task-list checkboxes), Sub-tasks and Settings (collapsed by default: state, type, Move to, Open on GitHub, start options). Open sections are remembered on the device. The cards' Details button is gone.
+- Fixed: a click on a Review or Done card whose session had been archived opened an unrelated session of another project. A click no longer opens a session; **Open session** opens only a session listed by OpenChamber and not archived (a session known only from `links.json` is looked up in every project first).
+- The panel bundle now includes `markdown-it` and its dependencies (see THIRD_PARTY_LICENSES).
 
 ## 0.1.0 (unreleased)
 
