@@ -253,3 +253,24 @@ test('claim is only allowed for a ready-for-agent issue; others are INVALID with
   }
   assert.deepEqual(gh.commands(), []);
 });
+
+test('setParent sets the native parent with gh issue edit --parent; the number stays, an old parent is replaced', async () => {
+  const { tracker, gh } = setup();
+  const linked = await tracker.setParent('#4', '#5');
+  assert.equal(linked.id, '#4');
+  assert.equal(linked.parentId, '#5');
+  assert.equal((await tracker.get('#5')).kind, 'parent');
+  const moved = await tracker.setParent('#3', '#4');
+  assert.equal(moved.id, '#3');
+  assert.equal(moved.parentId, '#4');
+  assert.deepEqual(gh.commands(), ['gh issue edit 4 --parent 5', 'gh issue edit 3 --parent 4']);
+});
+
+test('setParent refuses itself and its current parent; a missing issue is NOT_FOUND', async () => {
+  const { tracker, gh } = setup();
+  await rejectsWith(tracker.setParent('#2', '#2'), 'INVALID');
+  await rejectsWith(tracker.setParent('#2', '#1'), 'INVALID', /already/);
+  await rejectsWith(tracker.setParent('#2', '#99'), 'NOT_FOUND');
+  await rejectsWith(tracker.setParent('#99', '#1'), 'NOT_FOUND');
+  assert.deepEqual(gh.commands(), []);
+});

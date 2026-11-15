@@ -52,6 +52,13 @@ export interface Tracker {
   setType(id: string, type: string): Promise<Task>;
   /** Marks a sub-task as taken by the orchestrator (local: `Status: claimed`; GitHub: assign @me). */
   claim(id: string): Promise<Task>;
+  /**
+   * Makes an existing task a sub-task of another existing task (re-parenting it if it has one).
+   * The returned task can have a new id (local: the file moves into the parent's feature), so
+   * callers re-key whatever they keep under `id`. Itself, its current parent or a target that
+   * cannot be a parent is INVALID.
+   */
+  setParent(id: string, parentId: string): Promise<Task>;
   /** returns every task it closed */
   close(id: string, opts: { withChildren: boolean }): Promise<Task[]>;
 }

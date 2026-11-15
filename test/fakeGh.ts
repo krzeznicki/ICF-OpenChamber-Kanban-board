@@ -148,6 +148,11 @@ export const fakeGh = (seed: FakeIssue[], options: FakeGhOptions = {}) => {
       }
       const unassign = new Set(flagValues(args, '--remove-assignee').map((a) => (a === '@me' ? 'me' : a)));
       issue!.assignees = issue!.assignees.filter((l) => !unassign.has(l));
+      const parent = flag(args, '--parent');
+      if (parent !== undefined) {
+        if (find(parent) === undefined) return fail(`resolving --parent reference "${parent}": could not find issue\n`);
+        issue!.parent = Number(parent);
+      }
       touch(issue!);
       return ok(`${URL}${issue!.number}\n`);
     }

@@ -259,3 +259,73 @@ test('claim is only allowed for a ready-for-agent ticket', async (t) => {
     assert.equal((await tracker.get(T2)).claimed, false);
   }
 });
+
+/** Feature "other" with two tickets: 02 is blocked by 01. */
+const other = async (root: string): Promise<{ spec: string; a: string; b: string }> => {
+  const tracker = createLocalTracker(root);
+  const spec = (await tracker.create({ title: 'Other' })).id;
+  const a = (await tracker.create({ title: 'Alpha', parentId: spec })).id;
+  const b = (await tracker.create({ title: 'Beta', parentId: spec, blockedBy: [a] })).id;
+  return { spec, a, b };
+};
+
+test('setParent moves a ticket into another feature with its next number, renumbered and without blockers', async (t) => {
+  const root = await repo(t);
+  const o = await other(root);
+  const tracker = createLocalTracker(root);
+  const moved = await tracker.setParent(T2, o.spec);
+  assert.equal(moved.id, '.scratch/other/issues/03-second.md');
+  assert.equal(moved.parentId, o.spec);
+  assert.equal(moved.title, 'Second');
+  assert.equal(moved.state, 'needs-info');
+  assert.equal(moved.type, 'bug');
+  assert.deepEqual(moved.blockedBy, []); // 01 and 07 pointed at example-feature's tickets
+  assert.equal(
+    await readFile(join(root, moved.id), 'utf8'),
+    '# 03: Second\n\nDo it.\n\n**Blocked by:** None (can start immediately)\n\n**Type:** bug\n\n**Status:** needs-info\n',
+  );
+  assert.equal(existsSync(join(root, T2)), false);
+  assert.deepEqual((await tracker.list()).map((x) => x.id), [SPEC, T1, o.spec, o.a, o.b, moved.id]);
+});
+
+test('setParent: tickets left behind that were blocked by the moved one lose that blocker', async (t) => {
+  const root = await repo(t);
+  const o = await other(root);
+  const tracker = createLocalTracker(root);
+  await tracker.setParent(o.a, SPEC);
+  const b = await tracker.get(o.b);
+  assert.deepEqual(b.blockedBy, []);
+  assert.match(b.body, /\*\*Blocked by:\*\* None \(can start immediately\)/);
+  // A new ticket of "other" that reuses number 01 is not a silent blocker of 02.
+  await createLocalTracker(root).create({ title: 'New one', parentId: o.spec });
+  assert.deepEqual((await tracker.get(o.b)).blockedBy, []);
+});
+
+test('setParent makes a feature without tickets a ticket of another feature and removes its folder', async (t) => {
+  const root = await repo(t);
+  const tracker = createLocalTracker(root);
+  const lone = await tracker.create({ title: 'Lone idea', body: 'Some text.', type: 'enhancement', state: 'ready-for-human' });
+  const moved = await tracker.setParent(lone.id, SPEC);
+  assert.equal(moved.id, '.scratch/example-feature/issues/03-lone-idea.md');
+  assert.equal(moved.kind, 'ticket');
+  assert.equal(moved.parentId, SPEC);
+  assert.equal(moved.title, 'Lone idea');
+  assert.equal(moved.type, 'enhancement');
+  assert.equal(moved.state, 'ready-for-human');
+  assert.match(moved.body, /^# 03: Lone idea\n/);
+  assert.match(moved.body, /Some text\./);
+  assert.equal(existsSync(join(root, '.scratch/lone-idea')), false);
+});
+
+test('setParent refuses a feature with tickets, a ticket or missing parent, itself and its current parent', async (t) => {
+  const root = await repo(t);
+  const o = await other(root);
+  const tracker = createLocalTracker(root);
+  await rejectsWith(tracker.setParent(o.spec, SPEC), 'INVALID'); // two levels only
+  await rejectsWith(tracker.setParent(T2, o.a), 'INVALID'); // a parent must be a spec.md
+  await rejectsWith(tracker.setParent(SPEC, SPEC), 'INVALID');
+  await rejectsWith(tracker.setParent(T2, SPEC), 'INVALID'); // already its parent
+  await rejectsWith(tracker.setParent(T2, '.scratch/missing/spec.md'), 'NOT_FOUND');
+  await rejectsWith(tracker.setParent('.scratch/example-feature/issues/09-x.md', o.spec), 'NOT_FOUND');
+  assert.deepEqual((await tracker.list()).map((x) => x.id), [SPEC, T1, T2, o.spec, o.a, o.b]);
+});
