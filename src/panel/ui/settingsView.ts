@@ -1,40 +1,45 @@
 // Settings: a side sheet over the board (like the task detail) with three tabs. "Global" and
 // "This project" draw the same form over one stored layer each; a field left unset inherits (the
 // built-in default for Global, the global value for a project) and shows what it inherits as its
-// placeholder or as the "Use …" option. "Presets" edits the preset texts. Every change is reported
-// at once with the whole new layer; the caller saves it. The sheet redraws a tab only when the tab
-// is switched or a preset is added or deleted, so a text field keeps its focus while typing.
+// placeholder or as the "Use …" option; both pick the preset set. "Presets" edits the sets: their
+// preset texts, the user's own presets and sets. Every change is reported at once with the whole new
+// layer or stored sets; the caller saves it. The sheet redraws a tab only when the tab is switched, a
+// set is chosen, or a preset or set is added or deleted, so a text field keeps its focus while typing.
 import { mountButton, mountEmpty, mountSelect, mountTabs, mountTextField } from '@openchamber/sdk/ui';
 import type { SelectOption } from '@openchamber/sdk/ui';
 import {
   addPreset,
+  addSet,
+  defaultSetId,
   deletePreset,
+  deleteSet,
   isEdited,
   listPresets,
+  listSets,
   presetSkillsNote,
   renamePreset,
+  renameSet,
   resetPreset,
+  setOptionLabel,
   setPresetText,
-  skillsFoundLine,
+  setStatusLine,
   type Preset,
-  type SkillUse,
-  type StoredPresets,
+  type StoredSets,
 } from '../presets.ts';
 import {
-  DEFAULT_SETTINGS,
   MAX_PARALLEL_MAX,
   MAX_PARALLEL_MIN,
   parseSettings,
+  presetSetOf,
   resolveSettings,
-  skillUse,
   type Location,
   type Settings,
   type SettingsLayer,
 } from '../settings.ts';
-import { defaultModelLabel } from '../models.ts';
+import { START_PATH_NOTE, type StartLists } from '../models.ts';
 import { mountCloseButton } from './closeButton.ts';
-import { mountModelPicker } from './modelPicker.ts';
 import { askChoice } from './confirm.ts';
+import { mountStartTarget } from './startTarget.ts';
 
 export type SettingsTab = 'global' | 'project' | 'presets';
 
@@ -43,18 +48,20 @@ export type SettingsModel = {
   global: SettingsLayer;
   /** Null when no project is open. */
   project: { name: string; layer: SettingsLayer } | null;
-  presets: StoredPresets;
-  /** Matt Pocock's skills found for the open project; null when no project is open or the check failed. */
+  presets: StoredSets;
+  /** The known skills found for the open project; null when no project is open or the check failed. */
   skills: string[] | null;
+  /** The set the Presets tab shows; null: the open project's (else the global) set. */
+  editSet?: string | null;
 };
 
 export type SettingsCallbacks = {
   onGlobal: (layer: SettingsLayer) => void;
   onProject: (layer: SettingsLayer) => void;
-  onPresets: (stored: StoredPresets) => void;
+  onPresets: (stored: StoredSets) => void;
   onDismiss: () => void;
-  /** The model picker's list (loaded once per panel session). */
-  loadModels: () => Promise<string[]>;
+  /** The model and agent lists of the start pickers (loaded once per project). */
+  lists: StartLists;
 };
 
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, className: string, text?: string): HTMLElementTagNameMap[K] => {
@@ -132,7 +139,9 @@ export const mountInheritText = (
 };
 
 const onOff = (b: boolean): string => (b ? 'On' : 'Off');
-const presetName = (presets: readonly Preset[], id: string): string => presets.find((p) => p.id === id)?.name ?? id;
+/** A preset's name in the layer's set; one the set lacks starts as Implement (resolveStart), and says so. */
+const presetName = (presets: readonly Preset[], id: string): string =>
+  presets.find((p) => p.id === id)?.name ?? `${presets.find((p) => p.id === 'implement')?.name ?? 'Implement'} (the set has no ${id})`;
 const presetOptions = (presets: readonly Preset[]): SelectOption[] => presets.map((p) => ({ id: p.id, label: p.name }));
 
 /** One stored layer as a form; `base` is what the layer inherits from. */
@@ -144,10 +153,13 @@ const drawLayerForm = (
     base: Settings;
     /** "Default" for the global layer, "Use global" for a project. */
     inheritWord: string;
+    /** The presets of the set this layer ends up with. */
     presets: readonly Preset[];
-    loadModels: () => Promise<string[]>;
-    /** Global only: the "Use Matt Pocock's skills" toggle, with this line saying what was found. */
-    skillsLine?: string;
+    lists: StartLists;
+    /** The preset set picker: the sets, the label of its inherit option, and the line under it. */
+    sets: { options: SelectOption[]; inheritLabel: string; line: string };
+    /** The global layer: also shows the global-only "Suggest type and state for new tasks". */
+    global?: boolean;
     onChange: (layer: SettingsLayer) => void;
   },
 ): void => {
@@ -190,6 +202,19 @@ const drawLayerForm = (
   const defaults = (): Partial<Settings['defaults']> => (layer.defaults ??= {});
   const summary = (): Partial<Settings['summary']> => (layer.summary ??= {});
 
+  const setSection = section('Preset set', 'The presets cards start with: built-in sets run Matt Pocock\'s skills, the Superpowers skills, or plain instructions; edit them or add your own in Presets.');
+  mountInheritSelect(cell(row(setSection)), disposers, {
+    label: 'Preset set',
+    value: layer.presetSet,
+    inheritLabel: opts.sets.inheritLabel,
+    options: opts.sets.options,
+    onChange: (v) => {
+      layer.presetSet = v;
+      emit();
+    },
+  });
+  setSection.append(el('p', 'kb-settings-hint', opts.sets.line));
+
   const start = section('Starting agents', 'Moving a card to In Progress starts a session with these options unless the card sets its own.');
   const r1 = row(start);
   bool(r1, 'Start at once', () => layer.autoStart, (v) => (layer.autoStart = v), base.autoStart);
@@ -228,39 +253,27 @@ const drawLayerForm = (
     },
   });
   const r3 = row(start);
+  const modelCell = cell(r3);
+  const thinkingCell = cell(r3);
+  const agentCell = cell(row(start));
   disposers.push(
-    mountModelPicker(cell(r3), {
-      label: 'Model',
-      value: layer.defaults?.model ?? null,
-      defaultLabel: defaultModelLabel(base.defaults.model, inheritWord),
-      loadModels: opts.loadModels,
-      onChange: (v) => {
-        defaults().model = v;
-        emit();
+    mountStartTarget(
+      { model: modelCell, thinking: thinkingCell, agent: agentCell },
+      {
+        value: { model: layer.defaults?.model ?? null, variant: layer.defaults?.variant ?? null, agent: layer.defaults?.agent ?? null },
+        inherited: { model: base.defaults.model, variant: base.defaults.variant, agent: base.defaults.agent },
+        inheritWord,
+        lists: opts.lists,
+        onChange: (v) => {
+          defaults().model = v.model;
+          defaults().variant = v.variant;
+          defaults().agent = v.agent;
+          emit();
+        },
       },
-    }),
+    ),
   );
-  mountInheritText(cell(r3), disposers, {
-    label: 'Agent',
-    value: layer.defaults?.agent ?? undefined,
-    placeholder: base.defaults.agent ?? 'Your current agent',
-    resetLabel: inheritWord,
-    helper: 'e.g. build or plan',
-    mono: true,
-    onChange: (v) => {
-      defaults().agent = v ?? null;
-      emit();
-    },
-  });
-
-  if (opts.skillsLine !== undefined) {
-    const skills = section(
-      "Matt Pocock's skills",
-      'When on, a built-in preset whose skills are all installed tells the agent to run them (Settings → Presets shows which), and a bug starts with Diagnose.',
-    );
-    bool(row(skills), "Use Matt Pocock's skills when installed", () => layer.useMattSkills, (v) => (layer.useMattSkills = v), base.useMattSkills);
-    skills.append(el('p', 'kb-settings-hint', opts.skillsLine));
-  }
+  start.append(el('p', 'kb-settings-hint', START_PATH_NOTE));
 
   const types = layer.types ?? base.types;
   const byType = section('Preset per type', 'Used when a card sets no preset. Unset types use the default preset.');
@@ -325,21 +338,101 @@ const drawLayerForm = (
       emit();
     },
   });
+  if (opts.global === true) {
+    const fresh = section(
+      'New tasks',
+      'Add task offers "Let the model pick" for Type and State: your Small Model suggests them from the title and description once the task is created. Only the fields left to it change. Applies to every project.',
+    );
+    bool(row(fresh), 'Suggest type and state for new tasks', () => layer.suggestFields, (v) => (layer.suggestFields = v), base.suggestFields);
+  }
 };
 
+/** The Presets tab: a set picker with set actions, then the chosen set's presets. */
 const drawPresets = (
   root: HTMLElement,
   disposers: Disposers,
-  getStored: () => StoredPresets,
-  setStored: (s: StoredPresets) => void,
+  getStored: () => StoredSets,
+  setStored: (s: StoredSets) => void,
   redraw: () => void,
-  skills: { use: SkillUse; line: string },
+  view: { setId: string; pick: (setId: string) => void; found: string[] | null; projectOpen: boolean },
 ): void => {
+  const { setId } = view;
+  const sets = listSets(getStored());
+  const current = sets.find((x) => x.id === setId) ?? sets[0]!;
   root.append(
-    el('p', 'kb-settings-hint', 'A preset is a block of instructions added to the agent’s start prompt. Built-ins can be edited and reset.'),
-    el('p', 'kb-settings-hint', skills.line),
+    el('p', 'kb-settings-hint', 'A preset is a block of instructions added to the agent’s start prompt; a preset set is a list of them. Choose the set a project uses in Global or This project.'),
   );
-  for (const preset of listPresets(getStored(), skills.use)) {
+  const head = el('div', 'kb-preset-head');
+  root.append(head);
+  const pickSlot = el('div', 'kb-field');
+  head.append(pickSlot);
+  const picker = mountSelect(pickSlot, {
+    label: 'Set',
+    value: current.id,
+    options: sets.map((x) => ({ id: x.id, label: setOptionLabel(x, view.found, getStored()) })),
+    onChange: (id) => {
+      picker.update({ value: id });
+      view.pick(id);
+      redraw();
+    },
+  });
+  disposers.push(picker.dispose);
+  const setButtons = el('div', 'kb-actions');
+  head.append(setButtons);
+  disposers.push(
+    mountButton(setButtons, {
+      label: 'New set',
+      variant: 'outline',
+      size: 'xs',
+      onClick: () => {
+        void askChoice('New preset set', `Start from a copy of “${current.name}” (its texts as they read now), or empty.`, [
+          { id: 'empty', label: 'Empty', variant: 'outline' },
+          { id: 'copy', label: `Copy “${current.name}”` },
+        ]).then((answer) => {
+          if (answer === null) return;
+          const added = answer === 'copy' ? addSet(getStored(), `${current.name} (copy)`, current.id) : addSet(getStored(), 'New set', null);
+          setStored(added.stored);
+          view.pick(added.id);
+          redraw();
+        });
+      },
+    }).dispose,
+  );
+  if (!current.builtin) {
+    disposers.push(
+      mountButton(setButtons, {
+        label: 'Delete set',
+        variant: 'ghost',
+        size: 'xs',
+        onClick: () => {
+          void askChoice(`Delete “${current.name}”?`, 'Settings that chose it use the default set instead.', [
+            { id: 'delete', label: 'Delete', variant: 'destructive' },
+          ]).then((answer) => {
+            if (answer !== 'delete') return;
+            setStored(deleteSet(getStored(), current.id));
+            view.pick(sets[0]!.id);
+            redraw();
+          });
+        },
+      }).dispose,
+    );
+    const nameSlot = el('div', 'kb-field');
+    root.append(nameSlot);
+    const name = mountTextField(nameSlot, {
+      label: 'Set name',
+      value: current.name,
+      onChange: (v) => {
+        name.update({ value: v });
+        setStored(renameSet(getStored(), current.id, v));
+      },
+    });
+    disposers.push(name.dispose);
+  }
+  root.append(el('p', 'kb-settings-hint', setStatusLine(current.id, view.found, view.projectOpen, getStored())));
+
+  const presets = listPresets(getStored(), current.id);
+  if (presets.length === 0) root.append(el('p', 'kb-settings-hint', 'This set has no presets yet: cards that use it start with the Plain Implement text.'));
+  for (const preset of presets) {
     const box = el('section', 'kb-preset');
     root.append(box);
     const head = el('div', 'kb-preset-head');
@@ -354,14 +447,14 @@ const drawPresets = (
         value: preset.name,
         onChange: (v) => {
           name.update({ value: v });
-          setStored(renamePreset(getStored(), preset.id, v));
+          setStored(renamePreset(getStored(), current.id, preset.id, v));
         },
       });
       disposers.push(name.dispose);
     }
     const buttons = el('div', 'kb-actions');
     head.append(buttons);
-    const note = presetSkillsNote(preset, skills.use, isEdited(getStored(), preset.id));
+    const note = presetSkillsNote(preset, current.id, isEdited(getStored(), current.id, preset.id));
     const noteLine = note === null ? null : el('p', 'kb-settings-hint', note);
     if (noteLine !== null) box.append(noteLine);
     const textSlot = el('div', '');
@@ -374,10 +467,10 @@ const drawPresets = (
       rows: 5,
       onChange: (v) => {
         text.update({ value: v });
-        const next = setPresetText(getStored(), preset.id, v);
+        const next = setPresetText(getStored(), current.id, preset.id, v);
         setStored(next);
-        reset?.update({ disabled: !isEdited(next, preset.id) });
-        if (noteLine !== null) noteLine.textContent = presetSkillsNote(preset, skills.use, isEdited(next, preset.id)) ?? '';
+        reset?.update({ disabled: !isEdited(next, current.id, preset.id) });
+        if (noteLine !== null) noteLine.textContent = presetSkillsNote(preset, current.id, isEdited(next, current.id, preset.id)) ?? '';
       },
     });
     disposers.push(text.dispose);
@@ -386,9 +479,9 @@ const drawPresets = (
         label: 'Reset',
         variant: 'ghost',
         size: 'xs',
-        disabled: !isEdited(getStored(), preset.id),
+        disabled: !isEdited(getStored(), current.id, preset.id),
         onClick: () => {
-          setStored(resetPreset(getStored(), preset.id));
+          setStored(resetPreset(getStored(), current.id, preset.id));
           redraw();
         },
       });
@@ -404,7 +497,7 @@ const drawPresets = (
               { id: 'delete', label: 'Delete', variant: 'destructive' },
             ]).then((answer) => {
               if (answer !== 'delete') return;
-              setStored(deletePreset(getStored(), preset.id));
+              setStored(deletePreset(getStored(), current.id, preset.id));
               redraw();
             });
           },
@@ -420,7 +513,7 @@ const drawPresets = (
       variant: 'outline',
       size: 'sm',
       onClick: () => {
-        setStored(addPreset(getStored(), 'New preset').stored);
+        setStored(addPreset(getStored(), current.id, 'New preset').stored);
         redraw();
       },
     }).dispose,
@@ -455,24 +548,37 @@ export const openSettings = (initial: SettingsModel, callbacks: SettingsCallback
     disposers = [];
     body.replaceChildren();
     const found = m.skills ?? [];
-    const use = skillUse(resolveSettings(m.global, {}, found), found);
-    const skillsLine = skillsFoundLine(m.skills, m.project !== null);
-    const presets = listPresets(m.presets, use);
+    const projectOpen = m.project !== null;
+    const sets = listSets(m.presets);
+    const setName = (id: string): string => sets.find((x) => x.id === id)?.name ?? id;
+    const setOptions = sets.map((x) => ({ id: x.id, label: setOptionLabel(x, m.skills, m.presets) }));
+    /** The set a layer stack ends up with (a deleted set reads as the default). */
+    const setOf = (project: SettingsLayer): string => presetSetOf(m.global, project, m.presets, found);
+    const globalSet = setOf({});
+    const projectSet = m.project === null ? globalSet : setOf(m.project.layer);
+    /** A layer saved with another set redraws the tab: its preset lists and the line under the picker follow. */
+    const redrawOnSet = (before: SettingsLayer, after: SettingsLayer): void => {
+      if (before.presetSet !== after.presetSet) queueMicrotask(draw);
+    };
     if (m.tab === 'global') {
+      const fallback = defaultSetId(found);
       drawLayerForm(body, disposers, {
         layer: m.global,
-        // The built-in defaults, with the toggle as set here (a bug's default follows it).
-        base: resolveSettings({ useMattSkills: m.global.useMattSkills ?? DEFAULT_SETTINGS.useMattSkills }, {}, found),
+        base: resolveSettings({}, {}, found),
         inheritWord: 'Default',
-        presets,
-        loadModels: callbacks.loadModels,
-        skillsLine,
+        global: true,
+        presets: listPresets(m.presets, globalSet),
+        lists: callbacks.lists,
+        sets: {
+          options: setOptions,
+          inheritLabel: m.skills === null ? 'Default (by the skills installed)' : `Default (${setName(fallback)})`,
+          line: `${setName(globalSet)}: ${setStatusLine(globalSet, m.skills, projectOpen, m.presets)}${m.skills === null ? '' : ' Without a choice: Matt Pocock\'s skills when all are found, else Superpowers when found, else Plain.'}`,
+        },
         onChange: (layer) => {
-          const toggled = (layer.useMattSkills ?? DEFAULT_SETTINGS.useMattSkills) !== (m.global.useMattSkills ?? DEFAULT_SETTINGS.useMattSkills);
+          const before = m.global;
           m.global = layer;
           callbacks.onGlobal(layer);
-          // The bug type's default preset shown in this form follows the toggle.
-          if (toggled) queueMicrotask(draw);
+          redrawOnSet(before, layer);
         },
       });
     } else if (m.tab === 'project') {
@@ -485,15 +591,23 @@ export const openSettings = (initial: SettingsModel, callbacks: SettingsCallback
           layer: project.layer,
           base: resolveSettings(m.global, {}, found),
           inheritWord: 'Use global',
-          presets,
-          loadModels: callbacks.loadModels,
+          presets: listPresets(m.presets, projectSet),
+          lists: callbacks.lists,
+          sets: {
+            options: setOptions,
+            inheritLabel: `Use global (${setName(globalSet)})`,
+            line: `${setName(projectSet)}: ${setStatusLine(projectSet, m.skills, true, m.presets)}`,
+          },
           onChange: (layer) => {
+            const before = project.layer;
             project.layer = layer;
             callbacks.onProject(layer);
+            redrawOnSet(before, layer);
           },
         });
       }
     } else {
+      const shown = m.editSet !== undefined && m.editSet !== null && sets.some((x) => x.id === m.editSet) ? m.editSet : projectSet;
       drawPresets(
         body,
         disposers,
@@ -503,7 +617,7 @@ export const openSettings = (initial: SettingsModel, callbacks: SettingsCallback
           callbacks.onPresets(s);
         },
         draw,
-        { use, line: skillsLine },
+        { setId: shown, pick: (id) => (m.editSet = id), found: m.skills, projectOpen },
       );
     }
   };

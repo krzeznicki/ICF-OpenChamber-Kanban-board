@@ -1122,6 +1122,7 @@ var MODELS_TIMEOUT_MS = 60 * 1e3;
 var ERROR_MAX = 500;
 var ANSI = /\u001b\[[0-9;]*[A-Za-z]/g;
 var MODEL = /^[^\s/]+\/\S*[^\s/]$/;
+var AGENT = /^\S+$/;
 var parseModels = (stdout) => {
   const seen = /* @__PURE__ */ new Set();
   for (const raw of stdout.split(/\r?\n/)) {
@@ -1130,38 +1131,125 @@ var parseModels = (stdout) => {
   }
   return [...seen];
 };
+var record = (v) => typeof v === "object" && v !== null && !Array.isArray(v) ? v : null;
+var nonBlank = (v) => typeof v === "string" && v.trim() !== "" ? v.trim() : null;
+var dataOf = (stdout) => {
+  let parsed;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    return null;
+  }
+  const data = record(parsed)?.data;
+  return Array.isArray(data) ? data : null;
+};
+var parseApiModels = (stdout) => {
+  const data = dataOf(stdout);
+  if (data === null) return null;
+  const out = /* @__PURE__ */ new Map();
+  for (const raw of data) {
+    const m = record(raw);
+    const provider = nonBlank(m?.providerID);
+    const model = nonBlank(m?.id);
+    if (m === null || provider === null || model === null) continue;
+    const id = `${provider}/${model}`;
+    if (!MODEL.test(id) || out.has(id)) continue;
+    const variants = /* @__PURE__ */ new Set();
+    if (Array.isArray(m.variants)) {
+      for (const v of m.variants) {
+        const vid = nonBlank(record(v)?.id);
+        if (vid !== null) variants.add(vid);
+      }
+    }
+    out.set(id, { id, name: nonBlank(m.name) ?? id, variants: [...variants] });
+  }
+  return [...out.values()];
+};
+var parseApiAgents = (stdout) => {
+  const data = dataOf(stdout);
+  if (data === null) return null;
+  const out = /* @__PURE__ */ new Map();
+  for (const raw of data) {
+    const a = record(raw);
+    const id = nonBlank(a?.id);
+    if (a === null || id === null || !AGENT.test(id) || out.has(id)) continue;
+    if (a.hidden === true || a.mode !== "primary" && a.mode !== "all") continue;
+    out.set(id, { id, name: nonBlank(a.name) ?? id, description: nonBlank(a.description) ?? "" });
+  }
+  return [...out.values()];
+};
+var apiArgs = (path, directory) => [
+  "api",
+  "GET",
+  path,
+  "-H",
+  `x-opencode-directory:${encodeURIComponent(directory)}`
+];
 var message = (e) => e instanceof Error ? e.message : String(e);
-var createModelList = (exec, now = Date.now) => {
+var clip = (s) => s.slice(0, ERROR_MAX);
+var attempt = async (exec, what, args, directory, parse) => {
+  try {
+    const r = await exec("opencode", args, { cwd: directory, timeoutMs: MODELS_TIMEOUT_MS });
+    if (r.code !== 0) return { error: `${what} failed: ${clip(r.stderr.trim() || r.stdout.trim() || `exit code ${r.code}`)}` };
+    const parsed = parse(r.stdout);
+    return parsed === null ? { error: `could not read the answer of ${what}` } : { ok: parsed };
+  } catch (e) {
+    return { error: `${what} failed: ${clip(message(e))}` };
+  }
+};
+var cachedPerDirectory = (run, empty, wrap, now) => {
   const cache = /* @__PURE__ */ new Map();
   const running = /* @__PURE__ */ new Map();
-  const run = async (directory) => {
-    try {
-      const r = await exec("opencode", ["models"], { cwd: directory, timeoutMs: MODELS_TIMEOUT_MS });
-      if (r.code !== 0) {
-        const why = (r.stderr.trim() || r.stdout.trim() || `exit code ${r.code}`).slice(0, ERROR_MAX);
-        return { models: [], error: `opencode models failed: ${why}` };
-      }
-      const models = parseModels(r.stdout);
-      if (models.length === 0) return { models: [], error: "opencode models listed no models" };
-      cache.set(directory, { at: now(), models });
-      return { models };
-    } catch (e) {
-      return { models: [], error: `opencode models failed: ${message(e).slice(0, ERROR_MAX)}` };
-    }
+  const go = async (directory) => {
+    const r = await run(directory);
+    if ("error" in r) return empty(r.error);
+    cache.set(directory, { at: now(), value: r.value });
+    return wrap(r.value);
   };
   return (directory) => {
     const hit = cache.get(directory);
-    if (hit !== void 0 && now() - hit.at < MODELS_TTL_MS) return Promise.resolve({ models: [...hit.models] });
+    if (hit !== void 0 && now() - hit.at < MODELS_TTL_MS) return Promise.resolve(wrap(hit.value));
     const pending2 = running.get(directory);
     if (pending2 !== void 0) return pending2;
-    const p = run(directory).finally(() => running.delete(directory));
+    const p = go(directory).finally(() => running.delete(directory));
     running.set(directory, p);
     return p;
   };
 };
+var createModelList = (exec, now = Date.now) => {
+  const run = async (directory) => {
+    const api = await attempt(exec, "opencode api GET /api/model", apiArgs("/api/model", directory), directory, (s) => {
+      const m = parseApiModels(s);
+      return m === null || m.length === 0 ? null : m;
+    });
+    if ("ok" in api) return { value: api.ok };
+    const cli = await attempt(exec, "opencode models", ["models"], directory, parseModels);
+    if ("error" in cli) return { error: `${api.error}; ${cli.error}` };
+    if (cli.ok.length === 0) return { error: `${api.error}; opencode models listed no models` };
+    return { value: cli.ok.map((id) => ({ id, name: id, variants: [], variantsKnown: false })) };
+  };
+  return cachedPerDirectory(
+    run,
+    (error2) => ({ models: [], error: error2 }),
+    (models) => ({ models: models.map((m) => ({ ...m, variants: [...m.variants] })) }),
+    now
+  );
+};
+var createAgentList = (exec, now = Date.now) => {
+  const run = async (directory) => {
+    const api = await attempt(exec, "opencode api GET /api/agent", apiArgs("/api/agent", directory), directory, parseApiAgents);
+    return "ok" in api ? { value: api.ok } : api;
+  };
+  return cachedPerDirectory(
+    run,
+    (error2) => ({ agents: [], error: error2 }),
+    (agents) => ({ agents: agents.map((a) => ({ ...a })) }),
+    now
+  );
+};
 
 // src/service/skills.ts
-import { stat as stat2 } from "node:fs/promises";
+import { readdir as readdir2, stat as stat2 } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join as join3 } from "node:path";
 
@@ -1180,6 +1268,16 @@ var MATT_SKILLS = [
   "diagnosing-bugs",
   "triage"
 ];
+var SUPERPOWERS_SKILLS = [
+  "brainstorming",
+  "writing-plans",
+  "test-driven-development",
+  "verification-before-completion",
+  "requesting-code-review",
+  "subagent-driven-development",
+  "systematic-debugging"
+];
+var KNOWN_SKILLS = [...MATT_SKILLS, ...SUPERPOWERS_SKILLS];
 
 // src/service/skills.ts
 var SKILLS_TTL_MS = 5 * 60 * 1e3;
@@ -1197,8 +1295,30 @@ var isFile = async (path) => {
     return false;
   }
 };
-var detectSkills = async (home, project, names = MATT_SKILLS) => {
-  const roots = skillRoots(home, project);
+var isDir = async (path) => {
+  try {
+    return (await stat2(path)).isDirectory();
+  } catch {
+    return false;
+  }
+};
+var dirs = async (path) => {
+  try {
+    return (await readdir2(path, { withFileTypes: true })).filter((d) => d.isDirectory()).map((d) => d.name);
+  } catch {
+    return [];
+  }
+};
+var pluginSkillRoots = async (home) => {
+  const npm = join3(home, ".cache", "opencode", "npm");
+  const candidates = [];
+  for (const plugin of await dirs(npm))
+    for (const version of await dirs(join3(npm, plugin))) candidates.push(join3(npm, plugin, version, "node_modules", "superpowers", "skills"));
+  const ok = await Promise.all(candidates.map(isDir));
+  return candidates.filter((_, i) => ok[i]).sort((a, b) => a < b ? 1 : a > b ? -1 : 0);
+};
+var detectSkills = async (home, project, names = KNOWN_SKILLS) => {
+  const roots = [...skillRoots(home, project), ...await pluginSkillRoots(home)];
   const hits = await Promise.all(
     names.map(async (name) => {
       const files = roots.map((r) => join3(r, name, "SKILL.md"));
@@ -1281,7 +1401,7 @@ var MAX_PARALLEL_LIMIT = 10;
 var RESERVE_MS = 18e4;
 var isEntry = (v) => {
   const e = v;
-  return typeof e === "object" && e !== null && typeof e.taskId === "string" && typeof e.title === "string" && typeof e.prompt === "string" && (e.model === null || typeof e.model === "string") && (e.agent === null || typeof e.agent === "string") && (e.location === "worktree" || e.location === "project") && typeof e.queuedAt === "number" && (e.lastError === void 0 || typeof e.lastError === "string") && (e.failures === void 0 || typeof e.failures === "number" && Number.isFinite(e.failures));
+  return typeof e === "object" && e !== null && typeof e.taskId === "string" && typeof e.title === "string" && typeof e.prompt === "string" && (e.model === null || typeof e.model === "string") && (e.agent === null || typeof e.agent === "string") && (e.variant === void 0 || e.variant === null || typeof e.variant === "string") && (e.location === "worktree" || e.location === "project") && typeof e.queuedAt === "number" && (e.lastError === void 0 || typeof e.lastError === "string") && (e.failures === void 0 || typeof e.failures === "number" && Number.isFinite(e.failures));
 };
 var clampMax = (n) => typeof n === "number" && Number.isFinite(n) ? Math.min(MAX_PARALLEL_LIMIT, Math.max(1, Math.round(n))) : DEFAULT_MAX_PARALLEL;
 var readQueueFile = async (file) => {
@@ -1500,7 +1620,8 @@ var startSession = async (input, deps2) => {
       directory: cwd,
       title: input.title,
       ...input.model !== null ? { model: input.model } : {},
-      ...input.agent !== null ? { agent: input.agent } : {}
+      ...input.agent !== null ? { agent: input.agent } : {},
+      ...input.variant !== null ? { variant: input.variant } : {}
     });
   } catch (e) {
     const kept = worktree === null || await removeWorktree(deps2, input.directory, worktree, branch) ? "" : ` The worktree ${worktree} could not be removed; remove it with git worktree remove if you do not need it.`;
@@ -1540,12 +1661,12 @@ var directoryOf = async (body) => {
   if (!isObject(body)) return invalid('Request body must be a JSON object with "directory"');
   const dir = body.directory;
   if (typeof dir !== "string" || !isAbsolute(dir)) return invalid('"directory" must be an absolute path');
-  let isDir = false;
+  let isDir2 = false;
   try {
-    isDir = (await stat3(dir)).isDirectory();
+    isDir2 = (await stat3(dir)).isDirectory();
   } catch {
   }
-  return isDir ? dir : invalid(`"directory" is not an existing directory: ${dir}`);
+  return isDir2 ? dir : invalid(`"directory" is not an existing directory: ${dir}`);
 };
 var newTask = (v) => {
   if (!isObject(v)) return invalid('"input" must be an object with "title"');
@@ -1573,6 +1694,7 @@ var queueEntry = (v) => {
     prompt: str(v, "prompt"),
     model: optional(v, "model"),
     agent: optional(v, "agent"),
+    variant: optional(v, "variant"),
     location: location(v.location, "entry.location"),
     queuedAt: queuedAt === void 0 ? Date.now() : typeof queuedAt === "number" ? queuedAt : invalid('"entry.queuedAt" must be a number')
   };
@@ -1609,7 +1731,7 @@ var drainProject = async (dir, deps2) => {
   await Promise.all(
     taken.map(async (e) => {
       try {
-        await start(dir, { taskId: e.taskId, title: e.title, prompt: e.prompt, model: e.model, agent: e.agent, location: e.location }, deps2);
+        await start(dir, { taskId: e.taskId, title: e.title, prompt: e.prompt, model: e.model, agent: e.agent, variant: e.variant ?? null, location: e.location }, deps2);
         forgetRemoval(queueFile(deps2), dir, e.taskId);
       } catch (err) {
         const why = (err instanceof Error ? err.message : String(err)).slice(0, ERROR_MAX2);
@@ -1639,6 +1761,16 @@ var modelList = (deps2) => {
   if (list === void 0) {
     list = createModelList(deps2.exec);
     modelLists.set(deps2.exec, list);
+  }
+  return list;
+};
+var agentLists = /* @__PURE__ */ new WeakMap();
+var agentList = (deps2) => {
+  if (deps2.agents !== void 0) return deps2.agents;
+  let list = agentLists.get(deps2.exec);
+  if (list === void 0) {
+    list = createAgentList(deps2.exec);
+    agentLists.set(deps2.exec, list);
   }
   return list;
 };
@@ -1733,8 +1865,9 @@ var POST = {
     const prompt = str(body, "prompt");
     const model = optional(body, "model");
     const agent = optional(body, "agent");
+    const variant = optional(body, "variant");
     const where = location(body.location, "location");
-    return start(dir, { taskId, title, prompt, model, agent, location: where }, deps2);
+    return start(dir, { taskId, title, prompt, model, agent, variant, location: where }, deps2);
   },
   /** Links with the live status of their session (idle, busy, waiting, unknown). */
   "/links/list": async (_body, dir, deps2) => ({
@@ -1750,9 +1883,11 @@ var POST = {
     release(queueFile(deps2), dir, taskId);
     return {};
   },
-  /** `{ models: ['provider/model', …] }`; a failure is `{ models: [], error }`, never an error status. */
+  /** `{ models: [{ id: 'provider/model', name, variants }] }`; a failure is `{ models: [], error }`, never an error status. */
   "/models/list": async (_body, dir, deps2) => modelList(deps2)(dir),
-  /** `{ found: [...], paths: {name: SKILL.md} }`: which of Matt Pocock's skills are installed for this project (core/skills.ts). */
+  /** `{ agents: [{ id, name, description }] }` (session agents); a failure is `{ agents: [], error }`, never an error status. */
+  "/agents/list": async (_body, dir, deps2) => agentList(deps2)(dir),
+  /** `{ found: [...], paths: {name: SKILL.md} }`: which of the known skills (core/skills.ts) are installed for this project, plugin cache included. */
   "/skills/detect": async (_body, dir, deps2) => skillDetector(deps2)(dir),
   "/queue/list": async (_body, dir, deps2) => ({ queue: await listQueue(queueFile(deps2), dir) }),
   "/queue/add": async (body, dir, deps2) => ({ queue: await addToQueue(queueFile(deps2), dir, queueEntry(body.entry), maxParallelOf(body)) }),

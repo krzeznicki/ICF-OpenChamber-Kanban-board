@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { MATT_SKILLS } from '../src/core/skills.ts';
-import { createSkillDetector, detectSkills, SKILLS_TTL_MS, skillRoots } from '../src/service/skills.ts';
+import { KNOWN_SKILLS, MATT_SKILLS, SUPERPOWERS_SKILLS } from '../src/core/skills.ts';
+import { createSkillDetector, detectSkills, pluginSkillRoots, SKILLS_TTL_MS, skillRoots } from '../src/service/skills.ts';
 import { handle } from '../src/service/routes.ts';
 
 type T = { after: (fn: () => Promise<void>) => void };
@@ -30,6 +30,44 @@ test('MATT_SKILLS lists every skill a preset may name', () => {
     [...MATT_SKILLS],
     ['grill-with-docs', 'grilling', 'domain-modeling', 'to-spec', 'to-tickets', 'prototype', 'implement', 'implement-spec', 'tdd', 'code-review', 'diagnosing-bugs', 'triage'],
   );
+});
+
+test('SUPERPOWERS_SKILLS lists the Superpowers skills a preset may name; KNOWN_SKILLS is both lists', () => {
+  assert.deepEqual(
+    [...SUPERPOWERS_SKILLS],
+    ['brainstorming', 'writing-plans', 'test-driven-development', 'verification-before-completion', 'requesting-code-review', 'subagent-driven-development', 'systematic-debugging'],
+  );
+  assert.deepEqual([...KNOWN_SKILLS], [...MATT_SKILLS, ...SUPERPOWERS_SKILLS]);
+});
+
+test("pluginSkillRoots: OpenCode's plugin cache, ~/.cache/opencode/npm/*/*/node_modules/superpowers/skills, newest first", async (t) => {
+  const home = await tmp(t, 'icf-home-');
+  assert.deepEqual(await pluginSkillRoots(home), [], 'no cache at all');
+  const npm = join(home, '.cache/opencode/npm');
+  await mkdir(join(npm, 'git-superpowers-aaa/100/node_modules/superpowers/skills'), { recursive: true });
+  await mkdir(join(npm, 'git-superpowers-aaa/200/node_modules/superpowers/skills'), { recursive: true });
+  await mkdir(join(npm, 'other-plugin/1/node_modules/other/skills'), { recursive: true });
+  await writeFile(join(npm, 'stray-file'), '');
+  assert.deepEqual(await pluginSkillRoots(home), [
+    join(npm, 'git-superpowers-aaa/200/node_modules/superpowers/skills'),
+    join(npm, 'git-superpowers-aaa/100/node_modules/superpowers/skills'),
+  ]);
+});
+
+test('detectSkills finds Superpowers skills in the plugin cache, after the skill folders', async (t) => {
+  const home = await tmp(t, 'icf-home-');
+  const project = await tmp(t, 'icf-proj-');
+  const cache = join(home, '.cache/opencode/npm/git-superpowers-x/1794601882804/node_modules/superpowers/skills');
+  await skill(cache, 'brainstorming');
+  await skill(cache, 'writing-plans');
+  await skill(join(home, '.claude/skills'), 'writing-plans');
+  await skill(join(home, '.claude/skills'), 'tdd');
+  const found = await detectSkills(home, project);
+  assert.deepEqual(found, [
+    { name: 'tdd', path: join(home, '.claude/skills/tdd/SKILL.md') },
+    { name: 'brainstorming', path: join(cache, 'brainstorming/SKILL.md') },
+    { name: 'writing-plans', path: join(home, '.claude/skills/writing-plans/SKILL.md') },
+  ]);
 });
 
 test('skillRoots: the three user folders and the two project folders, never ~/.config/openchamber', () => {

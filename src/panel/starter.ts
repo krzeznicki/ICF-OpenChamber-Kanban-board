@@ -12,10 +12,11 @@ import type { Task } from '../core/types.ts';
 import { ApiError, createApi } from './api.ts';
 import { ledByOrchestrator, markArchived, sessionForTask, type Detached, type SessionLink } from './columns.ts';
 import { createLauncher } from './launcher.ts';
-import type { Preset } from './presets.ts';
+import { pickPreset, type Preset } from './presets.ts';
 import { buildPrompt } from './prompt.ts';
 import type { QueueEntry } from './queue.ts';
-import { resolveStart, type Settings, type StartOptions } from './settings.ts';
+import { offeredVariant, type StartLists } from './models.ts';
+import { resolveStart, startsFromExtension, type Settings, type StartOptions } from './settings.ts';
 import { askStart } from './ui/startForm.ts';
 
 /** A pending start (timed-out path B call) is released by a link for its task created up to this long before. */
@@ -42,8 +43,8 @@ export type StarterDeps = {
   /** Session ids a host lookup found archived (columns.ts markArchived) in the shown project. */
   archived: () => ReadonlySet<string>;
   draw: () => void;
-  /** The model picker's list (loaded once per panel session). */
-  loadModels: () => Promise<string[]>;
+  /** The model and agent lists of the start form's pickers (loaded once per project). */
+  lists: StartLists;
 };
 
 const errorText = (e: unknown): string => (e instanceof Error ? e.message : String(e));
@@ -97,17 +98,17 @@ export const createStarter = (deps: StarterDeps) => {
   };
 
   /**
-   * Path A (the panel's host.startSession) when the card sets no model and no agent: OpenChamber
+   * Path A (the panel's host.startSession) when no model, agent or thinking level is set: OpenChamber
    * makes the worktree and the session carries the card as its item; the panel then records the
    * link so the queue counts the session. Otherwise path B: the service makes the worktree with git,
-   * starts the session with the model/agent and records the link. An id too long to be an item
+   * starts the session with the model, agent and thinking level and records the link. An id too long to be an item
    * (GUEST_ATTACH_ID_MAX) also takes path B, so the card can follow it.
    */
   const startTask = async (task: Task, opts: StartOptions, prompt: string): Promise<{ sessionId: string | null; pending?: boolean }> => {
     const p = deps.project();
     if (p === null) throw new Error('No project is open');
     const api = createApi(host, p.directory);
-    if (opts.model !== null || opts.agent !== null || task.id.length > GUEST_ATTACH_ID_MAX) {
+    if (startsFromExtension(opts) || task.id.length > GUEST_ATTACH_ID_MAX) {
       try {
         const r = await api.startSession({
           taskId: task.id,
@@ -115,6 +116,7 @@ export const createStarter = (deps: StarterDeps) => {
           prompt,
           model: opts.model,
           agent: opts.agent,
+          variant: opts.variant,
           location: opts.location,
         });
         if (r.linkError !== undefined) fail(r.linkError);
@@ -170,9 +172,9 @@ export const createStarter = (deps: StarterDeps) => {
     const p = deps.project();
     if (p === null) throw new Error('No project is open');
     const ctx = deps.context();
-    const presets = ctx?.presets ?? [];
-    const preset = presets.find((x) => x.id === opts.presetId) ?? presets.find((x) => x.id === 'implement') ?? presets[0];
-    if (preset === undefined) throw new Error('Settings are loading, try again in a moment');
+    if (ctx === null) throw new Error('Settings are loading, try again in a moment');
+    // A preset the set does not have falls back to its Implement, else Plain's (a set may be empty).
+    const preset = pickPreset(ctx.presets, opts.presetId);
     const children = (deps.tasks() ?? []).filter((t) => t.parentId === task.id);
     return buildPrompt(task, preset, await cliPath(p.directory), p.directory, children);
   };
@@ -239,7 +241,7 @@ export const createStarter = (deps: StarterDeps) => {
         void api.removeFromQueue(e.taskId).catch(() => {}); // frees its reservation
         continue;
       }
-      const opts: StartOptions = { presetId: '', model: e.model, agent: e.agent, location: e.location };
+      const opts: StartOptions = { presetId: '', model: e.model, agent: e.agent, variant: e.variant ?? null, location: e.location };
       void launcher.launch(task, opts, e.prompt).then((result) => {
         if (result === 'failed' || result === 'already') void api.removeFromQueue(e.taskId).catch(() => {});
         if (result !== 'already') report(task, result);
@@ -282,6 +284,7 @@ export const createStarter = (deps: StarterDeps) => {
       prompt,
       model: opts.model,
       agent: opts.agent,
+      variant: opts.variant,
       location: opts.location,
       queuedAt: Date.now(),
     };
@@ -330,9 +333,17 @@ export const createStarter = (deps: StarterDeps) => {
     }
     let opts = resolveStart(ctx.settings, task, card, ctx.presets);
     if (!ctx.settings.autoStart) {
-      const picked = await askStart(task.title, opts, ctx.presets, deps.loadModels);
+      const picked = await askStart(task.title, opts, ctx.presets, deps.lists);
       if (picked === null) return;
       opts = picked;
+    }
+    if (opts.variant !== null) {
+      // A card's level set over an inherited model is kept only if the model in force offers it
+      // (the inherited model may have changed since); unknown levels or no list keep it.
+      const models = await deps.lists.models().catch(() => null);
+      const checked = offeredVariant(opts, models);
+      if (checked.dropped !== null) info(`${opts.model ?? 'The model'} does not offer the thinking level “${checked.dropped}”; starting without it`);
+      opts = checked.opts;
     }
     if (currentId() !== ctx.projectId) return;
     if (queuedIds().size > 0 || occupied() >= ctx.settings.maxParallel) {

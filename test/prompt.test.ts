@@ -125,29 +125,28 @@ test('orchestrate preset: sub-tasks are created ready-for-agent and claim needs 
   assert.match(o.text, /move a sub-task to ready-for-agent first if needed/);
 });
 
-test('prompt: a built-in runs its skills text when Matt Pocock skills are in use, the user edit when edited', async () => {
-  const { listPresets, parseStoredPresets, setPresetText } = await import('../src/panel/presets.ts');
-  const { MATT_SKILLS } = await import('../src/core/skills.ts');
-  const on = { use: true, found: [...MATT_SKILLS] };
-  const pick = (stored: ReturnType<typeof parseStoredPresets>) => listPresets(stored, on).find((p) => p.id === 'implement')!;
-  const p = buildPrompt(task(), pick(parseStoredPresets(undefined)), CLI, DIR, []);
+test("prompt: the Matt set's Implement runs its skills text, the user edit when edited", async () => {
+  const { listPresets, EMPTY_SETS, setPresetText, BUILTIN_SETS } = await import('../src/panel/presets.ts');
+  const pick = (stored: typeof EMPTY_SETS) => listPresets(stored, 'matt').find((p) => p.id === 'implement')!;
+  const mattImplement = BUILTIN_SETS.find((x) => x.id === 'matt')!.presets.find((x) => x.id === 'implement')!;
+  const p = buildPrompt(task(), pick(EMPTY_SETS), CLI, DIR, []);
   const { fillPreset } = await import('../src/panel/prompt.ts');
-  assert.ok(p.includes(fillPreset(implement.mattText!.trim(), task(), TB, DIR)));
+  assert.ok(p.includes(fillPreset(mattImplement.text.trim(), task(), TB, DIR)));
   assert.ok(p.includes(`(\`${TB} show .scratch/board/issues/03-drag.md\` reads it)`));
   assert.ok(p.includes('Run /implement'));
   assert.ok(p.includes(`${TB} state .scratch/board/issues/03-drag.md <state>`), 'the CLI line stays');
   assert.ok(!p.includes(implement.text));
-  const edited = buildPrompt(task(), pick(setPresetText(parseStoredPresets(undefined), 'implement', 'My way.')), CLI, DIR, []);
+  const edited = buildPrompt(task(), pick(setPresetText(EMPTY_SETS, 'matt', 'implement', 'My way.')), CLI, DIR, []);
   assert.ok(edited.endsWith('## Instructions (Implement)\nMy way.'));
 });
 
 test('prompt: {cli}, {root}, {id} and {note} are filled in; skills texts reach the root tracker through the CLI', async () => {
-  const { listPresets, parseStoredPresets } = await import('../src/panel/presets.ts');
-  const { MATT_SKILLS } = await import('../src/core/skills.ts');
-  const paths = Object.fromEntries(MATT_SKILLS.map((n) => [n, `/home/u/.config/opencode/skills/${n}/SKILL.md`]));
-  const presets = listPresets(parseStoredPresets(undefined), { use: true, found: [...MATT_SKILLS], paths });
+  const { listPresets, EMPTY_SETS } = await import('../src/panel/presets.ts');
+  const { KNOWN_SKILLS } = await import('../src/core/skills.ts');
+  const paths = Object.fromEntries(KNOWN_SKILLS.map((n) => [n, `/home/u/.config/opencode/skills/${n}/SKILL.md`]));
+  const presets = listPresets(EMPTY_SETS, 'matt', paths);
   const get = (id: string) => presets.find((p) => p.id === id)!;
-  for (const preset of presets) {
+  for (const preset of [...presets, ...listPresets(EMPTY_SETS, 'superpowers', paths).filter((p) => p.id !== 'triage')]) {
     const p = buildPrompt(task(), preset, CLI, DIR, []);
     assert.doesNotMatch(p, /\{(cli|root|id|note)\}/, preset.id);
     assert.ok(p.includes(`${DIR}/docs/agents/issue-tracker.md`), preset.id);
@@ -164,14 +163,16 @@ test('prompt: {cli}, {root}, {id} and {note} are filled in; skills texts reach t
   const plan = buildPrompt(task(), get('plan'), CLI, DIR, []);
   for (const n of ['grill-with-docs', 'to-spec', 'to-tickets', 'grilling', 'domain-modeling']) assert.ok(plan.includes(`- ${n}: ${paths[n]}`), n);
   assert.ok(!plan.includes(paths['tdd']!));
-  // Plain texts list no skill files.
-  const plain = listPresets(parseStoredPresets(undefined)).find((p) => p.id === 'plan')!;
+  // Superpowers' Plan lists its two skills; plain texts list no skill files.
+  const spPlan = buildPrompt(task(), listPresets(EMPTY_SETS, 'superpowers', paths).find((p) => p.id === 'plan')!, CLI, DIR, []);
+  for (const n of ['brainstorming', 'writing-plans']) assert.ok(spPlan.includes(`- ${n}: ${paths[n]}`), n);
+  assert.ok(spPlan.includes(`${TB} create --title <title> --state ready-for-agent --body-file -`));
+  const plain = listPresets(EMPTY_SETS, 'plain', paths).find((p) => p.id === 'plan')!;
   assert.doesNotMatch(buildPrompt(task(), plain, CLI, DIR, []), /SKILL\.md/);
 });
 
 test("prompt: {root}, {tracker} and {note} are shell-quoted for a root with a space and a '", async () => {
-  const { listPresets, parseStoredPresets } = await import('../src/panel/presets.ts');
-  const { MATT_SKILLS } = await import('../src/core/skills.ts');
+  const { listPresets, EMPTY_SETS } = await import('../src/panel/presets.ts');
   const { fillPreset } = await import('../src/panel/prompt.ts');
   const root = "/home/u/Kamil's Projects/board";
   const q = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
@@ -184,9 +185,8 @@ test("prompt: {root}, {tracker} and {note} are shell-quoted for a root with a sp
   );
   // A plain root stays bare.
   assert.equal(fillPreset('{root} {tracker}', t, TB, DIR), `${DIR} ${DIR}/docs/agents/issue-tracker.md`);
-  const presets = listPresets(parseStoredPresets(undefined), { use: true, found: [...MATT_SKILLS] });
+  const presets = [...listPresets(EMPTY_SETS, 'matt'), ...listPresets(EMPTY_SETS, 'superpowers').filter((p) => p.id !== 'triage')];
   for (const preset of presets) {
-    if (preset.mattText === undefined) continue;
     const p = buildPrompt(t, preset, CLI, root, []);
     assert.doesNotMatch(p, /\{(cli|root|id|note|tracker)\}/, preset.id);
     assert.ok(p.includes(q(`${root}/docs/agents/issue-tracker.md`)), preset.id);

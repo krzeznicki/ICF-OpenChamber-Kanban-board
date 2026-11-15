@@ -10,7 +10,7 @@ import { openTracker } from '../core/openTracker.ts';
 import type { Exec, NewTask, TaskState, Tracker } from '../core/types.ts';
 import { TrackerError } from '../core/types.ts';
 import type { QueueEntry } from '../core/queue.ts';
-import { createModelList, type ModelList } from './models.ts';
+import { createAgentList, createModelList, type AgentList, type ModelList } from './models.ts';
 import { createSkillDetector, type SkillDetector } from './skills.ts';
 import {
   addToQueue,
@@ -50,9 +50,11 @@ export type Deps = {
   suffix?: () => string;
   /** Where background failures (a queued start after a session event) are reported. */
   log?: (message: string) => void;
-  /** `opencode models`, cached; defaults to one cache per `exec` (one per running service). */
+  /** The project's models (`opencode api GET /api/model`, else `opencode models`), cached; defaults to one cache per `exec` (one per running service). */
   models?: ModelList;
-  /** Which of Matt Pocock's skills are installed, cached; defaults to one detector over the user's home. */
+  /** `opencode api GET /api/agent`, cached; defaults to one cache per `exec`, like `models`. */
+  agents?: AgentList;
+  /** Which of the known skills (Matt Pocock's, Superpowers) are installed, cached; defaults to one detector over the user's home. */
   skills?: SkillDetector;
 };
 /** `after` runs once the answer is sent (session events: answer first, then work). */
@@ -139,6 +141,7 @@ const queueEntry = (v: unknown): QueueEntry => {
     prompt: str(v, 'prompt'),
     model: optional(v, 'model'),
     agent: optional(v, 'agent'),
+    variant: optional(v, 'variant'),
     location: location(v.location, 'entry.location'),
     queuedAt: queuedAt === undefined ? Date.now() : typeof queuedAt === 'number' ? queuedAt : invalid('"entry.queuedAt" must be a number'),
   };
@@ -186,7 +189,7 @@ export const drainProject = async (dir: string, deps: Deps): Promise<void> => {
   await Promise.all(
     taken.map(async (e) => {
       try {
-        await start(dir, { taskId: e.taskId, title: e.title, prompt: e.prompt, model: e.model, agent: e.agent, location: e.location }, deps);
+        await start(dir, { taskId: e.taskId, title: e.title, prompt: e.prompt, model: e.model, agent: e.agent, variant: e.variant ?? null, location: e.location }, deps);
         forgetRemoval(queueFile(deps), dir, e.taskId);
       } catch (err) {
         const why = (err instanceof Error ? err.message : String(err)).slice(0, ERROR_MAX);
@@ -227,6 +230,17 @@ const modelList = (deps: Deps): ModelList => {
   if (list === undefined) {
     list = createModelList(deps.exec);
     modelLists.set(deps.exec, list);
+  }
+  return list;
+};
+
+const agentLists = new WeakMap<Exec, AgentList>();
+const agentList = (deps: Deps): AgentList => {
+  if (deps.agents !== undefined) return deps.agents;
+  let list = agentLists.get(deps.exec);
+  if (list === undefined) {
+    list = createAgentList(deps.exec);
+    agentLists.set(deps.exec, list);
   }
   return list;
 };
@@ -341,8 +355,9 @@ const POST: Record<string, Route> = {
     const prompt = str(body, 'prompt');
     const model = optional(body, 'model');
     const agent = optional(body, 'agent');
+    const variant = optional(body, 'variant');
     const where = location(body.location, 'location');
-    return start(dir, { taskId, title, prompt, model, agent, location: where }, deps);
+    return start(dir, { taskId, title, prompt, model, agent, variant, location: where }, deps);
   },
   /** Links with the live status of their session (idle, busy, waiting, unknown). */
   '/links/list': async (_body, dir, deps) => ({
@@ -358,9 +373,11 @@ const POST: Record<string, Route> = {
     release(queueFile(deps), dir, taskId);
     return {};
   },
-  /** `{ models: ['provider/model', …] }`; a failure is `{ models: [], error }`, never an error status. */
+  /** `{ models: [{ id: 'provider/model', name, variants }] }`; a failure is `{ models: [], error }`, never an error status. */
   '/models/list': async (_body, dir, deps) => modelList(deps)(dir),
-  /** `{ found: [...], paths: {name: SKILL.md} }`: which of Matt Pocock's skills are installed for this project (core/skills.ts). */
+  /** `{ agents: [{ id, name, description }] }` (session agents); a failure is `{ agents: [], error }`, never an error status. */
+  '/agents/list': async (_body, dir, deps) => agentList(deps)(dir),
+  /** `{ found: [...], paths: {name: SKILL.md} }`: which of the known skills (core/skills.ts) are installed for this project, plugin cache included. */
   '/skills/detect': async (_body, dir, deps) => skillDetector(deps)(dir),
   '/queue/list': async (_body, dir, deps) => ({ queue: await listQueue(queueFile(deps), dir) }),
   '/queue/add': async (body, dir, deps) => ({ queue: await addToQueue(queueFile(deps), dir, queueEntry(body.entry), maxParallelOf(body)) }),

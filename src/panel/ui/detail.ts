@@ -1,10 +1,12 @@
 // The task modal, opened by a click on any card: reading first. A header (title, id, state and type
 // badges, ×, and "Open session" when the task has a session that may be opened, or "Session
-// archived"; "Unarchive" for a task archived by "Archive done"), then collapsible sections: Summary (the personal summary or a Summarise button), Task
-// (the body as formatted markdown, ui/markdownView.ts), Sub-tasks (a parent's children, a click
-// opens that task, and "Add sub-task" where addTask.ts allows it) and Settings, collapsed by
-// default: state and type selects, "Move to" buttons (the keyboard path for drag and drop; Done
-// asks about open sub-tasks), Open on GitHub, and the card's start options (ui/startOptions.ts).
+// archived"; "Unarchive" for a task archived by "Archive done"), then a compact row (always shown,
+// under the header, not sticky): state and type selects and "Move to" buttons (the keyboard path
+// for drag and drop; Done asks about open sub-tasks). Then collapsible sections: Summary (the
+// personal summary or a Summarise button), Task (the body as formatted markdown,
+// ui/markdownView.ts), Sub-tasks (a parent's children, a click opens that task, and "Add sub-task"
+// where addTask.ts allows it) and Settings, collapsed by default: Open on GitHub and the card's
+// start options (ui/startOptions.ts).
 // It sits on the shell it shares with Add task (ui/modal.ts). Which sections are open is
 // remembered (settings.ts Sections). It draws what it is given and reports choices; the editor
 // (edit.ts) runs them and asks to confirm.
@@ -13,6 +15,7 @@ import type { Tone } from '@openchamber/sdk/ui';
 import type { Task, TaskState } from '../../core/types.ts';
 import type { Column } from '../columns.ts';
 import type { Preset } from '../presets.ts';
+import type { StartLists } from '../models.ts';
 import type { CardOptions, Sections, StartOptions } from '../settings.ts';
 import type { SummaryStatus } from '../summaries.ts';
 import { mountCloseButton } from './closeButton.ts';
@@ -78,7 +81,8 @@ export type StartModel = {
 export type DetailCallbacks = {
   onStartOptions: (card: CardOptions) => void;
   /** The model picker's list (loaded once per panel session). */
-  loadModels: () => Promise<string[]>;
+  /** The model and agent lists of the start pickers. */
+  lists: StartLists;
   /** The Summarise button. */
   onSummarise: () => void;
   onMove: (to: Column) => void;
@@ -116,6 +120,8 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
   const shell = openModalShell({ label: initial.task.title, onDismiss: () => callbacks.onDismiss() });
   const { modal } = shell;
   const head = el('header', 'kb-modal-head');
+  // State, Type and Move to: above the task text, outside the collapsible sections.
+  const quick = el('div', 'kb-quick');
 
   // The sections stay in place across updates (their open state, a focused start option field and
   // the reading position survive a reload); their contents redraw.
@@ -144,7 +150,7 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
   const subList = el('div', 'kb-sheet-part');
   const addBox = el('div', 'kb-sheet-part kb-add-sub');
   subSec.content.append(subList, addBox);
-  modal.append(head, summarySec.box, taskSec.box, subSec.box, settingsSec.box);
+  modal.append(head, quick, summarySec.box, taskSec.box, subSec.box, settingsSec.box);
 
   let disposers: Array<() => void> = [];
   const clear = (): void => {
@@ -180,7 +186,7 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
         card: start.card,
         inherited: start.inherited,
         summaryLanguage: start.summaryLanguage,
-        loadModels: callbacks.loadModels,
+        lists: callbacks.lists,
         onChange: callbacks.onStartOptions,
       }),
     );
@@ -296,13 +302,30 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
     );
   };
 
-  const drawSettings = (m: DetailModel): void => {
+  /**
+   * The State / Type / Move to row redraws only when what it shows changes (like the Task section),
+   * so an open select or a focused button survives a poll. Its handlers capture the task's id,
+   * state and type, which are part of the key.
+   */
+  let quickKey: string | null = null;
+  let quickDisposers: Array<() => void> = [];
+  const clearQuick = (): void => {
+    for (const d of quickDisposers) d();
+    quickDisposers = [];
+    quick.replaceChildren();
+  };
+  const drawQuick = (m: DetailModel): void => {
     const { task } = m;
-    const fields = el('div', 'kb-fields');
+    const key = JSON.stringify([task.id, task.state, task.type, m.types, m.labels, m.moves, m.busy]);
+    if (key === quickKey) return;
+    quickKey = key;
+    clearQuick();
+    const disposers = quickDisposers;
+    const fields = el('div', 'kb-quick-fields');
     const stateSlot = el('div', 'kb-field');
     const typeSlot = el('div', 'kb-field');
     fields.append(stateSlot, typeSlot);
-    settingsTop.append(fields);
+    quick.append(fields);
     disposers.push(
       mountSelect(stateSlot, {
         label: 'State',
@@ -313,7 +336,11 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
         }),
         disabled: m.busy,
         onChange: (id) => {
-          if (id !== task.state) callbacks.onState(id as TaskState);
+          if (id === task.state) return;
+          // The change may be cancelled or skipped (Close …? dialog, beforeMove): the next update
+          // must redraw so the select snaps back to the task's real state.
+          quickKey = null;
+          callbacks.onState(id as TaskState);
         },
       }).dispose,
     );
@@ -326,22 +353,32 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
         options: types.map((t) => ({ id: t, label: t })),
         disabled: m.busy,
         onChange: (id) => {
-          if (id !== task.type) callbacks.onType(id);
+          if (id === task.type) return;
+          quickKey = null; // as for State: a skipped or failed change must snap back on the next update
+          callbacks.onType(id);
         },
       }).dispose,
     );
 
     if (m.moves.length > 0) {
-      const moveRow = el('div', 'kb-actions kb-actions-start');
+      const moveRow = el('div', 'kb-actions kb-actions-start kb-quick-moves');
+      moveRow.setAttribute('role', 'group');
+      moveRow.setAttribute('aria-label', 'Move to');
       moveRow.append(el('span', 'kb-actions-label', 'Move to'));
       for (const { to, label } of m.moves) {
         disposers.push(
           mountButton(moveRow, { label, variant: 'outline', size: 'xs', disabled: m.busy, onClick: () => callbacks.onMove(to) }).dispose,
         );
       }
-      settingsTop.append(moveRow);
+      quick.append(moveRow);
     }
+  };
 
+  const drawSettings = (m: DetailModel): void => {
+    const { task } = m;
+    // Left with nothing (a local task without start options, e.g. done), the section hides.
+    // `start` is null for a done task or while no project settings are loaded (edit.ts detailModel).
+    settingsSec.box.hidden = task.url === null && m.start === null;
     const url = task.url;
     if (url !== null) {
       const actions = el('div', 'kb-actions kb-actions-start');
@@ -381,6 +418,7 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
     modal.setAttribute('aria-label', m.task.title);
     modal.setAttribute('aria-busy', String(m.busy));
     drawHead(m);
+    drawQuick(m);
     drawSummary(m);
     drawTask(m);
     drawChildren(m);
@@ -395,6 +433,7 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
     dispose: () => {
       clear();
       clearStart();
+      clearQuick();
       addHandle?.dispose();
       shell.dispose();
     },

@@ -3,10 +3,12 @@
 // drags of it are ignored), reports a failure in a toast and reloads the board afterwards.
 import type { HostClient } from '@openchamber/sdk';
 import type { NewTask, Task, TaskState } from '../core/types.ts';
-import { canAddSubtask, createWithSubtasks, parentChoices, partialMessage, subtasksToCreate, toNewTask, type AddDraft } from './addTask.ts';
+import { MODEL_PICK, canAddSubtask, createWithSubtasks, parentChoices, partialMessage, subtasksToCreate, toNewTask, type AddDraft } from './addTask.ts';
 import type { Api } from './api.ts';
 import type { Preset } from './presets.ts';
+import type { StartLists } from './models.ts';
 import { resolveStart, type CardOptions, type Sections, type Settings } from './settings.ts';
+import { askedOf, type Suggester } from './suggest.ts';
 import { COLUMNS, type Column, type SessionLookup, type SessionTarget } from './columns.ts';
 import { openChildren, planMove, taskTypes, type Move } from './moves.ts';
 import { openAddModal, type AddModalStart, type AddResult } from './ui/addModal.ts';
@@ -32,7 +34,8 @@ export type EditorDeps = {
   /** Dropping on In Progress (also "Move to In Progress" in the detail): starts an agent. */
   onStart: (task: Task) => void;
   /** The model picker's list (loaded once per panel session). */
-  loadModels: () => Promise<string[]>;
+  /** The model and agent lists of the start pickers. */
+  lists: StartLists;
   /** Before a move that writes (Backlog, Ready, Done): e.g. leave the start queue. False cancels the move. */
   beforeMove?: (task: Task) => Promise<boolean>;
   /** A move to Backlog or Ready was written, before the reload (e.g. detach the card from its session). */
@@ -66,6 +69,12 @@ export type EditorDeps = {
     /** The card's summary language was edited (undefined: back to the settings). */
     onLanguage: (projectId: string, taskId: string, language: string | undefined) => void;
   };
+  /** Type and state of a task added here, suggested by the Small Model (suggest.ts). */
+  suggest: {
+    /** The global "Suggest type and state for new tasks" setting. */
+    enabled: () => boolean;
+    suggester: Suggester;
+  };
 };
 
 const errorText = (e: unknown): string => (e instanceof Error ? e.message : String(e));
@@ -89,6 +98,8 @@ export const createEditor = (deps: EditorDeps) => {
   const moving = new Set<string>();
   let detail: { id: string; handle: DetailHandle } | null = null;
   let addModal: { setStart: (start: AddModalStart | null) => void; dispose: () => void } | null = null;
+  /** What the open Add task form offers: the types, and whether "Let the model pick" is there. */
+  let addOffer: { types: string[]; suggest: boolean } = { types: [], suggest: false };
   /** The open modal's stored start options; version bumps when they are (re)loaded. */
   let card: { taskId: string; projectId: string; options: CardOptions; version: number } | null = null;
   /** The open modal's lookup of a session known only from a link (SessionTarget `check`). */
@@ -312,7 +323,7 @@ export const createEditor = (deps: EditorDeps) => {
         deps.archive.unarchive(id);
         refreshDetail();
       },
-      loadModels: deps.loadModels,
+      lists: deps.lists,
       onStartOptions: (options) => {
         if (card === null || card.taskId !== id) return;
         const languageChanged = options.summaryLanguage !== card.options.summaryLanguage;
@@ -385,6 +396,19 @@ export const createEditor = (deps: EditorDeps) => {
       return { kind: 'error', message: errorText(e) };
     }
     const { task, failed } = result;
+    // Fields left on "Let the model pick": asked once the task (and its sub-tasks) exist. Only this
+    // task: its sub-tasks stay as created. The api is bound to the task's project directory.
+    const asked = addOffer.suggest ? askedOf(draft, addOffer.types) : { type: false, state: false };
+    if (asked.type || asked.state) {
+      void deps.suggest.suggester.suggest({
+        taskId: task.id,
+        title: draft.title.trim(),
+        body: draft.body.trim(),
+        types: addOffer.types,
+        asked,
+        target: { get: api.get, setType: api.setType, setState: api.setState },
+      });
+    }
     if (failed.length === 0) {
       closeAdd();
       const n = subtasks.length;
@@ -412,15 +436,18 @@ export const createEditor = (deps: EditorDeps) => {
   const showAdd = (): void => {
     if (addModal !== null) return;
     const tasks = deps.tasks();
+    const types = taskTypes(tasks, deps.baseTypes()).filter((t) => t !== MODEL_PICK);
+    addOffer = { types, suggest: deps.suggest.enabled() && deps.suggest.suggester.available() };
     addModal = openAddModal(
       {
         tracker: deps.tracker(),
-        types: taskTypes(tasks, deps.baseTypes()),
+        types,
+        suggest: addOffer.suggest,
         parents: parentChoices(tasks),
         tasks,
         labels: deps.labels(),
         start: addStart(),
-        loadModels: deps.loadModels,
+        lists: deps.lists,
       },
       { onSubmit: submitAdd, onDismiss: closeAdd },
     );

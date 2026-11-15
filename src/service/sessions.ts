@@ -20,6 +20,8 @@ export type SessionHost = {
     title?: string;
     model?: string;
     agent?: string;
+    /** The thinking level (OpenCode variant) of the model. */
+    variant?: string;
   }) => Promise<{ sessionId: string; directory: string | null }>;
   /**
    * `idle`, `busy`, or `waiting` when only the user can move it on. Throws a 404-status error
@@ -35,6 +37,7 @@ export type StartInput = {
   prompt: string;
   model: string | null;
   agent: string | null;
+  variant: string | null;
   location: 'worktree' | 'project';
 };
 
@@ -229,6 +232,7 @@ export const startSession = async (
       title: input.title,
       ...(input.model !== null ? { model: input.model } : {}),
       ...(input.agent !== null ? { agent: input.agent } : {}),
+      ...(input.variant !== null ? { variant: input.variant } : {}),
     });
   } catch (e) {
     const kept =

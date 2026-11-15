@@ -3,6 +3,7 @@
 import type { HostClient } from '@openchamber/sdk';
 import type { LinkStatus, QueueEntry } from '../core/queue.ts';
 import type { NewTask, Task, TaskState } from '../core/types.ts';
+import type { AgentsAnswer, ModelsAnswer } from './models.ts';
 
 /** `/links/list` reports a failed status lookup as `unknown`. */
 export type LinkRecord = { taskId: string; sessionId: string; directory: string; createdAt: number; status: Exclude<LinkStatus, 'error'> };
@@ -72,13 +73,14 @@ export const createApi = (host: HostClient, directory: string) => {
     close: (id: string, withChildren = false) =>
       call<{ tasks: Task[] }>('POST', '/tasks/close', { id, withChildren }).then((r) => r.tasks),
     cliPath: () => call<{ path: string }>('GET', '/cli').then((r) => r.path),
-    /** Path B: the service makes the worktree (if asked) and starts the session with this model/agent. */
+    /** Path B: the service makes the worktree (if asked) and starts the session with this model, agent and thinking level. */
     startSession: (input: {
       taskId: string;
       title: string;
       prompt: string;
       model: string | null;
       agent: string | null;
+      variant: string | null;
       location: 'worktree' | 'project';
     }) => call<{ sessionId: string; directory: string; worktree: string | null; linkError?: string }>('POST', '/sessions/start', input),
     /** Sessions linked to this project's tasks (path B, and path A the panel recorded), with their live status. */
@@ -86,9 +88,11 @@ export const createApi = (host: HostClient, directory: string) => {
     /** Records a session the panel started (path A), so the queue counts it while it runs. */
     addLink: (taskId: string, sessionId: string, sessionDirectory: string | null) =>
       call<Record<string, never>>('POST', '/links/add', { taskId, sessionId, sessionDirectory }).then(() => undefined),
-    /** `opencode models` (cached by the service); a failure comes back as `{ models: [], error }`. */
-    listModels: () => call<{ models: string[]; error?: string }>('POST', '/models/list'),
-    /** Which of Matt Pocock's skills are installed for this project, and each one's SKILL.md (cached by the service). */
+    /** The project's models with names and thinking levels (cached by the service); a failure comes back as `{ models: [], error }`. */
+    listModels: () => call<ModelsAnswer>('POST', '/models/list'),
+    /** The project's session agents (cached by the service); a failure comes back as `{ agents: [], error }`. */
+    listAgents: () => call<AgentsAnswer>('POST', '/agents/list'),
+    /** Which of the known skills (Matt Pocock's, Superpowers) are installed for this project, and each one's SKILL.md (cached by the service). */
     detectSkills: () => call<{ found: string[]; paths: Record<string, string> }>('POST', '/skills/detect'),
     listQueue: () => call<{ queue: QueueEntry[] }>('POST', '/queue/list').then((r) => r.queue),
     /** Idempotent per task; `maxParallel` is stored so the service drains with the same limit. */

@@ -3,7 +3,7 @@
 A Kanban board for [OpenChamber](https://github.com/openchamber/openchamber) over your project's own task files. It reads and writes the format used by Matt Pocock's agent skills: local Markdown files in `.scratch/`, or GitHub Issues. You and your agents work on the same tasks.
 
 - One source of truth per project: the tracker. The board keeps no task data of its own.
-- Drag a card to **In Progress** and an agent session starts with the card's preset, model and location. No dialog unless you want one.
+- Drag a card to **In Progress** and an agent session starts with the card's preset, model, thinking level, agent and location. No dialog unless you want one.
 - Parents (features) start one orchestrator session that works through their sub-tasks.
 - A limit on agents running at once, with a queue that keeps draining while the board is closed.
 - A short personal summary at the top of each card, in your language (default Polish).
@@ -17,7 +17,7 @@ Not taken yet: the extension has to be running in OpenChamber. To do, saved in [
 
 - [ ] `rail-icon.png`: the **Kanban Board** icon in the side rail
 - [ ] `board.png`: the board with cards in every column
-- [ ] `card-detail.png`: the task modal: summary, the task as formatted markdown, Settings collapsed, **Open session** at the top
+- [ ] `card-detail.png`: the task modal: state, type and Move to under the header, summary, the task as formatted markdown, Settings collapsed, **Open session** at the top
 - [ ] `settings.png`: the Settings sheet
 - [ ] `wizard.png`: the setup wizard (Local or GitHub)
 
@@ -51,7 +51,7 @@ OpenChamber asks you to approve the permissions below. The board opens from the 
 | `prompt` | Starts an agent session from a card (path A, see [Starting agents](#starting-agents)). |
 | `model` | Writes the card summaries with your model (`generate`). |
 | Service (`service/main.js`, runs on your machine) | Reads and writes the project's tracker files: `docs/agents/issue-tracker.md` and `.scratch/**`. Keeps its own files in `~/.icf-kanban/`: `links.json` (which session works on which card) and `queue.json` (the start queue). |
-| Service programs: `git`, `gh`, `opencode` | `git remote -v` to suggest GitHub in the wizard (and to refuse GitHub setup without a github.com remote); `git worktree add` for path B starts, which creates a `<parent>/<repo>-worktrees/` folder next to the project and `icf/*` branches in the repository (a start that fails removes its worktree and branch again with `git worktree remove` and `git branch -D`). `gh` for everything on GitHub Issues: issues, labels, sub-issues, dependencies. `opencode models` (read only) to list the models the model pickers offer. |
+| Service programs: `git`, `gh`, `opencode` | `git remote -v` to suggest GitHub in the wizard (and to refuse GitHub setup without a github.com remote); `git worktree add` for path B starts, which creates a `<parent>/<repo>-worktrees/` folder next to the project and `icf/*` branches in the repository (a start that fails removes its worktree and branch again with `git worktree remove` and `git branch -D`). `gh` for everything on GitHub Issues: issues, labels, sub-issues, dependencies. `opencode api GET /api/model` and `GET /api/agent` (read only; `opencode models` as a fallback) to list the models, thinking levels and agents the pickers offer. |
 | Session control (`sessionControl`) | The service starts sessions itself (path B) and reads their status, also while the board is closed. |
 | Session events (`turn-finished`, `turn-failed`) | When a session finishes or fails a turn, the service starts the next queued card. |
 | Instructions | One paragraph added to every agent session: where the `task-board` CLI is and its main commands. |
@@ -84,7 +84,7 @@ Types: `bug` and `enhancement` (a feature), plus your own (`chore` and `research
 - `ready-for-human` and `wontfix` show as badges on the card in Backlog.
 - A claimed ticket (`Status: claimed` locally, an assignee on GitHub) stays `ready-for-agent`.
 - To start a Done card, move it back to Backlog or Ready first.
-- To close a task, drag it to Done or use **Move to → Done** in its modal's Settings (the × at the top right only closes the modal, as does Escape).
+- To close a task, drag it to Done or use **Move to → Done** under its modal's header (the × at the top right only closes the modal, as does Escape).
 - A drop on Backlog or Ready changes one line of the task file (local) or swaps the state label (GitHub). The rest of the file is left as it is.
 - Dragging a card out of In Progress or Review to Backlog or Ready detaches it from its session: the card follows its state again, and the session keeps running (open it from the session list). Starting the card again later links it to the new session.
 
@@ -100,25 +100,32 @@ Types: `bug` and `enhancement` (a feature), plus your own (`chore` and `research
 
 **Add task** in the toolbar opens a modal with everything a task can carry:
 
-- **Title** (required), **Type**, **State** (`needs-triage` by default; the open states only) and **Parent** (none, or an open parent). Locally, no parent creates a feature (`.scratch/<feature>/spec.md`); a parent creates a ticket under it.
+- **Title** (required), **Type**, **State** (the open states only) and **Parent** (none, or an open parent). Locally, no parent creates a feature (`.scratch/<feature>/spec.md`); a parent creates a ticket under it.
 - **Blocked by**: tick the tasks it waits for. Locally only open tickets of the chosen feature are offered (the format resolves blockers within a feature), so a new feature takes none; on GitHub any open issue except the chosen parent. A filter appears when the list is long.
 - **Description**: markdown.
-- **Start options**: preset, model, agent, location and summary language for this card, each showing what it would inherit. They are stored with the card (`card:<projectId>:<taskId>`) as soon as the task exists, as if set in its modal. They appear once the project's settings have loaded.
+- **Start options**: preset, location, model, thinking, agent and summary language for this card, each showing what it would inherit. They are stored with the card (`card:<projectId>:<taskId>`) as soon as the task exists, as if set in its modal. They appear once the project's settings have loaded.
 - **Sub-tasks**: rows of titles (Enter adds the next row), created in order under the new task right after it: tickets of the new feature locally, sub-issues on GitHub. Locally the list is hidden when a parent is chosen, because a ticket cannot have sub-tasks.
 
 The service's error shows inside the modal and nothing is lost. If the task was created but some sub-tasks were not, the modal names the ones that failed (with the reason) and offers only Close; add them later from the task's **Sub-tasks** section. The board reloads once at the end.
 
 Closing a form you have filled in (Escape, a click beside it, × or Cancel) first asks **Discard this task?**; an untouched form closes at once.
 
+### Type and state suggested by your Small Model
+
+**Type** and **State** start on **Let the model pick**. A field left there is filled in by your Small Model (OpenChamber's `host.generate`, `model` permission; extensions cannot reach OpenChamber's decision model): the task is created as `needs-triage` with no type, then the board sends the title and description once, as data, asking for one JSON object `{"type", "state"}`: a type from the board's types and one of `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`. An answer that is anything else (prose around it, another value, an extra key) is ignored whole. Pick a type, **No type** or a state yourself and the model leaves that field alone.
+
+Right before writing, the board reads the task again and only sets a field the task still has as created (no type; `needs-triage`): if you changed it meanwhile (or are moving the card just then), yours stays. Sub-tasks created in the same form stay as created, and tasks made elsewhere (the CLI, agents, GitHub) are never touched. The request shares the summaries' limit (two model requests at a time from the panel) and is not cached. If no Small Model is set, the permission is missing, or the answer is unusable, the fields keep their defaults and one quiet notice per panel session says so. Suggestions and summaries share what is known about the model: once either finds it missing (or not granted) there is one notice for both, automatic summaries stop and the form stops offering **Let the model pick** until a model answers again (press **Summarise** in a task after choosing one) or the panel reopens. An answer that arrives after the panel was closed is dropped, since the task may have changed by then. **Settings → Global → Suggest type and state for new tasks** (on by default, for every project) turns it off; the form then starts on `enhancement` (when the board has it) and `needs-triage`, as before.
+
 ## The task modal
 
 A click on any card (or Enter on a focused card) opens the task in a modal, in every column; a click never jumps to a session. Reading comes first:
 
 - **Header**: title, id, state and type badges and the × close. **Open session** opens the task's agent session (running, waiting or finished) when it has one that is not archived; **Session archived** says that its only session was archived; **Session not listed in OpenChamber** that the board knows a session for it that no project lists (it is never opened). While the board is open, the rest of the page is inactive: Tab stays in the modal.
+- **State, Type and Move to**: a compact row right under the header, always shown (not a section): the state and type selects and the **Move to** buttons (the keyboard path for drag and drop; **Done** asks about open sub-tasks). The selects sit side by side and wrap under each other in a narrow rail panel.
 - **Summary**: the personal summary (see [Summaries](#summaries)), or a **Summarise** button.
 - **Task**: the full body as formatted markdown: headings, lists, task-list checkboxes (read-only), code, quotes, tables, links. Raw HTML in a body is shown as text; only `http` and `https` links are links, opened in your browser; images are not loaded but shown as links.
 - **Sub-tasks**: the children with their states (a click opens that task), and **Add sub-task** (a title and an optional type; Enter adds). Locally it is offered on open features (`spec.md`), since a ticket cannot have tickets; on GitHub on any open issue, which then becomes a parent.
-- **Settings**, collapsed by default: state and type, **Move to**, **Open on GitHub**, and the card's start options.
+- **Settings**, collapsed by default: **Open on GitHub** and the card's start options. It is hidden when it would be empty (a local task with no start options, such as a done one).
 
 Sections fold open and shut; which ones are open is remembered for every task in the extension's storage (key `detail-sections`, the default instance storage kept on the connected OpenChamber server, so every browser connected to it shares it).
 
@@ -132,10 +139,10 @@ Dragging a parent to In Progress starts one orchestrator session with the **Brea
 
 ## Starting agents
 
-A card starts with its **preset**, **model**, **agent** and **location** (a new worktree, the default, or the project folder). There are two ways the start happens:
+A card starts with its **preset**, **model**, **thinking** level, **agent** and **location** (a new worktree, the default, or the project folder). There are two ways the start happens:
 
-- **Path A** (a card with no model and no agent set): the board calls OpenChamber's own start. OpenChamber makes the worktree (when the location is a new worktree), the session is linked to the card, and it runs on the model and agent currently selected in your composer.
-- **Path B** (a card with a model or agent set, and every queued card the service starts; also a task whose id is longer than 128 characters, too long to link to the session the path A way): when the location is a new worktree, the service creates it itself with `git worktree add -b icf/<slug> <parent>/<repo>-worktrees/<slug>` (with the project folder it makes none); it then starts the session with that model and agent, and records the link in `~/.icf-kanban/links.json`. If the session cannot be started, the new worktree and branch are removed again.
+- **Path A** (no model, thinking level or agent set, on the card or in the settings): the board calls OpenChamber's own start. OpenChamber makes the worktree (when the location is a new worktree), the session is linked to the card, and it runs on the model, thinking level and agent currently selected in your composer. That is what the pickers' **Default — OpenChamber's current selection** means.
+- **Path B** (any of model, thinking level or agent set, and every queued card the service starts; also a task whose id is longer than 128 characters, too long to link to the session the path A way): when the location is a new worktree, the service creates it itself with `git worktree add -b icf/<slug> <parent>/<repo>-worktrees/<slug>` (with the project folder it makes none); it then starts the session with that model, thinking level (OpenCode's `variant`) and agent, and records the link in `~/.icf-kanban/links.json`. If the session cannot be started, the new worktree and branch are removed again.
 
 The first message tells the agent how to move the task with the `task-board` CLI, always with `--dir <project root>`: the agent usually works in its own worktree, where the CLI would otherwise not find the tracker (GitHub) or would write to a copy of `.scratch/` the board never reads (local). A ticket started from the board does not need to be claimed; an orchestrator claims each sub-task it takes, which needs the sub-task to be `ready-for-agent`.
 
@@ -143,29 +150,31 @@ With **Start at once** off, dropping a card on In Progress opens a small form to
 
 ## Presets
 
-A preset is a block of instructions added to the agent's first message. Built in:
+A preset is a block of instructions added to the agent's first message; a **preset set** is a named list of presets. Three sets are built in, each with the same seven presets (same ids, so a card's choice and the preset per type work in any set):
 
-| Preset | Use | With Matt Pocock's skills |
-|---|---|---|
-| Plan | Plan first; write no code until you approve the plan. | `/grill-with-docs` to sharpen the task; for a multi-session build `/to-spec` and `/to-tickets` drafts, published with `task-board create` as a feature with sub-tasks; the feature id is noted on the task, which is set done if the feature replaces it. |
-| Prototype | A quick, throwaway prototype that answers the task's question. | `/prototype` on a `prototype/<name>` branch made in the session's worktree; the answer is noted on the task. |
-| Implement | Implement with tests; ask when a decision is unclear. The default. | `/implement`, which drives `/tdd` and closes with `/code-review`. |
-| Implement without questions | The same, choosing the simplest option instead of asking, listing every assumption. | `/implement`, deciding the skills' questions itself and listing every assumption. |
-| Break down and orchestrate | Split into tickets, hand them to subagents, work until all are done. The default for parents. | `/to-tickets` drafts published with `task-board create --parent` if there are no sub-tasks, then `/implement-spec` over them as a task graph (`/tdd` per ticket, one `/code-review`); `claim` and `state … done` through the CLI. |
-| Diagnose | Reproduce the bug, find the cause, fix it with a regression test. | `/diagnosing-bugs`, then the fix through `/implement` (`/tdd`, `/code-review`); no correct seam for the test is reported as the finding; debug logs and throwaway code removed. The default for bugs when its skills are installed. |
-| Triage | Evaluate a raw task: reproduce, decide its state, write a brief or questions. No code. | `/triage`, the brief or notes on the task, then `task-board state` (wontfix too); no direct relabel or close. |
+| Preset | Plain | Matt Pocock's skills | Superpowers |
+|---|---|---|---|
+| Plan | Plan first; write no code until you approve the plan. | `/grill-with-docs` to sharpen the task; for a multi-session build `/to-spec` and `/to-tickets` drafts, published with `task-board create` as a feature with sub-tasks; the feature id is noted on the task, which is set done if the feature replaces it. | `brainstorming` (one question at a time, the approaches, an approved design doc), then `writing-plans`; stops at the plan's handoff and publishes the design as a feature and each plan task as a ticket with `task-board create`; the feature id, design and plan are noted on the task. |
+| Prototype | A quick, throwaway prototype that answers the task's question. | `/prototype` on a `prototype/<name>` branch made in the session's worktree; the answer is noted on the task. | `brainstorming` only to sharpen the one question (no design doc or plan), throwaway code on a `prototype/<name>` branch; the answer is noted on the task. |
+| Implement | Implement with tests; ask when a decision is unclear. The default. | `/implement`, which drives `/tdd` and closes with `/code-review`. | `test-driven-development`, then `verification-before-completion` and `requesting-code-review` of the diff since the start commit; asks the user when something unclear would change what gets built. |
+| Implement without questions | The same, choosing the simplest option instead of asking, listing every assumption. | `/implement`, deciding the skills' questions itself and listing every assumption. | The same skills, no `brainstorming`; unclear points decided and listed as assumptions, review findings acted on without asking. |
+| Break down and orchestrate | Split into tickets, hand them to subagents, work until all are done. The default for parents. | `/to-tickets` drafts published with `task-board create --parent` if there are no sub-tasks, then `/implement-spec` over them as a task graph (`/tdd` per ticket, one `/code-review`); `claim` and `state … done` through the CLI. | `writing-plans` if there are no sub-tasks (each plan task published with `task-board create --parent`), then `subagent-driven-development` over the sub-tasks on the session's branch (with existing sub-tasks and no plan file, it first writes one under `docs/superpowers/plans/` from the sub-tasks, one plan task each); `claim` and `state … done` through the CLI. |
+| Diagnose | Reproduce the bug, find the cause, fix it with a regression test. The default for bugs. | `/diagnosing-bugs`, then the fix through `/implement` (`/tdd`, `/code-review`); no correct seam for the test is reported as the finding; debug logs and throwaway code removed. | `systematic-debugging` to the root cause, the fix through `test-driven-development` (the repro as a regression test), `verification-before-completion`; three failed fixes stop and go to the user. |
+| Triage | Evaluate a raw task: reproduce, decide its state, write a brief or questions. No code. | `/triage`, the brief or notes on the task, then `task-board state` (wontfix too); no direct relabel or close. | The plain text. |
 
-**Matt Pocock's skills.** When [Matt Pocock's skills](https://github.com/mattpocock/skills) are installed, a built-in tells the agent to run them instead of its plain instructions, but only if **every** skill it names is installed, plus the ones those load themselves (Implement needs `implement`, `tdd` and `code-review`; Plan and Triage also need `grilling` and `domain-modeling`). The service looks for `<name>/SKILL.md` in `~/.config/opencode/skills`, `~/.claude/skills`, `~/.agents/skills` and the project's `.opencode/skills` and `.claude/skills` (read only, the first folder in that order wins, cached 5 minutes per project; it never reads `~/.config/openchamber`). The prompt lists the SKILL.md of each skill the preset uses, for a harness that cannot load a skill by name.
+**Which set.** Settings → Global → **Preset set** picks it for every project, and Settings → This project → **Preset set** for one project. Without a choice the set follows what is installed: Matt Pocock's skills when all of them are found, else Superpowers when all of its skills are found, else Plain. A set whose skills are missing can still be chosen: it is marked "(skills missing)", the line under the picker names the missing ones, and sessions are still told to run them. A chosen set that was deleted is skipped: a project's choice falls back to the global one, the global one to that default. This replaces 0.2's "Use Matt Pocock's skills when installed" switch: switched off, it reads as the Plain set.
 
-The agent usually runs in a fresh worktree, where `docs/agents/` and `.scratch/` are missing or a copy the board never reads. So the skills text tells it that the tracker lives at the project root (`<root>/docs/agents/issue-tracker.md`), never to run `/setup-matt-pocock-skills`, and that the skills and the `task-board` CLI write the same format: every tracker write goes through the CLI with `--dir` (`create` for new issues, `state`, `claim`), and a note on the task goes to the root's issue file (local) or `gh issue comment` (GitHub), so the board follows.
+**Where skills are found.** The service looks for `<name>/SKILL.md` in `~/.config/opencode/skills`, `~/.claude/skills`, `~/.agents/skills`, the project's `.opencode/skills` and `.claude/skills`, then OpenCode's plugin cache `~/.cache/opencode/npm/*/*/node_modules/superpowers/skills` (where the Superpowers plugin keeps its skills; newest version folder first). It only reads, the first folder in that order wins, results are cached 5 minutes per project, and it never reads `~/.config/openchamber`. The board checks when a project opens. Matt's set needs `grill-with-docs`, `grilling`, `domain-modeling`, `to-spec`, `to-tickets`, `prototype`, `implement`, `implement-spec`, `tdd`, `code-review`, `diagnosing-bugs` and `triage`; Superpowers needs `brainstorming`, `writing-plans`, `test-driven-development`, `verification-before-completion`, `requesting-code-review`, `subagent-driven-development` and `systematic-debugging`. The prompt lists the SKILL.md of each skill the preset uses, for a harness that cannot load a skill by name.
 
-Turn it off with **Settings → Global → Use Matt Pocock's skills when installed** (on by default); that section and Settings → Presets list which skills were found, and each built-in says which text it runs with. The board checks when a project opens.
+The agent usually runs in a fresh worktree, where `docs/agents/` and `.scratch/` are missing or a copy the board never reads. So every skills text tells it that the tracker lives at the project root (`<root>/docs/agents/issue-tracker.md`), never to run a setup skill (such as `/setup-matt-pocock-skills`), and to make every tracker write through the `task-board` CLI with `--dir` (`create` for new tasks, `state`, `claim`); a note on the task goes to the root's issue file (local) or `gh issue comment` (GitHub), so the board follows. The Superpowers texts also say to work in the worktree the board made for the session, if any (skip `using-git-worktrees`, do not create another; on main/master the skill's rule applies: ask before building there) and not to run `finishing-a-development-branch` or merge, push or open a pull request: what happens to the branch is your call.
 
 A preset text (built-in or your own) may use `{cli}` (the `task-board` command with `--dir`), `{root}` (the project root), `{tracker}` (the root's `docs/agents/issue-tracker.md`), `{id}` (the task) and `{note}` (how to add a note to the task); they are filled in when the session starts, each path and id quoted for the shell when it holds a space or a quote.
 
-In **Settings → Presets** you can edit the built-in texts (**Reset** brings the shipped text back) and add, rename and delete your own. An edited built-in keeps your text whether or not the skills are installed. A card whose preset was deleted falls back to Implement.
+**Settings → Presets** shows one set at a time (the **Set** picker; it opens on the project's set). You can edit any preset of any set (**Reset** brings a built-in's shipped text back), add, rename and delete your own presets in a set, and add your own sets with **New set**: a copy of the shown set (its texts as they read now, edits included; each preset keeps the skills it runs, so its session is still told where each SKILL.md is and the line under the picker checks those skills) or an empty one. Your own sets can be renamed (**Set name**) and deleted (**Delete set**); every preset in them is yours to rename and delete. A card whose preset is not in the project's set (deleted, or a set that lacks it) starts with the set's Implement, or Plain's Implement when the set has none.
 
-Which preset a card gets: the card's own choice, else Break down and orchestrate for a parent, else the preset for its type (`enhancement` → Implement, `bug` → Diagnose when Matt's skills are on and Diagnose's skills are installed, else Implement, `research` → Plan), else the default preset. A preset you set for `bug` yourself always wins.
+Edits and your own sets are kept in the extension's storage under `presetSets`. 0.2's `presets` value is moved there once: its edits and own presets go to every built-in set (Matt Pocock's skills, Superpowers and Plain), since in 0.2 they applied whichever text was in use. So whichever set a project uses — the default still follows what is installed; no set is chosen for you — a session runs the text you wrote and your own presets are there.
+
+Which preset a card gets: the card's own choice, else Break down and orchestrate for a parent, else the preset for its type (`enhancement` → Implement, `bug` → Diagnose, `research` → Plan), else the default preset; a preset the project's set does not have becomes Implement. A preset you set for `bug` yourself always wins.
 
 ## Settings
 
@@ -173,11 +182,17 @@ Three layers, each overriding the one before, field by field:
 
 1. **Global** (Settings → Global): your defaults for every project.
 2. **This project** (Settings → This project): overrides for the open project; a field left at **Use global** inherits.
-3. **The card** (its modal, Settings → Start options): preset, location, model, agent and summary language for that card.
+3. **The card** (its modal, Settings → Start options): preset, location, model, thinking, agent and summary language for that card.
 
 All of them are per user and stored in the extension's storage.
 
-**Model** is picked from a list, not typed: the models `opencode models` reports for the project (fetched the first time a picker opens in that project, then kept for the panel session, one list per project; the service caches it for 10 minutes). Type to filter, arrows and Enter to pick. The first entry, **Default (…)**, means "not set here" and names what it falls back to; at the end that is your current selection in OpenChamber. A stored model that is no longer listed still shows, marked "not in the list". If the list cannot be loaded, the picker says why and tries again the next time it opens.
+**Model**, **Thinking** and **Agent** are picked from lists, not typed, in every place start options are set (the card, Add task, the start form, Settings → Global and This project). The lists are what OpenCode's server reports for the project (`opencode api GET /api/model` and `GET /api/agent`; when the model request fails, `opencode models`, which has no names or thinking levels). Each list is fetched the first time a picker needs it in that project, then kept for the panel session, one list per project; the service caches it for 10 minutes.
+
+- **Model** shows the models by name (the `provider/model` id beside it); type to filter by name or id, arrows and Enter to pick.
+- **Thinking** offers the chosen model's thinking levels (OpenCode's variants, e.g. low, high, max). It is disabled until a model is set here or inherited, for a model without levels, and when the levels are unknown (the `opencode models` fallback: "Thinking levels unavailable"). A layer (or card) that sets a model also owns the thinking level: its own, or none, never a level inherited from another model. Changing the model (or going back to the default, which brings the inherited model back) drops a level the model then in force does not offer, the start form clears such a stale level when it opens, and a level without any model is ignored. A level set on a card over an inherited model is checked again when the card starts: if that model is known not to offer it (the inherited model changed since), the session starts without it and a notice says so.
+- **Agent** offers the session agents (primary, not hidden, e.g. Build and Plan).
+
+The first entry of each, **Default (…)**, means "not set here" and names what it falls back to; when nothing is set anywhere it reads **Default — OpenChamber's current selection** (for Thinking with a model set: the model's default). A line under the start options says it: a set model, thinking level or agent makes the extension start the session itself (path B, its own worktree), none set leaves it to OpenChamber (path A). To use a model or agent for one project only, set it in **This project**. A stored value that is no longer listed still shows, marked "not in the list" (a thinking level the model lacks: "not offered by this model"). If a list cannot be loaded, the picker says why and tries again the next time it opens.
 
 | Setting | Default |
 |---|---|
@@ -185,14 +200,15 @@ All of them are per user and stored in the extension's storage.
 | Sessions at a time | 3 (1 to 10) |
 | Default preset | Implement |
 | Location | New worktree |
-| Model / Agent | your current model / agent |
-| Preset per type | `enhancement` → Implement, `bug` → Diagnose with Matt's skills (else Implement), `research` → Plan |
-| Use Matt Pocock's skills when installed (Global only) | on |
+| Model / Thinking / Agent | OpenChamber's current selection (path A) |
+| Preset set | Matt Pocock's skills if all are installed, else Superpowers if all are installed, else Plain |
+| Preset per type | `enhancement` → Implement, `bug` → Diagnose, `research` → Plan |
 | Hide sub-tasks | off |
 | Types | `enhancement`, `bug`, `chore`, `research` |
 | Summarise automatically | on |
 | Summary language | Polish |
 | Summary prompt | a built-in prompt (2 to 4 plain sentences); `{language}`, `{title}` and `{body}` are filled in |
+| Suggest type and state for new tasks (Global only) | on |
 
 ## Queue
 
@@ -202,7 +218,7 @@ The queue lives in `~/.icf-kanban/queue.json`. While the board is open it drains
 
 ## Summaries
 
-Each card can show a few plain sentences at the top, written by your model through OpenChamber (`model` permission). They are personal: stored in the extension's storage per user, never in the repository, and agents never see them. A summary is regenerated when the task's body, the language or the prompt changes. With **Summarise automatically** off, use the **Summarise** button in the task modal. The language can be set per card.
+Each card can show a few plain sentences at the top, written by your model through OpenChamber (`model` permission). They are personal: stored in the extension's storage per user, never in the repository, and agents never see them. A summary is regenerated when the task's body, the language or the prompt changes. With **Summarise automatically** off, use the **Summarise** button in the task modal. The language can be set per card. Without a Small Model (or the `model` permission) automatic summaries stop after the first try, with one notice shared with the type and state suggestions.
 
 ## Agent skills and the `task-board` CLI
 
@@ -251,9 +267,9 @@ Ids are paths locally (`.scratch/login/issues/01-empty-password.md`, `.scratch/l
 
 Found while building it (see [the session-start findings](docs/superpowers/specs/2026-11-15-session-start-findings.md)):
 
-- **Path A uses your current model.** OpenChamber's own start has no model or agent field: a card without a model or agent runs on whatever your composer has selected when it starts.
-- **Path B makes its own worktree.** A card with a model or agent set (and every card the service starts from the queue) whose location is a new worktree gets a worktree made with `git` under `<parent>/<repo>-worktrees/`, on a branch `icf/<slug>`, not by OpenChamber's Quick worktree. Such sessions may look different in the sidebar.
-- **With the board closed, the queue drains only by path B.** Queued cards then run with the model and agent stored on the card, or the session default when none is set.
+- **Path A uses your current model.** OpenChamber's own start has no model, thinking or agent field: a card with none of them set runs on whatever your composer has selected when it starts.
+- **Path B makes its own worktree.** A card with a model, thinking level or agent set (and every card the service starts from the queue) whose location is a new worktree gets a worktree made with `git` under `<parent>/<repo>-worktrees/`, on a branch `icf/<slug>`, not by OpenChamber's Quick worktree. Such sessions may look different in the sidebar.
+- **With the board closed, the queue drains only by path B.** Queued cards then run with the model, thinking level and agent they were queued with, or OpenCode's default when none is set.
 - Worktrees of started sessions are never merged or removed for you (only the worktree of a path B start that failed is removed).
 - The open live checks below have not been done yet.
 
@@ -272,6 +288,7 @@ Not done yet; each needs the extension installed in OpenChamber:
 9. Agent skills: an agent finds the CLI from the instructions and creates, claims and closes a task with the skills.
 10. The task modal: a Review card whose path B session was archived shows **Session archived** and opens nothing; **Open session** on a live path B session in a worktree opens that session.
 11. Archive done: the confirm counts the done tasks; after it Done is empty in both the rail panel and the full-screen page; **Show archived** and **Unarchive** work; reopening an archived task (CLI or GitHub) brings it back without a click.
+12. Type and state suggested: a task added with both on **Let the model pick** gets a type and state from the Small Model a moment later; one with a type picked keeps it; with no Small Model set, one notice and the form stops offering it.
 
 ## Development
 

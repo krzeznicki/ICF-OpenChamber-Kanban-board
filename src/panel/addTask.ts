@@ -10,12 +10,20 @@ import type { CardOptions } from './settings.ts';
 export type TrackerKind = 'local' | 'github';
 export type Choice = { id: string; label: string; hint?: string };
 
-/** The add form's values; '' means "none" for type and parent. */
+/**
+ * "Let the model pick" in the Type and State selects (suggest.ts): the task is created as
+ * needs-triage with no type, and the Small Model's suggestion fills in these fields afterwards.
+ * A type literally named ":model" is not offered in the add form, so the two never clash.
+ */
+export const MODEL_PICK = ':model';
+export type ModelPick = typeof MODEL_PICK;
+
+/** The add form's values; '' means "none" for type and parent, MODEL_PICK "let the model pick". */
 export type AddDraft = {
   title: string;
   type: string;
   parentId: string;
-  state: TaskState;
+  state: TaskState | ModelPick;
   blockedBy: string[];
   body: string;
   /** Raw sub-task rows as typed (empty rows are ignored). */
@@ -24,11 +32,12 @@ export type AddDraft = {
   start: CardOptions;
 };
 
-export const emptyDraft = (): AddDraft => ({
+/** `suggest`: Type and State start on "Let the model pick" (the setting is on and a model may answer). */
+export const emptyDraft = (suggest = false): AddDraft => ({
   title: '',
-  type: '',
+  type: suggest ? MODEL_PICK : '',
   parentId: '',
-  state: 'needs-triage',
+  state: suggest ? MODEL_PICK : 'needs-triage',
   blockedBy: [],
   body: '',
   subtasks: [],
@@ -91,15 +100,19 @@ export const draftKind = (d: AddDraft, tracker: TrackerKind): TaskKind => {
   return subtaskTitles(d.subtasks).length > 0 ? 'parent' : 'ticket';
 };
 
+/** The type the task is created with: none for "No type" and for "Let the model pick". */
+export const draftType = (d: Pick<AddDraft, 'type'>): string | null => (d.type === '' || d.type === MODEL_PICK ? null : d.type);
+
 export const validateDraft = (d: AddDraft): { title?: string } => (d.title.trim() === '' ? { title: 'A title is required' } : {});
 
 export const toNewTask = (d: AddDraft, tracker: TrackerKind): NewTask => {
   const body = d.body.trim();
   const blockers = tracker === 'local' && d.parentId === '' ? [] : d.blockedBy;
+  const type = draftType(d);
   return {
     title: d.title.trim(),
-    state: d.state,
-    ...(d.type !== '' ? { type: d.type } : {}),
+    state: d.state === MODEL_PICK ? 'needs-triage' : d.state,
+    ...(type !== null ? { type } : {}),
     ...(body !== '' ? { body } : {}),
     ...(d.parentId !== '' ? { parentId: d.parentId } : {}),
     ...(blockers.length > 0 ? { blockedBy: [...blockers] } : {}),

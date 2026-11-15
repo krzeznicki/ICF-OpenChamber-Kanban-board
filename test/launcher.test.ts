@@ -17,7 +17,7 @@ const task: Task = {
   updatedAt: 0,
   claimed: false,
 };
-const opts: StartOptions = { presetId: 'implement', model: null, agent: null, location: 'worktree' };
+const opts: StartOptions = { presetId: 'implement', model: null, agent: null, variant: null, location: 'worktree' };
 
 const setup = (over: Partial<LauncherDeps> = {}) => {
   const calls: Array<{ task: Task; opts: StartOptions; prompt: string }> = [];

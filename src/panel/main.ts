@@ -14,22 +14,25 @@ import { archivableIds, archivedShown, archiveTasks, archiveWriteJob, createArch
 import { ApiError, createApi, type Api, type ConfigResult, type ProjectConfig } from './api.ts';
 import { groupTasks, pruneArchived, resolveSession, sessionForTask, sessionTarget, type Column, type SessionLookup } from './columns.ts';
 import { createEditor, type Editor } from './edit.ts';
-import { listPresets, parseStoredPresets, type Preset, type StoredPresets } from './presets.ts';
+import { EMPTY_SETS, listPresets, type Preset, type StoredSets } from './presets.ts';
 import {
   createLatestSaver,
   createSettingsStore,
   DEFAULT_SECTIONS,
+  presetSetOf,
   resolveSettings,
-  skillUse,
   type Sections,
   type Settings,
   type SettingsLayer,
   STORAGE_KEYS,
+  suggestEnabled,
   withDetach,
 } from './settings.ts';
 import { defaultChoice, loadNotice, setupOutcome, type ApiFailure, type NoticeModel, type TrackerChoice } from './setup.ts';
-import { createModelLoader } from './models.ts';
+import { createAgentLoader, createModelLoader, type StartLists } from './models.ts';
 import { createStarter } from './starter.ts';
+import { MODEL_NOTICES, createLimiter, createModelAvailability } from './limiter.ts';
+import { createSuggester } from './suggest.ts';
 import { createSummaries } from './summaries.ts';
 import { createBoard, type Board } from './ui/board.ts';
 import { askChoice } from './ui/confirm.ts';
@@ -64,8 +67,9 @@ type State = {
   globalSettings: SettingsLayer;
   projectSettings: SettingsLayer;
   settingsFor: string | null;
-  presets: StoredPresets;
-  /** Matt Pocock's skills installed for `settingsFor` and their SKILL.md (POST /skills/detect); null when the check failed. */
+  /** The preset sets as stored (presets.ts). */
+  presets: StoredSets;
+  /** The known skills (Matt Pocock's, Superpowers) installed for `settingsFor` and their SKILL.md (POST /skills/detect); null when the check failed. */
   skills: { found: string[]; paths: Record<string, string> } | null;
   /** Cards the user dragged away from their sessions (columns.ts Detached); `detachedFor` is their project. */
   detached: Map<string, number>;
@@ -95,7 +99,7 @@ const state: State = {
   globalSettings: {},
   projectSettings: {},
   settingsFor: null,
-  presets: parseStoredPresets(undefined),
+  presets: EMPTY_SETS,
   skills: null,
   detached: new Map(),
   detachedFor: null,
@@ -137,7 +141,8 @@ let globalLoaded = false;
 
 const loadGlobalSettings = async (): Promise<void> => {
   try {
-    const [global, presets] = await Promise.all([store.loadGlobal(), store.loadPresets()]);
+    const presets = await store.loadPresets();
+    const global = await store.loadGlobal();
     state.globalSettings = global;
     state.presets = presets;
     globalLoaded = true;
@@ -164,11 +169,17 @@ let generation = 0;
 
 const project = (): GuestProject | null => state.projects.find((p) => p.id === state.projectId) ?? null;
 
-/** `opencode models` through the service, fetched the first time a model picker opens in a project, then kept per project directory. */
-const loadModels = createModelLoader(
-  (directory) => createApi(host, directory).listModels(),
-  () => project()?.directory ?? null,
-);
+/** The project's models and agents through the service, fetched the first time a picker needs them in a project, then kept per project directory. */
+const lists: StartLists = {
+  models: createModelLoader(
+    (directory) => createApi(host, directory).listModels(),
+    () => project()?.directory ?? null,
+  ),
+  agents: createAgentLoader(
+    (directory) => createApi(host, directory).listAgents(),
+    () => project()?.directory ?? null,
+  ),
+};
 
 /** The settings in force for the shown project (global only until its layer has loaded). */
 const settings = (): Settings => {
@@ -176,10 +187,11 @@ const settings = (): Settings => {
   return resolveSettings(state.globalSettings, loaded ? state.projectSettings : {}, loaded ? (state.skills?.found ?? []) : []);
 };
 
-/** The presets a start uses: built-ins switch to their skills text when the settings and the installed skills allow it. */
+/** The presets a start uses: those of the project's preset set (settings presetSet), with each skill's SKILL.md. */
 const presets = (): Preset[] => {
   const skills = state.settingsFor === state.projectId ? state.skills : null;
-  return listPresets(state.presets, { ...skillUse(settings(), skills?.found ?? []), paths: skills?.paths ?? {} });
+  const loaded = state.settingsFor !== null && state.settingsFor === state.projectId;
+  return listPresets(state.presets, presetSetOf(state.globalSettings, loaded ? state.projectSettings : {}, state.presets, skills?.found ?? []), skills?.paths ?? {});
 };
 
 /** After any settings change: the hide switch follows, the board and an open detail redraw. */
@@ -197,7 +209,7 @@ const applySettings = (): void => {
   summarySettingsChanged();
 };
 
-/** Matt Pocock's skills for the project, or null when the service could not tell. */
+/** The known skills installed for the project, or null when the service could not tell. */
 const detectSkills = async (id: string): Promise<State['skills']> => {
   const p = state.projects.find((x) => x.id === id);
   if (p === undefined) return null;
@@ -277,7 +289,7 @@ const showSettings = (): void => {
         editor.refresh();
       },
       onDismiss: closeSettings,
-      loadModels,
+      lists,
     },
   );
 };
@@ -543,8 +555,19 @@ const summaryChanged = (): void => {
   }, 50);
 };
 
+/** One generate limit for the panel: summaries and type/state suggestions take turns. */
+const generateLimit = createLimiter();
+/**
+ * One "Small Model available" flag for both: whichever finds the model missing or not granted gives
+ * the one notice, automatic summaries stop and Add task stops offering "Let the model pick".
+ */
+const smallModel = createModelAvailability((code) =>
+  void host.toast({ kind: 'info', message: code === 'NOT_GRANTED' ? MODEL_NOTICES.NOT_GRANTED : MODEL_NOTICES.NO_MODEL }).catch(() => {}),
+);
+
 const summaries = createSummaries({
   generate: (request) => host.generate(request),
+  limit: generateLimit,
   storage: host.storage,
   // Only once the shown project's settings are in: a summary in the wrong language is wasted.
   context: () => {
@@ -553,16 +576,19 @@ const summaries = createSummaries({
   },
   loadLanguage: async (projectId, taskId) => (await store.loadCard(projectId, taskId)).summaryLanguage,
   onChange: summaryChanged,
-  onUnavailable: (code) =>
-    void host
-      .toast({
-        kind: 'info',
-        message:
-          code === 'NOT_GRANTED'
-            ? 'Summaries need the “model” permission for Kanban Board (Settings → Extensions). Automatic summaries are off for now.'
-            : 'No small model is set, so automatic summaries are off for now. Choose a Small Model in OpenChamber settings, then press Summarise in a task.',
-      })
-      .catch(() => {}),
+  availability: smallModel,
+});
+
+// --- type and state of tasks added here (suggest.ts) ---
+
+const suggester = createSuggester({
+  generate: (request) => host.generate(request),
+  limit: generateLimit,
+  availability: smallModel,
+  busy: (taskId) => editor.busy.has(taskId),
+  // The suggestion was written: show it (load refreshes an open task modal too).
+  onApplied: () => void load(),
+  onNotice: (message) => void host.toast({ kind: 'info', message }).catch(() => {}),
 });
 
 /**
@@ -608,7 +634,7 @@ const starter = createStarter({
   detached,
   archived,
   draw: () => draw(),
-  loadModels,
+  lists,
 });
 
 /**
@@ -795,7 +821,7 @@ const start = (ctx: HostReadyContext): void => {
     reload: load,
     redraw: draw,
     onStart: (task) => void starter.onStart(task),
-    loadModels,
+    lists,
     beforeMove: (task) => starter.leaveQueue(task.id),
     afterSetState: detach,
     session: {
@@ -817,8 +843,12 @@ const start = (ctx: HostReadyContext): void => {
       summarise: (task) => void summaries.summarise(task),
       onLanguage: (projectId, taskId, language) => summaries.setLanguage(projectId, taskId, language),
     },
+    // Global only; off until the global layer is read.
+    suggest: { enabled: () => suggestEnabled(globalLoaded, state.globalSettings), suggester },
   });
-  // Answers the model gave after an earlier frame of this panel was gone are kept by the host.
+  // Answers the model gave after an earlier frame of this panel was gone are kept by the host. Only
+  // summaries are taken back; a late type/state suggestion is dropped (summaries.acceptLate ignores
+  // it), since the task may have been changed by then.
   if (ctx.features?.lateGenerateResults === true) host.onLateGenerateResult((late) => void summaries.acceptLate(late));
   void loadGlobalSettings();
   board.setStatus({ kind: 'loading' });

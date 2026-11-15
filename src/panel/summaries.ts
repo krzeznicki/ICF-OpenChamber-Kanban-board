@@ -5,6 +5,7 @@
 // it, and a new one is generated. Pure apart from the injected generate and storage, so it runs
 // under node:test.
 import type { Task } from '../core/types.ts';
+import { createLimiter, createModelAvailability, type Limiter, type ModelAvailability } from './limiter.ts';
 import type { SummarySettings } from './settings.ts';
 
 /** `{language}`, `{title}` and `{body}` are filled in by buildPrompt. */
@@ -21,8 +22,6 @@ const MAX_OUTPUT_TOKENS = 400;
 /** What is kept of an answer (a storage value may hold 64 KiB). */
 const TEXT_MAX = 2_000;
 const MAX_KEY = 128;
-/** Generations running at once; the rest wait their turn. */
-const CONCURRENCY = 2;
 
 /** The system prompt; a request also carries a reference line so a late answer finds its key. */
 export const SUMMARY_SYSTEM =
@@ -109,8 +108,12 @@ export type SummariesDeps = {
   loadLanguage?: (projectId: string, taskId: string) => Promise<string | undefined>;
   /** A task's summary or status changed: redraw it. */
   onChange?: (taskId: string) => void;
-  /** Called once per session when the model is missing (NO_MODEL) or not granted. */
+  /** Called once per session when the model is missing (NO_MODEL) or not granted; only without `availability`. */
   onUnavailable?: (code: string) => void;
+  /** The panel's "Small Model available" flag (shared with suggest.ts, which owns the notice then); a private one otherwise. */
+  availability?: ModelAvailability;
+  /** The panel's generate limit (shared with suggest.ts); a private one of GENERATE_CONCURRENCY otherwise. */
+  limit?: Limiter;
   now?: () => number;
 };
 
@@ -127,23 +130,11 @@ export const createSummaries = (deps: SummariesDeps) => {
   const failed = new Set<string>();
   /** `projectId\0taskId` -> the card's language, once read (undefined: none set). */
   const languages = new Map<string, string | undefined>();
-  let unavailable = false;
-  let noticed = false;
+  const model = deps.availability ?? createModelAvailability(deps.onUnavailable);
 
-  // --- at most CONCURRENCY generations; a freed slot goes straight to the next waiter ---
-  let active = 0;
-  const waiting: Array<() => void> = [];
-  const slot = async <T>(fn: () => Promise<T>): Promise<T> => {
-    if (active >= CONCURRENCY) await new Promise<void>((resolve) => waiting.push(resolve));
-    else active++;
-    try {
-      return await fn();
-    } finally {
-      const next = waiting.shift();
-      if (next !== undefined) next();
-      else active--;
-    }
-  };
+  // At most GENERATE_CONCURRENCY generations, shared with type/state suggestions when the panel passes its limiter.
+  const limit = deps.limit ?? createLimiter();
+  const slot = <T>(fn: () => Promise<T>): Promise<T> => limit.run(fn);
 
   const langKey = (projectId: string, taskId: string): string => `${projectId}\0${taskId}`;
 
@@ -216,7 +207,7 @@ export const createSummaries = (deps: SummariesDeps) => {
   const generate = (task: Task, key: string, projectId: string, s: SummarySettings, force: boolean): Promise<string | null> => {
     const p = slot(async (): Promise<string | null> => {
       // Queued before the model turned out missing: do not ask again.
-      if (unavailable && !force) return null;
+      if (!model.available() && !force) return null;
       const known = texts.get(key);
       if (known !== undefined) return known;
       try {
@@ -232,18 +223,14 @@ export const createSummaries = (deps: SummariesDeps) => {
           return null;
         }
         failed.delete(key);
-        unavailable = false; // a model answered after all
+        model.answered(); // a model answered after all
         texts.set(key, text);
         await store(key, taskPrefix(projectId, task.id), text);
         return text;
       } catch (e) {
         const code = codeOf(e);
         if (code !== null && UNAVAILABLE.has(code)) {
-          unavailable = true;
-          if (!noticed) {
-            noticed = true;
-            deps.onUnavailable?.(code);
-          }
+          model.unavailable(code);
         } else {
           failed.add(key);
         }
@@ -265,7 +252,7 @@ export const createSummaries = (deps: SummariesDeps) => {
     if (stored !== null) return stored;
     const running = gens.get(r.key);
     if (running !== undefined) return running;
-    if (!force && (failed.has(r.key) || unavailable)) return null;
+    if (!force && (failed.has(r.key) || !model.available())) return null;
     return generate(task, r.key, r.projectId, r.summary, force);
   };
 
@@ -286,7 +273,7 @@ export const createSummaries = (deps: SummariesDeps) => {
       if (texts.has(key)) return 'ready';
       if (gens.has(key)) return 'pending';
       if (failed.has(key)) return 'failed';
-      return unavailable ? 'unavailable' : 'none';
+      return model.available() ? 'none' : 'unavailable';
     },
     /** Reads a stored summary (and the card's language); never generates. */
     load: async (task: Task): Promise<string | null> => {
@@ -302,7 +289,7 @@ export const createSummaries = (deps: SummariesDeps) => {
       return ensure(task, true);
     },
     /** Whether summaries are generated on their own: the setting, unless the model is missing. */
-    auto: (): boolean => (deps.context()?.summary.auto ?? false) && !unavailable,
+    auto: (): boolean => (deps.context()?.summary.auto ?? false) && model.available(),
     /** The card's language was edited (undefined: back to the settings). */
     setLanguage: (projectId: string, taskId: string, language: string | undefined): void => {
       languages.set(langKey(projectId, taskId), language?.trim() || undefined);

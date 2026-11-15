@@ -86,6 +86,20 @@ test('/sessions/start in the project folder runs no git and passes the agent', a
   assert.equal((r.json as { worktree: null }).worktree, null);
 });
 
+test('/sessions/start passes the thinking level (variant) with the model; a blank variant is left out', async (t) => {
+  const { directory, starts, deps } = await setup(t);
+  const r = await handle('POST', '/sessions/start', body(directory, { location: 'project', variant: 'high' }), deps);
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  const blank = await handle('POST', '/sessions/start', body(directory, { location: 'project', variant: '  ' }), deps);
+  assert.equal(blank.status, 200, JSON.stringify(blank.json));
+  assert.deepEqual(starts, [
+    { prompt: 'Do it', directory, title: 'Drag cards', model: 'anthropic/claude-sonnet-5-5', variant: 'high' },
+    { prompt: 'Do it', directory, title: 'Drag cards', model: 'anthropic/claude-sonnet-5-5' },
+  ]);
+  const bad = await handle('POST', '/sessions/start', body(directory, { location: 'project', variant: 3 }), deps);
+  assert.equal(bad.status, 400);
+});
+
 test('/sessions/start: a failing git is 422 and starts nothing', async (t) => {
   const { directory, starts, linksFile, deps } = await setup(t, { code: 128 });
   const r = await handle('POST', '/sessions/start', body(directory), deps);
