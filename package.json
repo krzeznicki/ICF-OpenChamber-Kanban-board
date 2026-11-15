@@ -1,0 +1,64 @@
+{
+  "name": "icf-kanban",
+  "version": "0.1.0",
+  "description": "ICF-kanban: an OpenChamber extension with a Kanban board over local .scratch/ files or GitHub Issues",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit && tsc --noEmit -p src/panel",
+    "test": "node --test --experimental-strip-types test/*.test.ts",
+    "build": "node scripts/build.mjs",
+    "check": "npm run typecheck && npm test && npm run build"
+  },
+  "dependencies": {
+    "@openchamber/sdk": "2.7.1"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "esbuild": "^0.28.2",
+    "typescript": "^7.0.2"
+  },
+  "openchamber": {
+    "apiVersion": 1,
+    "engines": {
+      "openchamber": ">=2.7.1"
+    },
+    "contributes": {
+      "panel": {
+        "id": "icf-kanban",
+        "name": "ICF-kanban",
+        "icon": "kanban-view",
+        "entry": "panel/index.html"
+      },
+      "page": {
+        "entry": "panel/page.html",
+        "title": "Board"
+      },
+      "capabilities": [
+        "sessions",
+        "prompt",
+        "model"
+      ],
+      "service": {
+        "entry": "service/main.js",
+        "runtime": "host",
+        "permissions": {
+          "exec": [
+            "git",
+            "gh"
+          ]
+        }
+      },
+      "sessionControl": {},
+      "sessionEvents": {
+        "events": [
+          "turn-finished",
+          "turn-failed"
+        ]
+      },
+      "instructions": true,
+      "skills": "skills"
+    }
+  }
+}
