@@ -292,10 +292,19 @@ var realExec = (cmd, args, opts) => new Promise((resolve) => {
   );
 });
 
+// src/core/variant.ts
+var toVariant = (value) => value === "test" ? "test" : "prod";
+var VARIANT = toVariant(false ? void 0 : "prod");
+var dataDirName = (variant) => variant === "test" ? ".icf-kanban-test" : ".icf-kanban";
+var branchPrefix = (variant) => variant === "test" ? "icf-test/" : "icf/";
+
 // src/service/instructions.ts
-var instructionsText = (cliPath) => {
+var instructionsText = (cliPath, variant = VARIANT) => {
   const tb = `node ${JSON.stringify(cliPath)}`;
-  return `Task board (ICF-kanban): in projects with docs/agents/issue-tracker.md, tasks are managed with \`${tb}\`; always pass --dir <the project root, i.e. the main checkout, not a worktree>. \`list --ready\` or \`next\` for ready tickets, \`show <id>\`, \`claim <id>\` (claim applies to sub-tasks you take from \`list --ready\`/\`next\`; skip lines marked claimed), \`state <id> <state>\` (done closes), \`create --title <t> [--type bug|enhancement] [--parent <id>]\`; --json for data. Skills icf-kanban-create/status/next/start describe the steps. The ICF-kanban board in OpenChamber shows the same tasks.`;
+  const test = variant === "test";
+  const intro = test ? "Kanban TEST development build (a local test copy of the ICF-kanban board, separate from the production Kanban Board): use it only when the user asks for the TEST board. " : "";
+  const skills = test ? "kanban-test-create/status/next/start" : "icf-kanban-create/status/next/start";
+  return intro + `Task board (ICF-kanban${test ? " TEST" : ""}): in projects with docs/agents/issue-tracker.md, tasks are managed with \`${tb}\`; always pass --dir <the project root, i.e. the main checkout, not a worktree>. \`list --ready\` or \`next\` for ready tickets, \`show <id>\`, \`claim <id>\` (claim applies to sub-tasks you take from \`list --ready\`/\`next\`; skip lines marked claimed), \`state <id> <state>\` (done closes), \`create --title <t> [--type bug|enhancement] [--parent <id>]\`; --json for data. Skills ${skills} describe the steps. The ICF-kanban ${test ? "TEST board" : "board"} in OpenChamber shows the same tasks.`;
 };
 var publishInstructions = async (host2, cliPath, log = console.error) => {
   log("icf-kanban: setting agent instructions");
@@ -1344,8 +1353,8 @@ var createSkillDetector = (home = homedir(), now = Date.now) => {
 };
 
 // src/service/queue.ts
-import { homedir as homedir2 } from "node:os";
-import { join as join4 } from "node:path";
+import { homedir as homedir3 } from "node:os";
+import { join as join5 } from "node:path";
 
 // src/core/queue.ts
 var MAX_START_FAILURES = 3;
@@ -1354,7 +1363,9 @@ var nextToStart = (queued, running, maxParallel) => queued.slice(0, Math.max(0, 
 // src/service/store.ts
 import { randomBytes } from "node:crypto";
 import { mkdir as mkdir3, readFile as readFile3, rename, writeFile as writeFile3 } from "node:fs/promises";
-import { dirname } from "node:path";
+import { homedir as homedir2 } from "node:os";
+import { dirname, join as join4 } from "node:path";
+var dataDir = (variant = VARIANT, home = homedir2()) => join4(home, dataDirName(variant));
 var code = (e) => e?.code;
 var readJson = async (file, now = Date.now) => {
   let text;
@@ -1395,7 +1406,7 @@ var serial = (file, fn) => {
 };
 
 // src/service/queue.ts
-var defaultQueueFile = () => join4(homedir2(), ".icf-kanban", "queue.json");
+var defaultQueueFile = (variant = VARIANT, home = homedir3()) => join5(dataDir(variant, home), "queue.json");
 var DEFAULT_MAX_PARALLEL = 3;
 var MAX_PARALLEL_LIMIT = 10;
 var RESERVE_MS = 18e4;
@@ -1512,10 +1523,11 @@ var takeFromQueue = (file, dir, input) => update(file, dir, async (q) => {
 
 // src/service/sessions.ts
 import { randomBytes as randomBytes2 } from "node:crypto";
-import { homedir as homedir3 } from "node:os";
-import { basename, dirname as dirname2, join as join5, sep } from "node:path";
+import { homedir as homedir4 } from "node:os";
+import { basename, dirname as dirname2, join as join6, sep } from "node:path";
 var LINKS_PER_PROJECT = 500;
-var defaultLinksFile = () => join5(homedir3(), ".icf-kanban", "links.json");
+var defaultLinksFile = (variant = VARIANT, home = homedir4()) => join6(dataDir(variant, home), "links.json");
+var worktreeBranch = (slug, variant = VARIANT) => `${branchPrefix(variant)}${slug}`;
 var isLink = (v) => {
   const l = v;
   return typeof l === "object" && l !== null && typeof l.taskId === "string" && typeof l.sessionId === "string" && typeof l.directory === "string" && typeof l.createdAt === "number";
@@ -1581,7 +1593,7 @@ var worktreeSlug = (taskId, title, suffix = randomBytes2(3).toString("hex")) => 
   const name = base(title) || base(taskId.replace(/^.*\//, "").replace(/\.md$/, "")) || "task";
   return `${name}-${suffix}`;
 };
-var worktreesRoot = (directory) => join5(dirname2(directory), `${basename(directory)}-worktrees`);
+var worktreesRoot = (directory) => join6(dirname2(directory), `${basename(directory)}-worktrees`);
 var message2 = (e) => e instanceof Error ? e.message : String(e);
 var removeWorktree = async (deps2, directory, path, branch) => {
   const log = deps2.log ?? ((m) => console.error(m));
@@ -1604,8 +1616,8 @@ var startSession = async (input, deps2) => {
   let branch = "";
   if (input.location === "worktree") {
     const slug = worktreeSlug(input.taskId, input.title, deps2.suffix?.());
-    const path = join5(worktreesRoot(input.directory), slug);
-    branch = `icf/${slug}`;
+    const path = join6(worktreesRoot(input.directory), slug);
+    branch = worktreeBranch(slug);
     const r = await deps2.exec("git", ["-C", input.directory, "worktree", "add", "-b", branch, path], { cwd: input.directory });
     if (r.code !== 0) {
       throw new TrackerError("FAILED", `Could not create the worktree ${path}: ${(r.stderr || r.stdout).trim() || `git exited ${r.code}`}`);

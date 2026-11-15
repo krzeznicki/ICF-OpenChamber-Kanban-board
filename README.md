@@ -309,6 +309,18 @@ echo '{"type":"module"}' > $D/package.json
 node $D/scripts/check-guest.ts $PWD   # must print "Package is ready"
 ```
 
+### Trying a branch: the Kanban TEST build
+
+Production is installed from the Git URL `https://github.com/krzeznicki/ICF-OpenChamber-Kanban-board` (branch `main`; OpenChamber offers an update when `version` rises). To try changes before they reach `main`, build a separate test extension next to it:
+
+1. Check out your branch and make the change.
+2. `npm run build:test` builds **Kanban TEST** (id `icf-kanban-test`, version `<version>-test.g<short sha>`) into `~/openchamber-extensions/icf-kanban-test`, outside every repo and worktree. Another folder: `npm run build:test -- --out <dir>` or `KANBAN_TEST_OUT=<dir>`. The folder is emptied and rewritten on each build; a folder that has files but no `.kanban-test-build` marker (so it was not written by build:test), or one inside the repo, is refused.
+3. Install it once: in an OpenChamber chat, `openchamber://extensions/install?path=<the output folder>`, or **Settings → Extensions** → install from that folder. After that, each `npm run build:test` reloads the installed test build.
+4. Test it. Production keeps running untouched next to it.
+5. Open a PR to `main` with a `version` bump (and the rebuilt production bundles from `npm run check`). Once merged, users update from **Settings → Extensions**.
+
+The test build shares nothing with production: its own extension id (OpenChamber keeps settings and storage per extension), a **TEST** badge in the board's toolbar and its own icon and name (sessions it starts carry its panel id), data in `~/.icf-kanban-test/` (links, queue) instead of `~/.icf-kanban/`, worktree branches `icf-test/<slug>` instead of `icf/<slug>`, skills `kanban-test-create/status/next/start`, and agent instructions that name its own CLI and say to use it only when you ask for the TEST board. Only the output folder gets the test bundles: the bundles committed in the repo are always built as production (`npm run build`). Both builds work on the same project trackers (`.scratch/` or GitHub Issues), which are the project's own data.
+
 The design is in [docs/superpowers/specs/2026-11-15-task-board-design.md](docs/superpowers/specs/2026-11-15-task-board-design.md).
 
 ## Licence

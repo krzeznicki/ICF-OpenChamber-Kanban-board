@@ -9,6 +9,7 @@
 import { clampStartSessionRequest, GUEST_ATTACH_ID_MAX } from '@openchamber/sdk';
 import type { GuestProject, GuestSessionRecord, HostClient } from '@openchamber/sdk';
 import type { Task } from '../core/types.ts';
+import { VARIANT, panelId } from '../core/variant.ts';
 import { ApiError, createApi } from './api.ts';
 import { ledByOrchestrator, markArchived, sessionForTask, type Detached, type SessionLink } from './columns.ts';
 import { createLauncher } from './launcher.ts';
@@ -133,7 +134,7 @@ export const createStarter = (deps: StarterDeps) => {
     }
     const result = await host.startSession(
       clampStartSessionRequest({
-        providerId: 'icf-kanban',
+        providerId: panelId(VARIANT),
         id: task.id,
         title: task.title,
         url: task.url ?? `https://icf-kanban.local/t/${encodeURIComponent(task.id)}`,

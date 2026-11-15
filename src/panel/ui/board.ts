@@ -1,4 +1,4 @@
-// The board shell: a toolbar (project switcher, "Hide sub-tasks", Add task, Settings, Refresh), a
+// The board shell: a toolbar (a TEST badge in the test build, project switcher, "Hide sub-tasks", Add task, Settings, Refresh), a
 // status slot for banners, spinner and empty states, and the five columns. The Done header carries
 // "Archive done" and "Show archived (N)" (archive.ts).
 // It draws what main.ts hands it and reports clicks back; it holds no data of its own. Dragging
@@ -6,6 +6,7 @@
 import { mountBanner, mountButton, mountEmpty, mountSelect, mountSpinner, mountSwitch } from '@openchamber/sdk/ui';
 import type { BannerTone, SelectOption } from '@openchamber/sdk/ui';
 import type { Task } from '../../core/types.ts';
+import { VARIANT } from '../../core/variant.ts';
 import { COLUMNS, type BoardModel } from '../columns.ts';
 import { renderCard } from './card.ts';
 
@@ -50,6 +51,14 @@ export const createBoard = (root: HTMLElement, callbacks: BoardCallbacks) => {
   const settingsSlot = div('kb-settings-button');
   const refreshSlot = div('kb-refresh');
   toolbar.append(projectSlot, switchSlot, spacer, addSlot, settingsSlot, refreshSlot);
+  // The local test build (npm run build:test) says so, so it is never mistaken for production.
+  if (VARIANT === 'test') {
+    const badge = document.createElement('span');
+    badge.className = 'kb-test-badge';
+    badge.textContent = 'TEST';
+    badge.title = 'Kanban TEST: the local development build, separate from the production Kanban Board';
+    toolbar.prepend(badge);
+  }
   const status = div('kb-status');
   const columns = div('kb-columns');
   shell.append(toolbar, status, columns);

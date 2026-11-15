@@ -1,19 +1,26 @@
 // The paragraph every agent session reads (contributes.instructions): where the task-board CLI is
 // and its key commands. Set once when the service starts; it stays on the OpenChamber server.
+import { VARIANT, type Variant } from '../core/variant.ts';
 
 /** The part of the service host this needs; `createServiceHost(...)` satisfies it. */
 export type InstructionsHost = { setInstructions(directory: string | null, text: string): Promise<unknown> };
 
-/** One short paragraph: it costs tokens in every session. */
-export const instructionsText = (cliPath: string): string => {
+/** One short paragraph: it costs tokens in every session. The test build says so and names its own skills. */
+export const instructionsText = (cliPath: string, variant: Variant = VARIANT): string => {
   const tb = `node ${JSON.stringify(cliPath)}`;
+  const test = variant === 'test';
+  const intro = test
+    ? 'Kanban TEST development build (a local test copy of the ICF-kanban board, separate from the production Kanban Board): use it only when the user asks for the TEST board. '
+    : '';
+  const skills = test ? 'kanban-test-create/status/next/start' : 'icf-kanban-create/status/next/start';
   return (
-    `Task board (ICF-kanban): in projects with docs/agents/issue-tracker.md, tasks are managed with \`${tb}\`; ` +
+    intro +
+    `Task board (ICF-kanban${test ? ' TEST' : ''}): in projects with docs/agents/issue-tracker.md, tasks are managed with \`${tb}\`; ` +
     'always pass --dir <the project root, i.e. the main checkout, not a worktree>. ' +
     '`list --ready` or `next` for ready tickets, `show <id>`, `claim <id>` (claim applies to sub-tasks you take from `list --ready`/`next`; skip lines marked claimed), ' +
     '`state <id> <state>` (done closes), `create --title <t> [--type bug|enhancement] [--parent <id>]`; ' +
-    '--json for data. Skills icf-kanban-create/status/next/start describe the steps. ' +
-    'The ICF-kanban board in OpenChamber shows the same tasks.'
+    `--json for data. Skills ${skills} describe the steps. ` +
+    `The ICF-kanban ${test ? 'TEST board' : 'board'} in OpenChamber shows the same tasks.`
   );
 };
 
