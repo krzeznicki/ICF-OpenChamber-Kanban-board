@@ -35,6 +35,20 @@ export const emptyDraft = (): AddDraft => ({
   start: {},
 });
 
+/**
+ * True when closing the form would lose something: text typed (blank text does not count), a
+ * blocker or start option set, or a choice changed from what the form opened with (`initial`).
+ */
+export const isDirty = (draft: AddDraft, initial: AddDraft = emptyDraft()): boolean =>
+  draft.title.trim() !== '' ||
+  draft.body.trim() !== '' ||
+  draft.subtasks.some((row) => row.trim() !== '') ||
+  draft.type !== initial.type ||
+  draft.parentId !== initial.parentId ||
+  draft.state !== initial.state ||
+  draft.blockedBy.length > 0 ||
+  Object.values(draft.start).some((v) => v !== undefined);
+
 /** States a new task may start in: the open ones (done and wontfix are reached by moving it). */
 export const CREATE_STATES: readonly TaskState[] = ['needs-triage', 'needs-info', 'ready-for-agent', 'ready-for-human'];
 

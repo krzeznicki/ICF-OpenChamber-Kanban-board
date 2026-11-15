@@ -12,6 +12,7 @@ import {
   canHaveSubtasks,
   draftKind,
   emptyDraft,
+  isDirty,
   keepOffered,
   validateDraft,
   type AddDraft,
@@ -21,6 +22,7 @@ import {
 import type { Preset } from '../presets.ts';
 import type { StartOptions } from '../settings.ts';
 import { mountCloseButton } from './closeButton.ts';
+import { askChoice } from './confirm.ts';
 import { openModalShell } from './modal.ts';
 import { mountStartOptions } from './startOptions.ts';
 
@@ -71,12 +73,31 @@ export const openAddModal = (
 ): { setStart: (start: AddModalStart | null) => void; dispose: () => void } => {
   const d: AddDraft = emptyDraft();
   d.type = model.types.includes('enhancement') ? 'enhancement' : NONE;
+  /** What the form opened with: closing it unchanged asks nothing. */
+  const initial: AddDraft = { ...d };
   let busy = false;
   /** The task was created but some sub-tasks were not: only Close is left. */
   let finished = false;
+  /** "Discard this task?" is open: a second Escape or click does not ask again. */
+  let asking = false;
   const locked = (): boolean => busy || finished;
+  // Escape, a backdrop click, × and Cancel: a filled form asks before it is thrown away.
   const dismiss = (): void => {
-    if (!busy) callbacks.onDismiss();
+    if (busy || asking) return;
+    if (finished || !isDirty(d, initial)) {
+      callbacks.onDismiss();
+      return;
+    }
+    asking = true;
+    const focused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    void askChoice('Discard this task?', 'What you entered in the form will be lost.', [
+      { id: 'discard', label: 'Discard', variant: 'destructive' },
+    ]).then((answer) => {
+      asking = false;
+      // The modal may have gone meanwhile (project switch).
+      if (answer === 'discard' && modal.isConnected && !busy) callbacks.onDismiss();
+      else if (focused?.isConnected) focused.focus();
+    });
   };
   const shell = openModalShell({ label: 'Add task', onDismiss: dismiss, className: 'kb-add-modal' });
   const { modal } = shell;

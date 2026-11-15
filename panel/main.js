@@ -3042,6 +3042,7 @@ ${GUEST_UI_LOOK_CSS}`;
     subtasks: [],
     start: {}
   });
+  var isDirty = (draft, initial = emptyDraft()) => draft.title.trim() !== "" || draft.body.trim() !== "" || draft.subtasks.some((row) => row.trim() !== "") || draft.type !== initial.type || draft.parentId !== initial.parentId || draft.state !== initial.state || draft.blockedBy.length > 0 || Object.values(draft.start).some((v2) => v2 !== void 0);
   var CREATE_STATES = ["needs-triage", "needs-info", "ready-for-agent", "ready-for-human"];
   var choice = (t) => ({ id: t.id, label: t.title, hint: t.id });
   var parentChoices = (tasks) => tasks.filter((t) => t.kind === "parent" && t.state !== "done").map(choice);
@@ -3114,7 +3115,7 @@ ${GUEST_UI_LOOK_CSS}`;
   var NO_SKILLS = Object.freeze({ use: false, found: [] });
   var SKILLS_NOTE = [
     "About the skills: load each skill named here with your skill tool; if it cannot be loaded, read its SKILL.md (listed below) and follow it.",
-    "The tracker lives at the project root {root}, not in your worktree, where docs/agents/ and .scratch/ are missing or a copy the board never reads. When a skill asks for the issue tracker, it is {root}/docs/agents/issue-tracker.md; never run /setup-matt-pocock-skills.",
+    "The tracker lives at the project root {root}, not in your worktree, where docs/agents/ and .scratch/ are missing or a copy the board never reads. When a skill asks for the issue tracker, it is {tracker}; never run /setup-matt-pocock-skills.",
     "Matt's skills and the task-board CLI write the same format, so make every tracker write through the CLI at the root instead of the skills' own publishing: new issues with `{cli} create`, states with `{cli} state` (and `{cli} claim` for sub-tasks). For a note on this task, {note}. The board then follows."
   ].join("\n");
   var withSkills = (lines) => [...lines, SKILLS_NOTE].join("\n");
@@ -3861,6 +3862,49 @@ ${ref}`,
     return handle.dispose;
   };
 
+  // src/panel/ui/confirm.ts
+  var askChoice = (title, body, choices) => new Promise((resolve2) => {
+    const backdrop = document.createElement("div");
+    backdrop.className = "kb-backdrop kb-confirm-backdrop";
+    const box = document.createElement("div");
+    box.className = "kb-confirm";
+    box.setAttribute("role", "alertdialog");
+    box.setAttribute("aria-modal", "true");
+    const head = document.createElement("h2");
+    head.className = "kb-confirm-title";
+    head.textContent = title;
+    const text3 = document.createElement("p");
+    text3.className = "kb-confirm-body";
+    text3.textContent = body;
+    const actions = document.createElement("div");
+    actions.className = "kb-actions";
+    box.append(head, text3, actions);
+    backdrop.append(box);
+    const disposers = [];
+    const done = (answer) => {
+      document.removeEventListener("keydown", onKey, true);
+      for (const d of disposers) d();
+      backdrop.remove();
+      resolve2(answer);
+    };
+    const onKey = (e) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      e.stopPropagation();
+      done(null);
+    };
+    for (const c of choices) {
+      disposers.push(mountButton(actions, { label: c.label, variant: c.variant ?? "default", size: "sm", onClick: () => done(c.id) }).dispose);
+    }
+    disposers.push(mountButton(actions, { label: "Cancel", variant: "outline", size: "sm", onClick: () => done(null) }).dispose);
+    backdrop.addEventListener("click", (e) => {
+      if (e.target === backdrop) done(null);
+    });
+    document.addEventListener("keydown", onKey, true);
+    document.body.append(backdrop);
+    actions.querySelector("button")?.focus();
+  });
+
   // src/panel/ui/modal.ts
   var openModalShell = (options) => {
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -3989,49 +4033,6 @@ ${ref}`,
       select.dispose();
     };
   };
-
-  // src/panel/ui/confirm.ts
-  var askChoice = (title, body, choices) => new Promise((resolve2) => {
-    const backdrop = document.createElement("div");
-    backdrop.className = "kb-backdrop kb-confirm-backdrop";
-    const box = document.createElement("div");
-    box.className = "kb-confirm";
-    box.setAttribute("role", "alertdialog");
-    box.setAttribute("aria-modal", "true");
-    const head = document.createElement("h2");
-    head.className = "kb-confirm-title";
-    head.textContent = title;
-    const text3 = document.createElement("p");
-    text3.className = "kb-confirm-body";
-    text3.textContent = body;
-    const actions = document.createElement("div");
-    actions.className = "kb-actions";
-    box.append(head, text3, actions);
-    backdrop.append(box);
-    const disposers = [];
-    const done = (answer) => {
-      document.removeEventListener("keydown", onKey, true);
-      for (const d of disposers) d();
-      backdrop.remove();
-      resolve2(answer);
-    };
-    const onKey = (e) => {
-      if (e.key !== "Escape") return;
-      e.preventDefault();
-      e.stopPropagation();
-      done(null);
-    };
-    for (const c of choices) {
-      disposers.push(mountButton(actions, { label: c.label, variant: c.variant ?? "default", size: "sm", onClick: () => done(c.id) }).dispose);
-    }
-    disposers.push(mountButton(actions, { label: "Cancel", variant: "outline", size: "sm", onClick: () => done(null) }).dispose);
-    backdrop.addEventListener("click", (e) => {
-      if (e.target === backdrop) done(null);
-    });
-    document.addEventListener("keydown", onKey, true);
-    document.body.append(backdrop);
-    actions.querySelector("button")?.focus();
-  });
 
   // src/panel/ui/settingsView.ts
   var el2 = (tag, className, text3) => {
@@ -4545,11 +4546,26 @@ ${ref}`,
   var openAddModal = (model, callbacks) => {
     const d = emptyDraft();
     d.type = model.types.includes("enhancement") ? "enhancement" : NONE2;
+    const initial = { ...d };
     let busy = false;
     let finished = false;
+    let asking = false;
     const locked = () => busy || finished;
     const dismiss = () => {
-      if (!busy) callbacks.onDismiss();
+      if (busy || asking) return;
+      if (finished || !isDirty(d, initial)) {
+        callbacks.onDismiss();
+        return;
+      }
+      asking = true;
+      const focused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      void askChoice("Discard this task?", "What you entered in the form will be lost.", [
+        { id: "discard", label: "Discard", variant: "destructive" }
+      ]).then((answer) => {
+        asking = false;
+        if (answer === "discard" && modal.isConnected && !busy) callbacks.onDismiss();
+        else if (focused?.isConnected) focused.focus();
+      });
     };
     const shell = openModalShell({ label: "Add task", onDismiss: dismiss, className: "kb-add-modal" });
     const { modal } = shell;
@@ -11640,15 +11656,20 @@ ${ref}`,
   var STATES2 = "needs-triage, needs-info, ready-for-agent, ready-for-human, wontfix, done";
   var shellWord = (s) => /^[A-Za-z0-9_./:@%+=,-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`;
   var isGithub = (task) => task.url !== null || /^#\d+$/.test(task.id);
+  var rootOf = (projectDir) => projectDir.replace(/\/+$/, "") || "/";
+  var under = (projectDir, rel) => `${rootOf(projectDir).replace(/\/$/, "")}/${rel}`;
   var noteHow = (task, projectDir) => {
     const n = /^#(\d+)$/.exec(task.id)?.[1] ?? /\/issues\/(\d+)/.exec(task.url ?? "")?.[1];
     if (isGithub(task) && n !== void 0) return `post it with \`gh issue comment ${n} --body-file -\``;
-    return `append it to the issue file ${projectDir.replace(/\/+$/, "")}/${task.id}`;
+    return `append it to the issue file \`${shellWord(under(projectDir, task.id))}\``;
   };
-  var fillPreset = (text3, task, cli, projectDir) => text3.replace(
-    /\{(cli|root|id|note)\}/g,
-    (_, key) => key === "cli" ? cli : key === "root" ? projectDir : key === "id" ? shellWord(task.id) : noteHow(task, projectDir)
-  );
+  var fillPreset = (text3, task, cli, projectDir) => text3.replace(/\{(cli|root|tracker|id|note)\}/g, (_, key) => {
+    if (key === "cli") return cli;
+    if (key === "root") return shellWord(rootOf(projectDir));
+    if (key === "tracker") return shellWord(under(projectDir, "docs/agents/issue-tracker.md"));
+    if (key === "id") return shellWord(task.id);
+    return noteHow(task, projectDir);
+  });
   var buildPrompt2 = (task, preset, cliPath, projectDir, children) => {
     const cli = `node ${shellWord(cliPath)} --dir ${shellWord(projectDir)}`;
     const id = shellWord(task.id);

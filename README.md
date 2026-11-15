@@ -108,6 +108,8 @@ Types: `bug` and `enhancement` (a feature), plus your own (`chore` and `research
 
 The service's error shows inside the modal and nothing is lost. If the task was created but some sub-tasks were not, the modal names the ones that failed (with the reason) and offers only Close; add them later from the task's **Sub-tasks** section. The board reloads once at the end.
 
+Closing a form you have filled in (Escape, a click beside it, × or Cancel) first asks **Discard this task?**; an untouched form closes at once.
+
 ## The task modal
 
 A click on any card (or Enter on a focused card) opens the task in a modal, in every column; a click never jumps to a session. Reading comes first:

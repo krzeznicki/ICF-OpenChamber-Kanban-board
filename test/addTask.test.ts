@@ -9,6 +9,7 @@ import {
   createWithSubtasks,
   draftKind,
   emptyDraft,
+  isDirty,
   keepOffered,
   parentChoices,
   partialMessage,
@@ -204,4 +205,28 @@ test('partialMessage names the created task and each missing sub-task', () => {
     'Created #10, but 2 sub-tasks were not created: “a” (boom); “b” (bang).',
   );
   assert.equal(partialMessage('#10', [{ title: 'a', message: 'boom' }]), 'Created #10, but 1 sub-task was not created: “a” (boom).');
+});
+
+test('isDirty: an untouched form (or one changed back, or only blank text) is clean', () => {
+  assert.equal(isDirty(emptyDraft()), false);
+  const initial = draft({ type: 'enhancement' });
+  assert.equal(isDirty(draft({ type: 'enhancement' }), initial), false);
+  assert.equal(isDirty(draft({ title: '   ', body: '\n', subtasks: ['', '  '] })), false);
+  assert.equal(isDirty(draft({ start: { model: undefined } })), false);
+});
+
+test('isDirty: any typed text or changed choice makes the form dirty', () => {
+  const initial = draft({ type: 'enhancement' });
+  for (const over of [
+    { title: 'x' },
+    { body: 'why' },
+    { subtasks: ['', 'a'] },
+    { type: 'bug' },
+    { parentId: 'p' },
+    { state: 'ready-for-agent' as const },
+    { blockedBy: ['b'] },
+    { start: { model: 'm' } },
+  ]) {
+    assert.equal(isDirty(draft({ type: 'enhancement', ...over }), initial), true, JSON.stringify(over));
+  }
 });
