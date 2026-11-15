@@ -717,12 +717,12 @@
       if (disposed || target.parent === target) {
         return Promise.reject(new HostRequestError("HOST_UNAVAILABLE", "No host frame. This page is not in an iframe."));
       }
-      return new Promise((resolve2, reject) => {
+      return new Promise((resolve, reject) => {
         const timer = setTimeout(() => {
           pending.delete(message2.id);
           reject(new HostRequestError("HOST_TIMEOUT", "Host did not answer in time."));
         }, timeoutMs);
-        pending.set(message2.id, { resolve: resolve2, reject, timer });
+        pending.set(message2.id, { resolve, reject, timer });
         post(message2);
       });
     };
@@ -2490,21 +2490,21 @@ ${GUEST_UI_LOOK_CSS}`;
     ensureStyle(UI_CSS);
     let props = initial;
     const uid = `oc-sdk-list-${listCount += 1}`;
-    const list3 = el("div", "oc-sdk oc-sdk-list");
-    list3.setAttribute("role", "listbox");
-    list3.tabIndex = 0;
-    root.append(list3);
+    const list2 = el("div", "oc-sdk oc-sdk-list");
+    list2.setAttribute("role", "listbox");
+    list2.tabIndex = 0;
+    root.append(list2);
     let activeId = null;
     const rowId = (id) => `${uid}-${id}`;
     const setActive = (id) => {
       activeId = id;
-      for (const row of Array.from(list3.children)) {
+      for (const row of Array.from(list2.children)) {
         if (row instanceof HTMLElement) {
           row.dataset.active = row.id === rowId(id ?? "") ? "true" : "false";
         }
       }
-      setAttr(list3, "aria-activedescendant", id ? rowId(id) : null);
-      list3.querySelector('[data-active="true"]')?.scrollIntoView({ block: "nearest" });
+      setAttr(list2, "aria-activedescendant", id ? rowId(id) : null);
+      list2.querySelector('[data-active="true"]')?.scrollIntoView({ block: "nearest" });
     };
     const span = (className, text3) => {
       const node = el("span", className);
@@ -2512,10 +2512,10 @@ ${GUEST_UI_LOOK_CSS}`;
       return node;
     };
     const paint = () => {
-      clearNode(list3);
-      setAttr(list3, "aria-label", props.ariaLabel);
+      clearNode(list2);
+      setAttr(list2, "aria-label", props.ariaLabel);
       if (props.items.length === 0) {
-        list3.append(span("oc-sdk-list-empty", props.emptyText ?? "Nothing here"));
+        list2.append(span("oc-sdk-list-empty", props.emptyText ?? "Nothing here"));
         setActive(null);
         return;
       }
@@ -2541,7 +2541,7 @@ ${GUEST_UI_LOOK_CSS}`;
         if (item.meta)
           row.append(span("oc-sdk-row-meta", item.meta));
         row.addEventListener("click", () => props.onSelect(item.id));
-        list3.append(row);
+        list2.append(row);
       }
       const stillThere = props.items.some((item) => item.id === activeId && !item.disabled);
       setActive(stillThere ? activeId : props.selectedId ?? null);
@@ -2558,7 +2558,7 @@ ${GUEST_UI_LOOK_CSS}`;
         props.onSelect(activeId);
       }
     };
-    list3.addEventListener("keydown", onKeyDown);
+    list2.addEventListener("keydown", onKeyDown);
     paint();
     return {
       update: (next) => {
@@ -2566,8 +2566,8 @@ ${GUEST_UI_LOOK_CSS}`;
         paint();
       },
       dispose: () => {
-        list3.removeEventListener("keydown", onKeyDown);
-        list3.remove();
+        list2.removeEventListener("keydown", onKeyDown);
+        list2.remove();
       }
     };
   };
@@ -2882,7 +2882,7 @@ ${GUEST_UI_LOOK_CSS}`;
       listModels: () => call("POST", "/models/list"),
       /** The project's session agents (cached by the service); a failure comes back as `{ agents: [], error }`. */
       listAgents: () => call("POST", "/agents/list"),
-      /** Which of Matt Pocock's skills are installed for this project, and each one's SKILL.md (cached by the service). */
+      /** Which of the known skills (Matt Pocock's, Superpowers) are installed for this project, and each one's SKILL.md (cached by the service). */
       detectSkills: () => call("POST", "/skills/detect"),
       listQueue: () => call("POST", "/queue/list").then((r) => r.queue),
       /** Idempotent per task; `maxParallel` is stored so the service drains with the same limit. */
@@ -2973,9 +2973,9 @@ ${GUEST_UI_LOOK_CSS}`;
     const children = /* @__PURE__ */ new Map();
     for (const t of tasks) {
       if (t.parentId === null || !byId.has(t.parentId)) continue;
-      const list3 = children.get(t.parentId) ?? [];
-      list3.push(t);
-      children.set(t.parentId, list3);
+      const list2 = children.get(t.parentId) ?? [];
+      list2.push(t);
+      children.set(t.parentId, list2);
     }
     const parentWorking = /* @__PURE__ */ new Map();
     const parentRunning = (parentId) => {
@@ -3093,8 +3093,8 @@ ${GUEST_UI_LOOK_CSS}`;
   };
   var partialMessage = (taskId, failed) => {
     const n = failed.length;
-    const list3 = failed.map((f) => `\u201C${f.title}\u201D (${f.message})`).join("; ");
-    return `Created ${taskId}, but ${n} sub-task${n === 1 ? " was" : "s were"} not created: ${list3}.`;
+    const list2 = failed.map((f) => `\u201C${f.title}\u201D (${f.message})`).join("; ");
+    return `Created ${taskId}, but ${n} sub-task${n === 1 ? " was" : "s were"} not created: ${list2}.`;
   };
 
   // src/core/skills.ts
@@ -3112,16 +3112,31 @@ ${GUEST_UI_LOOK_CSS}`;
     "diagnosing-bugs",
     "triage"
   ];
+  var SUPERPOWERS_SKILLS = [
+    "brainstorming",
+    "writing-plans",
+    "test-driven-development",
+    "verification-before-completion",
+    "requesting-code-review",
+    "subagent-driven-development",
+    "systematic-debugging"
+  ];
+  var KNOWN_SKILLS = [...MATT_SKILLS, ...SUPERPOWERS_SKILLS];
 
-  // src/panel/presets.ts
-  var NO_SKILLS = Object.freeze({ use: false, found: [] });
-  var SKILLS_NOTE = [
+  // src/panel/presetTexts.ts
+  var MATT_NOTE = [
     "About the skills: load each skill named here with your skill tool; if it cannot be loaded, read its SKILL.md (listed below) and follow it.",
     "The tracker lives at the project root {root}, not in your worktree, where docs/agents/ and .scratch/ are missing or a copy the board never reads. When a skill asks for the issue tracker, it is {tracker}; never run /setup-matt-pocock-skills.",
     "Matt's skills and the task-board CLI write the same format, so make every tracker write through the CLI at the root instead of the skills' own publishing: new issues with `{cli} create`, states with `{cli} state` (and `{cli} claim` for sub-tasks). For a note on this task, {note}. The board then follows."
   ].join("\n");
-  var withSkills = (lines) => [...lines, SKILLS_NOTE].join("\n");
-  var BUILTIN_PRESETS = [
+  var SUPERPOWERS_NOTE = [
+    "About the skills: these are Superpowers skills. Load each one named here with your skill tool (it may list them as superpowers:<name>); if it cannot be loaded, read its SKILL.md (listed below) and follow it.",
+    "The board already made this session's worktree and branch: work in it and do not create another (skip using-git-worktrees). Do not run finishing-a-development-branch, and do not merge, push or open a pull request: what happens to the branch is the user's call. Never run a setup skill.",
+    "The tracker lives at the project root {root}, not in your worktree, where docs/agents/ and .scratch/ are missing or a copy the board never reads; {tracker} describes it. Make every tracker write through the task-board CLI at the root: new tasks with `{cli} create`, states with `{cli} state` (and `{cli} claim` for sub-tasks). For a note on this task, {note}. The board then follows."
+  ].join("\n");
+  var withMattSkills = (lines) => [...lines, MATT_NOTE].join("\n");
+  var withSuperpowers = (lines) => [...lines, SUPERPOWERS_NOTE].join("\n");
+  var PLAIN_PRESETS = [
     {
       id: "plan",
       name: "Plan",
@@ -3131,17 +3146,7 @@ ${GUEST_UI_LOOK_CSS}`;
         "- Read the task and the code it touches.",
         "- Write a short plan: the steps, the files to change, how you will test it, and the open questions.",
         "- Ask the user to approve the plan and answer the questions. Do not write code until they do."
-      ].join("\n"),
-      skills: ["grill-with-docs", "to-spec", "to-tickets"],
-      requires: ["grilling", "domain-modeling"],
-      mattText: withSkills([
-        "Plan this task with Matt Pocock's skills before changing any code.",
-        "- Run /grill-with-docs to sharpen the task with the user, a round of questions at a time; it keeps the terms in GLOSSARY.md and the decisions as ADRs.",
-        "- If a question needs a runnable answer, do not build it here: suggest a Prototype task for it.",
-        "- If this is a multi-session build, stay in this context: write the spec with /to-spec and draft the tickets with /to-tickets (its review with the user included), but publish them with the CLI: the spec as a feature with `{cli} create --title <title> --state ready-for-agent --body-file -`, then each ticket in dependency order with `{cli} create --title <title> --parent <feature id> --blocked-by <ticket ids> --state ready-for-agent --body-file -` (leave out --blocked-by when it has none).",
-        "- Then record the feature id on this task: {note}. If the feature fully replaces this task, close it with `{cli} state {id} done`; otherwise leave its state and keep the link.",
-        "- Otherwise finish with the sharpened plan and ask the user to approve it. Do not write code."
-      ])
+      ].join("\n")
     },
     {
       id: "prototype",
@@ -3152,14 +3157,7 @@ ${GUEST_UI_LOOK_CSS}`;
         "- Keep it small and apart from production code.",
         "- Skip polish, tests and edge cases unless the question is about them.",
         "- Finish with the answer, what the prototype shows, and what a real implementation would need."
-      ].join("\n"),
-      skills: ["prototype"],
-      mattText: withSkills([
-        "Answer this task's design question with Matt Pocock's skills.",
-        "- In your session's worktree, create a `prototype/<name>` branch (`git switch -c prototype/<name>`) and run /prototype there: throwaway code that answers the one question in this task. Commit it on that branch.",
-        "- Record the answer on this task (the verdict, the question it settled and the branch): {note}.",
-        "- Finish with the answer and what a real implementation would need."
-      ])
+      ].join("\n")
     },
     {
       id: "implement",
@@ -3172,14 +3170,7 @@ ${GUEST_UI_LOOK_CSS}`;
         "- Keep the change focused on the task; note anything else you find instead of fixing it.",
         "- When a decision is unclear, ask the user before going on.",
         "- Finish with a short summary of what changed and how you tested it."
-      ].join("\n"),
-      skills: ["implement", "tdd", "code-review"],
-      mattText: withSkills([
-        "Implement this task with Matt Pocock's skills.",
-        "- Run /implement with this task as its ticket (`{cli} show {id}` reads it). It drives /tdd (agree the seams, then one red-green slice at a time) and closes with /code-review of your diff against the branch you started from.",
-        "- When a decision is unclear, ask the user before going on.",
-        "- Finish with a short summary of what changed and how you tested it."
-      ])
+      ].join("\n")
     },
     {
       id: "implement-no-questions",
@@ -3191,14 +3182,7 @@ ${GUEST_UI_LOOK_CSS}`;
         "- Write or update tests with the change and run them until they pass.",
         "- When a decision is unclear, choose the simplest reasonable option and go on.",
         "- Finish with a short summary of what changed, how you tested it, and every assumption you made."
-      ].join("\n"),
-      skills: ["implement", "tdd", "code-review"],
-      mattText: withSkills([
-        "Implement this task with Matt Pocock's skills, without stopping to ask questions.",
-        "- Run /implement with this task as its ticket (`{cli} show {id}` reads it); it drives /tdd and closes with /code-review.",
-        "- Where a skill would ask the user (the seams for /tdd, the fixed point for /code-review, an unclear decision), decide yourself: choose the simplest reasonable option and go on.",
-        "- Finish with a short summary of what changed, how you tested it, and every assumption you made."
-      ])
+      ].join("\n")
     },
     {
       id: "orchestrate",
@@ -3211,15 +3195,7 @@ ${GUEST_UI_LOOK_CSS}`;
         "- Hand each ticket to a subagent; start a ticket only when the tickets blocking it are done.",
         "- Move each ticket with the task-board CLI as it starts and finishes.",
         "- Keep working until all sub-tasks are done, then summarise the result."
-      ].join("\n"),
-      skills: ["to-tickets", "implement-spec", "tdd", "code-review"],
-      mattText: withSkills([
-        "Break this task down and orchestrate the work with Matt Pocock's skills.",
-        "- If it has no sub-tasks yet, draft tracer-bullet tickets with /to-tickets, then publish them with the CLI in dependency order: `{cli} create --title <title> --parent {id} --blocked-by <ticket ids> --state ready-for-agent --body-file -` (leave out --blocked-by when it has none).",
-        "- Then run /implement-spec over the sub-tasks: it reads them as a task graph, runs implementer subagents (each driving /tdd) across the ready frontier on one integration branch, and ends with one /code-review. Give each implementer the CLI line with its --dir.",
-        "- Claim each sub-task with `{cli} claim <id>` as its implementer starts, and resolve it with `{cli} state <id> done` once merged.",
-        "- Keep working until all sub-tasks are done, then summarise the result and name the integration branch."
-      ])
+      ].join("\n")
     },
     {
       id: "diagnose",
@@ -3231,15 +3207,7 @@ ${GUEST_UI_LOOK_CSS}`;
         "- Find the cause before changing code; check one guess at a time.",
         "- Fix it with a regression test, and run the tests until they pass.",
         "- Finish with the cause, the fix and how you checked it."
-      ].join("\n"),
-      skills: ["diagnosing-bugs", "implement", "tdd", "code-review"],
-      mattText: withSkills([
-        "Diagnose and fix this bug with Matt Pocock's skills.",
-        "- Run /diagnosing-bugs: build a tight feedback loop that goes red on this bug before any theory, reproduce and minimise, rank hypotheses, instrument.",
-        "- Once the cause is found, make the fix through /implement: the minimised repro is the first /tdd slice, as a regression test, and it closes with /code-review. If no correct seam exists for that test, that is itself the finding: say so rather than write a shallow test.",
-        "- Before calling it done: re-run the original loop, remove every [DEBUG-\u2026] log, and delete throwaway prototypes (or move them to a clearly marked debug location).",
-        "- Finish with the cause (the hypothesis that held), the fix, and the command that went red before and green after."
-      ])
+      ].join("\n")
     },
     {
       id: "triage",
@@ -3251,110 +3219,363 @@ ${GUEST_UI_LOOK_CSS}`;
         "- For a bug, try to reproduce it.",
         "- Decide its state: ready-for-agent with a short brief (what to build, how to check it), needs-info with specific questions, ready-for-human with the reason, or wontfix with the reason.",
         "- Write the brief, questions or reason on the task, and set the state with the task-board CLI."
-      ].join("\n"),
-      skills: ["triage"],
-      requires: ["grilling", "domain-modeling"],
-      mattText: withSkills([
+      ].join("\n")
+    }
+  ];
+  var MATT_PRESETS = [
+    {
+      id: "plan",
+      name: "Plan",
+      builtin: true,
+      text: withMattSkills([
+        "Plan this task with Matt Pocock's skills before changing any code.",
+        "- Run /grill-with-docs to sharpen the task with the user, a round of questions at a time; it keeps the terms in GLOSSARY.md and the decisions as ADRs.",
+        "- If a question needs a runnable answer, do not build it here: suggest a Prototype task for it.",
+        "- If this is a multi-session build, stay in this context: write the spec with /to-spec and draft the tickets with /to-tickets (its review with the user included), but publish them with the CLI: the spec as a feature with `{cli} create --title <title> --state ready-for-agent --body-file -`, then each ticket in dependency order with `{cli} create --title <title> --parent <feature id> --blocked-by <ticket ids> --state ready-for-agent --body-file -` (leave out --blocked-by when it has none).",
+        "- Then record the feature id on this task: {note}. If the feature fully replaces this task, close it with `{cli} state {id} done`; otherwise leave its state and keep the link.",
+        "- Otherwise finish with the sharpened plan and ask the user to approve it. Do not write code."
+      ]),
+      skills: ["grill-with-docs", "to-spec", "to-tickets"],
+      requires: ["grilling", "domain-modeling"]
+    },
+    {
+      id: "prototype",
+      name: "Prototype",
+      builtin: true,
+      text: withMattSkills([
+        "Answer this task's design question with Matt Pocock's skills.",
+        "- In your session's worktree, create a `prototype/<name>` branch (`git switch -c prototype/<name>`) and run /prototype there: throwaway code that answers the one question in this task. Commit it on that branch.",
+        "- Record the answer on this task (the verdict, the question it settled and the branch): {note}.",
+        "- Finish with the answer and what a real implementation would need."
+      ]),
+      skills: ["prototype"]
+    },
+    {
+      id: "implement",
+      name: "Implement",
+      builtin: true,
+      text: withMattSkills([
+        "Implement this task with Matt Pocock's skills.",
+        "- Run /implement with this task as its ticket (`{cli} show {id}` reads it). It drives /tdd (agree the seams, then one red-green slice at a time) and closes with /code-review of your diff against the branch you started from.",
+        "- When a decision is unclear, ask the user before going on.",
+        "- Finish with a short summary of what changed and how you tested it."
+      ]),
+      skills: ["implement", "tdd", "code-review"]
+    },
+    {
+      id: "implement-no-questions",
+      name: "Implement without questions",
+      builtin: true,
+      text: withMattSkills([
+        "Implement this task with Matt Pocock's skills, without stopping to ask questions.",
+        "- Run /implement with this task as its ticket (`{cli} show {id}` reads it); it drives /tdd and closes with /code-review.",
+        "- Where a skill would ask the user (the seams for /tdd, the fixed point for /code-review, an unclear decision), decide yourself: choose the simplest reasonable option and go on.",
+        "- Finish with a short summary of what changed, how you tested it, and every assumption you made."
+      ]),
+      skills: ["implement", "tdd", "code-review"]
+    },
+    {
+      id: "orchestrate",
+      name: "Break down and orchestrate",
+      builtin: true,
+      text: withMattSkills([
+        "Break this task down and orchestrate the work with Matt Pocock's skills.",
+        "- If it has no sub-tasks yet, draft tracer-bullet tickets with /to-tickets, then publish them with the CLI in dependency order: `{cli} create --title <title> --parent {id} --blocked-by <ticket ids> --state ready-for-agent --body-file -` (leave out --blocked-by when it has none).",
+        "- Then run /implement-spec over the sub-tasks: it reads them as a task graph, runs implementer subagents (each driving /tdd) across the ready frontier on one integration branch, and ends with one /code-review. Give each implementer the CLI line with its --dir.",
+        "- Claim each sub-task with `{cli} claim <id>` as its implementer starts, and resolve it with `{cli} state <id> done` once merged.",
+        "- Keep working until all sub-tasks are done, then summarise the result and name the integration branch."
+      ]),
+      skills: ["to-tickets", "implement-spec", "tdd", "code-review"]
+    },
+    {
+      id: "diagnose",
+      name: "Diagnose",
+      builtin: true,
+      text: withMattSkills([
+        "Diagnose and fix this bug with Matt Pocock's skills.",
+        "- Run /diagnosing-bugs: build a tight feedback loop that goes red on this bug before any theory, reproduce and minimise, rank hypotheses, instrument.",
+        "- Once the cause is found, make the fix through /implement: the minimised repro is the first /tdd slice, as a regression test, and it closes with /code-review. If no correct seam exists for that test, that is itself the finding: say so rather than write a shallow test.",
+        "- Before calling it done: re-run the original loop, remove every [DEBUG-\u2026] log, and delete throwaway prototypes (or move them to a clearly marked debug location).",
+        "- Finish with the cause (the hypothesis that held), the fix, and the command that went red before and green after."
+      ]),
+      skills: ["diagnosing-bugs", "implement", "tdd", "code-review"]
+    },
+    {
+      id: "triage",
+      name: "Triage",
+      builtin: true,
+      text: withMattSkills([
         "Triage this task with Matt Pocock's skills; it arrived raw and nobody has evaluated it yet.",
         "- Run /triage on this task: gather context, check it is not already implemented or rejected, recommend a category and state, verify the claim (reproduce a bug), and grill it into shape if needed.",
         "- Write the outcome as /triage says (an agent brief, triage notes, or the reason for ready-for-human or wontfix, each starting with its AI disclaimer): {note}.",
         "- Then set the state with `{cli} state {id} <state>`, wontfix included. Do not change labels or close the issue yourself.",
         "- Do not implement it."
-      ])
+      ]),
+      skills: ["triage"],
+      requires: ["grilling", "domain-modeling"]
     }
   ];
-  var list = (names) => names.map((n) => `/${n}`).join(", ");
-  var skillsFoundLine = (found, projectOpen) => {
-    if (found === null) {
-      return projectOpen ? "The service could not check for skills; the presets use their plain instructions." : "Open a project to check which of Matt Pocock's skills are installed.";
-    }
-    if (found.length === 0) {
-      return "None of Matt Pocock's skills were found in ~/.config/opencode/skills, ~/.claude/skills, ~/.agents/skills or the project's .opencode/skills and .claude/skills.";
-    }
-    const missing = MATT_SKILLS.filter((n) => !found.includes(n));
-    return `Matt Pocock's skills found: ${found.join(", ")}.${missing.length > 0 ? ` Missing: ${missing.join(", ")}.` : ""}`;
-  };
-  var presetSkillsNote = (preset, skills, edited) => {
-    if (!preset.builtin || preset.skills === void 0) return null;
-    if (edited) return "Your text is used, whatever skills are installed.";
-    if (usesMattSkills(preset, skills)) return `Runs with Matt Pocock's skills: ${list(preset.skills)}.`;
-    if (!skills.use) return "Plain instructions: Matt Pocock's skills are switched off (Global).";
-    const absent = (names) => names.filter((n) => !skills.found.includes(n));
-    const missing = [...absent(preset.skills).map((n) => `/${n}`), ...absent(preset.requires ?? [])];
-    return `Plain instructions until ${missing.join(", ")} ${missing.length === 1 ? "is" : "are"} installed.`;
-  };
-  var BUILTIN_IDS = new Set(BUILTIN_PRESETS.map((p) => p.id));
-  var shipped = (id) => BUILTIN_PRESETS.find((p) => p.id === id);
-  var needed = (preset) => [...preset.skills ?? [], ...preset.requires ?? []];
-  var usesMattSkills = (preset, skills) => skills.use && preset.mattText !== void 0 && preset.skills !== void 0 && preset.skills.length > 0 && needed(preset).every((name) => skills.found.includes(name));
-  var resolve = (p, edit, skills) => {
-    if (edit !== void 0) return { ...p, text: edit };
-    if (!usesMattSkills(p, skills)) return p;
-    const skillFiles = needed(p).flatMap((name) => {
-      const path = skills.paths?.[name];
-      return path === void 0 ? [] : [{ name, path }];
-    });
-    return { ...p, text: p.mattText, skillFiles };
-  };
+  var SP_IMPLEMENT = ["test-driven-development", "verification-before-completion", "requesting-code-review"];
+  var plainTriage = PLAIN_PRESETS.find((p) => p.id === "triage");
+  var SUPERPOWERS_PRESETS = [
+    {
+      id: "plan",
+      name: "Plan",
+      builtin: true,
+      text: withSuperpowers([
+        "Plan this task with the Superpowers skills before changing any code.",
+        "- Run brainstorming with this task as the request (`{cli} show {id}` reads it): read the code it touches, ask the user one question at a time, lay out the approaches for them to pick, and get the design doc approved. Commit it where the skill says (docs/superpowers/specs/).",
+        "- Then run writing-plans on the approved design and commit the plan (docs/superpowers/plans/). Stop at its execution handoff: do not implement the plan in this session.",
+        "- Publish the plan to the tracker, so a session in any worktree can run it: the design as a feature with `{cli} create --title <title> --state ready-for-agent --body-file -`, then each plan task in order with `{cli} create --title <task title> --parent <feature id> --blocked-by <ticket ids> --state ready-for-agent --body-file -`, its full text from the plan as the body (leave out --blocked-by when it has none).",
+        "- Then record the feature id, the design doc and the plan on this task: {note}. If the feature fully replaces this task, close it with `{cli} state {id} done`; otherwise leave its state and keep the link.",
+        "- Finish by telling the user the feature is ready for Break down and orchestrate. Do not write code."
+      ]),
+      skills: ["brainstorming", "writing-plans"]
+    },
+    {
+      id: "prototype",
+      name: "Prototype",
+      builtin: true,
+      text: withSuperpowers([
+        "Answer this task's design question with a throwaway spike.",
+        "- Use brainstorming only to pin down the one question the spike must answer (`{cli} show {id}` reads the task): read the code it touches and ask the user one question at a time until the question is sharp. This task already approves the spike, so write no design doc and no plan.",
+        "- In your session's worktree, create a `prototype/<name>` branch (`git switch -c prototype/<name>`) and build throwaway code there that answers the question; a throwaway spike skips test-driven-development. Commit it on that branch.",
+        "- Record the answer on this task (the verdict, the question it settled and the branch): {note}.",
+        "- Finish with the answer and what a real implementation would need."
+      ]),
+      skills: ["brainstorming"]
+    },
+    {
+      id: "implement",
+      name: "Implement",
+      builtin: true,
+      text: withSuperpowers([
+        "Implement this task with the Superpowers skills.",
+        "- Read it with `{cli} show {id}`: it is the spec. When something that would change what gets built is unclear, ask the user before going on, one question at a time; this needs no full brainstorming round or design doc.",
+        "- Note the commit you start from (`git rev-parse HEAD`), then build it with test-driven-development: for each behaviour write the failing test, watch it fail for the right reason, write the minimal code, watch it pass, refactor. Commit as you go.",
+        "- Before calling anything done, follow verification-before-completion: run the full test suite (and the build, if any) fresh and read the result.",
+        "- Then run requesting-code-review on your diff from that start commit to HEAD; fix every Critical and Important finding and verify again.",
+        "- Finish with a short summary of what changed and how you tested it, with the verification output."
+      ]),
+      skills: SP_IMPLEMENT
+    },
+    {
+      id: "implement-no-questions",
+      name: "Implement without questions",
+      builtin: true,
+      text: withSuperpowers([
+        "Implement this task with the Superpowers skills, without stopping to ask questions.",
+        "- Read it with `{cli} show {id}`: it is the spec. Do not run brainstorming: where something is unclear, choose the simplest reasonable option, note it as an assumption and go on.",
+        "- Note the commit you start from (`git rev-parse HEAD`), then build it with test-driven-development: for each behaviour write the failing test, watch it fail for the right reason, write the minimal code, watch it pass, refactor. Commit as you go.",
+        "- Before calling anything done, follow verification-before-completion: run the full test suite (and the build, if any) fresh and read the result.",
+        "- Then run requesting-code-review on your diff from that start commit to HEAD and act on it yourself: fix every Critical and Important finding, note the Minor ones, and verify again.",
+        "- Finish with a short summary of what changed, how you tested it, and every assumption you made."
+      ]),
+      skills: SP_IMPLEMENT
+    },
+    {
+      id: "orchestrate",
+      name: "Break down and orchestrate",
+      builtin: true,
+      text: withSuperpowers([
+        "Break this task down and orchestrate the work with the Superpowers skills.",
+        "- If it has no sub-tasks yet, run writing-plans with this task as the spec (`{cli} show {id}` reads it) and commit the plan, then publish each plan task as a sub-task, in order: `{cli} create --title <task title> --parent {id} --blocked-by <ticket ids> --state ready-for-agent --body-file -`, its full text from the plan as the body (leave out --blocked-by when it has none). Skip the plan's question about the execution method: it runs subagent-driven.",
+        "- Then run subagent-driven-development over the sub-tasks in dependency order (`{cli} show <id>` reads each): a fresh implementer subagent per sub-task, a task review after each, one whole-branch review at the end, all on this worktree's branch. Give each implementer the CLI line with its --dir.",
+        "- Claim each sub-task with `{cli} claim <id>` as its implementer starts, and resolve it with `{cli} state <id> done` once its review is clean.",
+        "- Keep working until all sub-tasks are done, then summarise the result and name the branch."
+      ]),
+      skills: ["writing-plans", "subagent-driven-development"]
+    },
+    {
+      id: "diagnose",
+      name: "Diagnose",
+      builtin: true,
+      text: withSuperpowers([
+        "Diagnose and fix this bug with the Superpowers skills.",
+        "- Run systematic-debugging (`{cli} show {id}` reads the bug): find the root cause before any fix. Read the errors, reproduce it reliably, check recent changes, trace the bad value back to its source, and test one hypothesis at a time.",
+        "- Fix it with test-driven-development: the reproduction becomes a failing regression test first; watch it fail for the right reason, then make one fix at the root cause and watch it pass.",
+        "- If three fixes have failed, stop and tell the user: systematic-debugging treats that as a question about the design, not another fix to try.",
+        "- Follow verification-before-completion: re-run the original reproduction and the full test suite fresh, and remove any diagnostic logging you added.",
+        "- Finish with the root cause, the fix, and the command that failed before and passes now."
+      ]),
+      skills: ["systematic-debugging", "test-driven-development", "verification-before-completion"]
+    },
+    plainTriage
+  ];
+
+  // src/panel/presets.ts
+  var BUILTIN_PRESETS = PLAIN_PRESETS;
+  var BUILTIN_SETS = [
+    { id: "matt", name: "Matt Pocock's skills", presets: MATT_PRESETS, skills: MATT_SKILLS },
+    { id: "superpowers", name: "Superpowers", presets: SUPERPOWERS_PRESETS, skills: SUPERPOWERS_SKILLS },
+    { id: "plain", name: "Plain", presets: PLAIN_PRESETS, skills: [] }
+  ];
+  var PRESET_IDS = PLAIN_PRESETS.map((p) => p.id);
+  var FALLBACK_ID = "implement";
+  var EMPTY_SETS = Object.freeze({ builtin: Object.freeze({}), custom: Object.freeze([]) });
+  var builtinSet = (id) => BUILTIN_SETS.find((s) => s.id === id);
+  var isBuiltinSet = (id) => builtinSet(id) !== void 0;
   var record2 = (v2) => typeof v2 === "object" && v2 !== null && !Array.isArray(v2) ? v2 : null;
-  var parseStoredPresets = (raw) => {
+  var parsePresetList = (raw, reserved = /* @__PURE__ */ new Set()) => {
+    const out = [];
+    if (!Array.isArray(raw)) return out;
+    const seen = /* @__PURE__ */ new Set();
+    for (const item of raw) {
+      const c = record2(item);
+      if (c === null || typeof c.id !== "string" || c.id === "" || reserved.has(c.id) || seen.has(c.id)) continue;
+      if (typeof c.name !== "string" || typeof c.text !== "string") continue;
+      seen.add(c.id);
+      out.push({ id: c.id, name: c.name, text: c.text });
+    }
+    return out;
+  };
+  var SHIPPED_IDS = new Set(PRESET_IDS);
+  var parseStoredSets = (raw) => {
     const r = record2(raw);
     const builtin = {};
-    const custom = [];
     const b = record2(r?.builtin);
     if (b !== null) {
-      for (const [id, text3] of Object.entries(b)) if (BUILTIN_IDS.has(id) && typeof text3 === "string") builtin[id] = text3;
+      for (const set2 of BUILTIN_SETS) {
+        const entry = record2(b[set2.id]);
+        if (entry === null) continue;
+        const texts = {};
+        const t = record2(entry.texts);
+        if (t !== null) {
+          for (const [id, text3] of Object.entries(t)) if (SHIPPED_IDS.has(id) && typeof text3 === "string") texts[id] = text3;
+        }
+        const custom2 = parsePresetList(entry.custom, SHIPPED_IDS);
+        if (Object.keys(texts).length > 0 || custom2.length > 0) builtin[set2.id] = { texts, custom: custom2 };
+      }
     }
+    const custom = [];
     if (Array.isArray(r?.custom)) {
       const seen = /* @__PURE__ */ new Set();
       for (const item of r.custom) {
         const c = record2(item);
-        if (c === null || typeof c.id !== "string" || c.id === "" || BUILTIN_IDS.has(c.id) || seen.has(c.id)) continue;
-        if (typeof c.name !== "string" || typeof c.text !== "string") continue;
+        if (c === null || typeof c.id !== "string" || c.id === "" || isBuiltinSet(c.id) || seen.has(c.id) || typeof c.name !== "string") continue;
         seen.add(c.id);
-        custom.push({ id: c.id, name: c.name, text: c.text });
+        custom.push({ id: c.id, name: c.name, presets: parsePresetList(c.presets) });
       }
     }
     return { builtin, custom };
   };
-  var listPresets = (stored2, skills = NO_SKILLS) => [
-    ...BUILTIN_PRESETS.map((p) => resolve(p, stored2.builtin[p.id], skills)),
-    ...stored2.custom.map((c) => ({ ...c, builtin: false }))
-  ];
-  var isEdited = (stored2, id) => Object.hasOwn(stored2.builtin, id);
-  var isPristine = (stored2) => Object.keys(stored2.builtin).length === 0 && stored2.custom.length === 0;
-  var setPresetText = (stored2, id, text3) => {
-    const original = shipped(id);
-    if (original !== void 0) {
-      const builtin = { ...stored2.builtin };
-      if (text3 === original.text || text3 === original.mattText) delete builtin[id];
-      else builtin[id] = text3;
-      return { ...stored2, builtin };
+  var migrateStoredPresets = (raw) => {
+    const r = record2(raw);
+    const texts = {};
+    const b = record2(r?.builtin);
+    if (b !== null) {
+      for (const [id, text3] of Object.entries(b)) if (SHIPPED_IDS.has(id) && typeof text3 === "string") texts[id] = text3;
     }
-    return { ...stored2, custom: stored2.custom.map((c) => c.id === id ? { ...c, text: text3 } : c) };
+    const custom = parsePresetList(r?.custom, SHIPPED_IDS);
+    if (Object.keys(texts).length === 0 && custom.length === 0) return EMPTY_SETS;
+    return parseStoredSets({ builtin: { matt: { texts, custom }, plain: { texts, custom } }, custom: [] });
   };
-  var resetPreset = (stored2, id) => {
-    if (!isEdited(stored2, id)) return stored2;
+  var isPristineSets = (stored2) => Object.keys(stored2.builtin).length === 0 && stored2.custom.length === 0;
+  var listSets = (stored2) => [
+    ...BUILTIN_SETS.map((s) => ({ id: s.id, name: s.name, builtin: true })),
+    ...stored2.custom.map((s) => ({ id: s.id, name: s.name, builtin: false }))
+  ];
+  var hasSet = (stored2, id) => isBuiltinSet(id) || stored2.custom.some((s) => s.id === id);
+  var setSkills = (setId) => [...builtinSet(setId)?.skills ?? []];
+  var missingSkills = (setId, found) => setSkills(setId).filter((n) => !found.includes(n));
+  var defaultSetId = (found) => {
+    if (missingSkills("matt", found).length === 0) return "matt";
+    if (missingSkills("superpowers", found).length === 0) return "superpowers";
+    return "plain";
+  };
+  var effectiveSetId = (stored2, requested, found) => requested !== null && requested !== void 0 && hasSet(stored2, requested) ? requested : defaultSetId(found);
+  var resolveShipped = (p, edit, paths) => {
+    if (edit !== void 0) return { ...p, text: edit };
+    if (p.skills === void 0) return p;
+    const skillFiles = [...p.skills, ...p.requires ?? []].flatMap((name) => {
+      const path = paths[name];
+      return path === void 0 ? [] : [{ name, path }];
+    });
+    return skillFiles.length === 0 ? p : { ...p, skillFiles };
+  };
+  var own = (p) => ({ id: p.id, name: p.name, text: p.text, builtin: false });
+  var listPresets = (stored2, setId, paths = {}) => {
+    const mine = stored2.custom.find((s) => s.id === setId);
+    if (mine !== void 0) return mine.presets.map(own);
+    const set2 = builtinSet(setId) ?? builtinSet("plain");
+    const edits = stored2.builtin[set2.id];
+    return [...set2.presets.map((p) => resolveShipped(p, edits?.texts[p.id], paths)), ...(edits?.custom ?? []).map(own)];
+  };
+  var pickPreset = (presets2, id) => presets2.find((p) => p.id === id) ?? presets2.find((p) => p.id === FALLBACK_ID) ?? PLAIN_PRESETS.find((p) => p.id === FALLBACK_ID);
+  var isEdited = (stored2, setId, presetId) => stored2.builtin[setId] !== void 0 && Object.hasOwn(stored2.builtin[setId].texts, presetId);
+  var shipped = (setId, presetId) => builtinSet(setId)?.presets.find((p) => p.id === presetId);
+  var withBuiltin = (stored2, setId, change) => {
+    const current = stored2.builtin[setId] ?? { texts: {}, custom: [] };
+    const next = change({ texts: { ...current.texts }, custom: [...current.custom] });
     const builtin = { ...stored2.builtin };
-    delete builtin[id];
+    if (Object.keys(next.texts).length === 0 && next.custom.length === 0) delete builtin[setId];
+    else builtin[setId] = next;
     return { ...stored2, builtin };
   };
+  var withOwn = (stored2, setId, change) => {
+    if (isBuiltinSet(setId)) return withBuiltin(stored2, setId, (e) => ({ ...e, custom: change(e.custom) }));
+    return { ...stored2, custom: stored2.custom.map((s) => s.id === setId ? { ...s, presets: change(s.presets) } : s) };
+  };
+  var setPresetText = (stored2, setId, presetId, text3) => {
+    const original = shipped(setId, presetId);
+    if (original !== void 0)
+      return withBuiltin(stored2, setId, (e) => {
+        if (text3 === original.text) delete e.texts[presetId];
+        else e.texts[presetId] = text3;
+        return e;
+      });
+    return withOwn(stored2, setId, (list2) => list2.map((p) => p.id === presetId ? { ...p, text: text3 } : p));
+  };
+  var resetPreset = (stored2, setId, presetId) => !isEdited(stored2, setId, presetId) ? stored2 : withBuiltin(stored2, setId, (e) => {
+    delete e.texts[presetId];
+    return e;
+  });
   var UNTITLED = "Untitled preset";
-  var slug = (name) => name.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "preset";
-  var addPreset = (stored2, name) => {
-    const trimmed = name.trim();
-    const base2 = `custom-${slug(trimmed)}`;
-    const taken = new Set(stored2.custom.map((c) => c.id));
+  var UNTITLED_SET = "Untitled set";
+  var slug = (name, fallback) => name.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || fallback;
+  var unique = (base2, taken) => {
     let id = base2;
     for (let n = 2; taken.has(id); n++) id = `${base2}-${n}`;
-    return { id, stored: { ...stored2, custom: [...stored2.custom, { id, name: trimmed === "" ? UNTITLED : trimmed, text: "" }] } };
+    return id;
   };
-  var renamePreset = (stored2, id, name) => {
-    if (BUILTIN_IDS.has(id)) return stored2;
+  var addPreset = (stored2, setId, name) => {
     const trimmed = name.trim();
-    return { ...stored2, custom: stored2.custom.map((c) => c.id === id ? { ...c, name: trimmed === "" ? UNTITLED : trimmed } : c) };
+    const id = unique(`custom-${slug(trimmed, "preset")}`, new Set(listPresets(stored2, setId).map((p) => p.id)));
+    return { id, stored: withOwn(stored2, setId, (list2) => [...list2, { id, name: trimmed === "" ? UNTITLED : trimmed, text: "" }]) };
   };
-  var deletePreset = (stored2, id) => BUILTIN_IDS.has(id) ? stored2 : { ...stored2, custom: stored2.custom.filter((c) => c.id !== id) };
+  var renamePreset = (stored2, setId, presetId, name) => {
+    if (shipped(setId, presetId) !== void 0) return stored2;
+    const trimmed = name.trim();
+    return withOwn(stored2, setId, (list2) => list2.map((p) => p.id === presetId ? { ...p, name: trimmed === "" ? UNTITLED : trimmed } : p));
+  };
+  var deletePreset = (stored2, setId, presetId) => shipped(setId, presetId) !== void 0 ? stored2 : withOwn(stored2, setId, (list2) => list2.filter((p) => p.id !== presetId));
+  var addSet = (stored2, name, from) => {
+    const trimmed = name.trim();
+    const id = unique(`set-${slug(trimmed, "set")}`, new Set(listSets(stored2).map((s) => s.id)));
+    const presets2 = from === null ? [] : listPresets(stored2, from).map((p) => ({ id: p.id, name: p.name, text: p.text }));
+    return { id, stored: { ...stored2, custom: [...stored2.custom, { id, name: trimmed === "" ? UNTITLED_SET : trimmed, presets: presets2 }] } };
+  };
+  var renameSet = (stored2, id, name) => {
+    const trimmed = name.trim();
+    return { ...stored2, custom: stored2.custom.map((s) => s.id === id ? { ...s, name: trimmed === "" ? UNTITLED_SET : trimmed } : s) };
+  };
+  var deleteSet = (stored2, id) => isBuiltinSet(id) ? stored2 : { ...stored2, custom: stored2.custom.filter((s) => s.id !== id) };
+  var SKILLS_OWNER = { matt: "Matt Pocock's skills", superpowers: "Superpowers skills" };
+  var setStatusLine = (setId, found, projectOpen) => {
+    if (!isBuiltinSet(setId)) return "Your own set: its texts are used as written.";
+    if (setSkills(setId).length === 0) return "Plain instructions; no skills needed.";
+    if (found === null) return projectOpen ? "The service could not check which skills are installed." : "Open a project to check which skills are installed.";
+    const missing = missingSkills(setId, found);
+    if (missing.length === 0) return setId === "matt" ? "All of Matt Pocock's skills were found." : "All of the Superpowers skills were found.";
+    return `${SKILLS_OWNER[setId]} missing: ${missing.join(", ")}. Sessions are still told to run them.`;
+  };
+  var setOptionLabel = (set2, found) => found !== null && missingSkills(set2.id, found).length > 0 ? `${set2.name} (skills missing)` : set2.name;
+  var presetSkillsNote = (preset, edited) => {
+    if (!preset.builtin || preset.skills === void 0 || preset.skills.length === 0) return null;
+    if (edited) return "Your text is used.";
+    const matt = MATT_SKILLS.includes(preset.skills[0]);
+    return matt ? `Runs Matt Pocock's skills: ${preset.skills.map((n) => `/${n}`).join(", ")}.` : `Runs Superpowers skills: ${preset.skills.join(", ")}.`;
+  };
 
   // src/panel/summaries.ts
   var DEFAULT_SUMMARY_PROMPT = `Summarise this task for me in {language}, in 2 to 4 plain sentences: what changes for the user, why it matters, and what "done" means. No headings, no lists, no markdown. Write only the summary.
@@ -3419,7 +3640,7 @@ Title: {title}
     let active2 = 0;
     const waiting = [];
     const slot = async (fn) => {
-      if (active2 >= CONCURRENCY) await new Promise((resolve3) => waiting.push(resolve3));
+      if (active2 >= CONCURRENCY) await new Promise((resolve2) => waiting.push(resolve2));
       else active2++;
       try {
         return await fn();
@@ -3435,10 +3656,10 @@ Title: {title}
       if (ctx === null) return null;
       const k = langKey(ctx.projectId, task.id);
       if (deps.loadLanguage !== void 0 && !languages.has(k)) return null;
-      const own = languages.get(k);
-      return { projectId: ctx.projectId, summary: own === void 0 ? ctx.summary : { ...ctx.summary, language: own } };
+      const own2 = languages.get(k);
+      return { projectId: ctx.projectId, summary: own2 === void 0 ? ctx.summary : { ...ctx.summary, language: own2 } };
     };
-    const resolve2 = async (task) => {
+    const resolve = async (task) => {
       const ctx = deps.context();
       if (ctx === null) return null;
       const k = langKey(ctx.projectId, task.id);
@@ -3533,7 +3754,7 @@ ${ref}`,
       return p;
     };
     const ensure = async (task, force = false) => {
-      const r = await resolve2(task);
+      const r = await resolve(task);
       if (r === null) return null;
       const stored2 = await readStored(r.key, task.id);
       if (stored2 !== null) return stored2;
@@ -3562,7 +3783,7 @@ ${ref}`,
       },
       /** Reads a stored summary (and the card's language); never generates. */
       load: async (task) => {
-        const r = await resolve2(task);
+        const r = await resolve(task);
         return r === null ? null : readStored(r.key, task.id);
       },
       /** The stored summary, else a new one; not after a failure for this body or a missing model. */
@@ -3620,11 +3841,11 @@ ${ref}`,
     autoStart: true,
     maxParallel: 3,
     defaults: { presetId: "implement", model: null, agent: null, variant: null, location: "worktree" },
-    presetByType: { enhancement: "implement", bug: "implement", research: "plan" },
+    presetByType: { enhancement: "implement", bug: DIAGNOSE_PRESET_ID, research: "plan" },
     summary: { auto: true, language: "Polish", prompt: DEFAULT_SUMMARY_PROMPT },
     hideChildren: false,
     types: ["enhancement", "bug", "chore", "research"],
-    useMattSkills: true
+    presetSet: defaultSetId([])
   };
   var record3 = (v2) => typeof v2 === "object" && v2 !== null && !Array.isArray(v2) ? v2 : null;
   var text = (v2) => typeof v2 === "string" && v2.trim() !== "" ? v2.trim() : void 0;
@@ -3657,7 +3878,8 @@ ${ref}`,
     if (typeof r.autoStart === "boolean") out.autoStart = r.autoStart;
     if (typeof r.maxParallel === "number" && Number.isFinite(r.maxParallel)) out.maxParallel = clampParallel(r.maxParallel);
     if (typeof r.hideChildren === "boolean") out.hideChildren = r.hideChildren;
-    if (typeof r.useMattSkills === "boolean") out.useMattSkills = r.useMattSkills;
+    const presetSet = text(r.presetSet);
+    if (presetSet !== void 0) out.presetSet = presetSet;
     if (Array.isArray(r.types)) {
       const types = [...new Set(r.types.map(text).filter((t) => t !== void 0))];
       if (types.length > 0) out.types = types;
@@ -3684,8 +3906,11 @@ ${ref}`,
     }
     return out;
   };
-  var diagnose = BUILTIN_PRESETS.find((p) => p.id === DIAGNOSE_PRESET_ID);
-  var skillUse = (s, found) => ({ use: s.useMattSkills, found });
+  var migrateGlobalLayer = (raw) => {
+    const layer = parseSettings(raw);
+    if (record3(raw)?.useMattSkills === false && layer.presetSet === void 0) layer.presetSet = "plain";
+    return layer;
+  };
   var ownVariant = (layers) => {
     for (const l of layers) {
       if (l === void 0) continue;
@@ -3699,17 +3924,15 @@ ${ref}`,
     const p = parseSettings(project2);
     const d = DEFAULT_SETTINGS;
     const maxParallel = p.maxParallel ?? g.maxParallel ?? d.maxParallel;
-    const useMattSkills = g.useMattSkills ?? d.useMattSkills;
-    const byType = usesMattSkills(diagnose, { use: useMattSkills, found }) ? { ...d.presetByType, bug: DIAGNOSE_PRESET_ID } : d.presetByType;
     return {
       autoStart: p.autoStart ?? g.autoStart ?? d.autoStart,
       maxParallel: clampParallel(maxParallel),
       defaults: { ...d.defaults, ...g.defaults, ...p.defaults, variant: ownVariant([p.defaults, g.defaults]) },
-      presetByType: { ...byType, ...g.presetByType, ...p.presetByType },
+      presetByType: { ...d.presetByType, ...g.presetByType, ...p.presetByType },
       summary: { ...d.summary, ...g.summary, ...p.summary },
       hideChildren: p.hideChildren ?? g.hideChildren ?? d.hideChildren,
       types: [...p.types ?? g.types ?? d.types],
-      useMattSkills
+      presetSet: p.presetSet ?? g.presetSet ?? defaultSetId(found)
     };
   };
   var resolveStart = (s, task, card, presets2 = BUILTIN_PRESETS) => {
@@ -3743,7 +3966,10 @@ ${ref}`,
   var STORAGE_KEYS = {
     global: "settings:global",
     project: (projectId) => fit(`settings:project:${projectId}`),
+    /** 0.2's presets ({ builtin, custom }); read once, migrated to presetSets and deleted. */
     presets: "presets",
+    /** The preset sets: edits of the built-in sets and the user's own sets (presets.ts StoredSets). */
+    presetSets: "presetSets",
     card: (projectId, taskId) => fit(`card:${projectId}:${taskId}`),
     /** Per project: task id -> when the user dragged the card away from its session (columns.ts Detached). */
     detached: (projectId) => fit(`detached:${projectId}`),
@@ -3791,14 +4017,24 @@ ${ref}`,
       return put(key, clean2, isEmptyLayer(clean2));
     };
     return {
-      loadGlobal: async () => parseSettings(await storage.get(STORAGE_KEYS.global)),
+      loadGlobal: async () => migrateGlobalLayer(await storage.get(STORAGE_KEYS.global)),
       saveGlobal: (layer) => saveLayer(STORAGE_KEYS.global, layer),
       loadProject: async (projectId) => parseSettings(await storage.get(STORAGE_KEYS.project(projectId))),
       saveProject: (projectId, layer) => saveLayer(STORAGE_KEYS.project(projectId), layer),
-      loadPresets: async () => parseStoredPresets(await storage.get(STORAGE_KEYS.presets)),
+      /** The preset sets; 0.2's `presets` key, when still there, is migrated once (written as presetSets, then deleted). */
+      loadPresets: async () => {
+        const raw = await storage.get(STORAGE_KEYS.presetSets);
+        if (raw !== void 0) return parseStoredSets(raw);
+        const old = await storage.get(STORAGE_KEYS.presets);
+        if (old === void 0) return EMPTY_SETS;
+        const migrated = migrateStoredPresets(old);
+        if (!isPristineSets(migrated)) await storage.set(STORAGE_KEYS.presetSets, migrated);
+        await storage.delete(STORAGE_KEYS.presets);
+        return migrated;
+      },
       savePresets: (stored2) => {
-        const clean2 = parseStoredPresets(stored2);
-        return put(STORAGE_KEYS.presets, clean2, isPristine(clean2));
+        const clean2 = parseStoredSets(stored2);
+        return put(STORAGE_KEYS.presetSets, clean2, isPristineSets(clean2));
       },
       loadCard: async (projectId, taskId) => parseCardOptions(await storage.get(STORAGE_KEYS.card(projectId, taskId))),
       saveCard: (projectId, taskId, card) => {
@@ -3881,7 +4117,7 @@ ${ref}`,
   };
 
   // src/panel/ui/confirm.ts
-  var askChoice = (title, body, choices) => new Promise((resolve2) => {
+  var askChoice = (title, body, choices) => new Promise((resolve) => {
     const backdrop = document.createElement("div");
     backdrop.className = "kb-backdrop kb-confirm-backdrop";
     const box = document.createElement("div");
@@ -3903,7 +4139,7 @@ ${ref}`,
       document.removeEventListener("keydown", onKey, true);
       for (const d of disposers) d();
       backdrop.remove();
-      resolve2(answer);
+      resolve(answer);
     };
     const onKey = (e) => {
       if (e.key !== "Escape") return;
@@ -3978,13 +4214,13 @@ ${ref}`,
     out.push(...stored(value, models === null ? null : models.map((m) => m.id), "not in the list"));
     if (models === null) return [...out, statusRow("models", input.error)];
     const seen = /* @__PURE__ */ new Set();
-    const list3 = [];
+    const list2 = [];
     for (const m of models) {
       if (seen.has(m.id)) continue;
       seen.add(m.id);
-      list3.push(m.name === m.id ? { id: m.id, label: m.id } : { id: m.id, label: m.name, hint: m.id });
+      list2.push(m.name === m.id ? { id: m.id, label: m.id } : { id: m.id, label: m.name, hint: m.id });
     }
-    return [...out, ...list3.sort(byLabel)];
+    return [...out, ...list2.sort(byLabel)];
   };
   var pickedModel = (id) => id === STATUS_ID ? null : { value: id === DEFAULT_ID ? null : id };
   var agentOptions = (input) => {
@@ -4095,10 +4331,10 @@ ${ref}`,
       modelsLoading = true;
       modelError = void 0;
       props.lists.models().then(
-        (list3) => {
+        (list2) => {
           modelsLoading = false;
           if (disposed) return;
-          models = list3;
+          models = list2;
           if (props.dropStaleVariant === true && value.variant !== null) {
             const kept = keptVariant(value.variant, effectiveModel(), models);
             if (kept === null) {
@@ -4122,10 +4358,10 @@ ${ref}`,
       agentsLoading = true;
       agentError = void 0;
       props.lists.agents().then(
-        (list3) => {
+        (list2) => {
           agentsLoading = false;
           if (disposed) return;
-          agents = list3;
+          agents = list2;
           drawAgents();
         },
         (e) => {
@@ -4264,7 +4500,7 @@ ${ref}`,
     disposers.push(field2.dispose, reset.dispose);
   };
   var onOff = (b) => b ? "On" : "Off";
-  var presetName = (presets2, id) => presets2.find((p) => p.id === id)?.name ?? id;
+  var presetName = (presets2, id) => presets2.find((p) => p.id === id)?.name ?? `${presets2.find((p) => p.id === "implement")?.name ?? "Implement"} (the set has no ${id})`;
   var presetOptions = (presets2) => presets2.map((p) => ({ id: p.id, label: p.name }));
   var drawLayerForm = (root, disposers, opts) => {
     const layer = structuredClone(parseSettings(opts.layer));
@@ -4303,6 +4539,18 @@ ${ref}`,
     });
     const defaults = () => layer.defaults ??= {};
     const summary = () => layer.summary ??= {};
+    const setSection = section("Preset set", "The presets cards start with: built-in sets run Matt Pocock's skills, the Superpowers skills, or plain instructions; edit them or add your own in Presets.");
+    mountInheritSelect(cell(row(setSection)), disposers, {
+      label: "Preset set",
+      value: layer.presetSet,
+      inheritLabel: opts.sets.inheritLabel,
+      options: opts.sets.options,
+      onChange: (v2) => {
+        layer.presetSet = v2;
+        emit();
+      }
+    });
+    setSection.append(el2("p", "kb-settings-hint", opts.sets.line));
     const start2 = section("Starting agents", "Moving a card to In Progress starts a session with these options unless the card sets its own.");
     const r1 = row(start2);
     bool(r1, "Start at once", () => layer.autoStart, (v2) => layer.autoStart = v2, base2.autoStart);
@@ -4362,14 +4610,6 @@ ${ref}`,
       )
     );
     start2.append(el2("p", "kb-settings-hint", START_PATH_NOTE));
-    if (opts.skillsLine !== void 0) {
-      const skills = section(
-        "Matt Pocock's skills",
-        "When on, a built-in preset whose skills are all installed tells the agent to run them (Settings \u2192 Presets shows which), and a bug starts with Diagnose."
-      );
-      bool(row(skills), "Use Matt Pocock's skills when installed", () => layer.useMattSkills, (v2) => layer.useMattSkills = v2, base2.useMattSkills);
-      skills.append(el2("p", "kb-settings-hint", opts.skillsLine));
-    }
     const types = layer.types ?? base2.types;
     const byType = section("Preset per type", "Used when a card sets no preset. Unset types use the default preset.");
     const r4 = row(byType);
@@ -4399,8 +4639,8 @@ ${ref}`,
       resetLabel: inheritWord,
       helper: "Comma-separated. Applies the next time this sheet opens.",
       onChange: (v2) => {
-        const list3 = v2?.split(",").map((t) => t.trim()).filter((t) => t !== "");
-        layer.types = list3 === void 0 || list3.length === 0 ? void 0 : list3;
+        const list2 = v2?.split(",").map((t) => t.trim()).filter((t) => t !== "");
+        layer.types = list2 === void 0 || list2.length === 0 ? void 0 : list2;
         emit();
       }
     });
@@ -4429,34 +4669,105 @@ ${ref}`,
       }
     });
   };
-  var drawPresets = (root, disposers, getStored, setStored, redraw, skills) => {
+  var drawPresets = (root, disposers, getStored, setStored, redraw, view) => {
+    const { setId } = view;
+    const sets = listSets(getStored());
+    const current = sets.find((x) => x.id === setId) ?? sets[0];
     root.append(
-      el2("p", "kb-settings-hint", "A preset is a block of instructions added to the agent\u2019s start prompt. Built-ins can be edited and reset."),
-      el2("p", "kb-settings-hint", skills.line)
+      el2("p", "kb-settings-hint", "A preset is a block of instructions added to the agent\u2019s start prompt; a preset set is a list of them. Choose the set a project uses in Global or This project.")
     );
-    for (const preset of listPresets(getStored(), skills.use)) {
+    const head = el2("div", "kb-preset-head");
+    root.append(head);
+    const pickSlot = el2("div", "kb-field");
+    head.append(pickSlot);
+    const picker = mountSelect(pickSlot, {
+      label: "Set",
+      value: current.id,
+      options: sets.map((x) => ({ id: x.id, label: setOptionLabel(x, view.found) })),
+      onChange: (id) => {
+        picker.update({ value: id });
+        view.pick(id);
+        redraw();
+      }
+    });
+    disposers.push(picker.dispose);
+    const setButtons = el2("div", "kb-actions");
+    head.append(setButtons);
+    disposers.push(
+      mountButton(setButtons, {
+        label: "New set",
+        variant: "outline",
+        size: "xs",
+        onClick: () => {
+          void askChoice("New preset set", `Start from a copy of \u201C${current.name}\u201D (its texts as they read now), or empty.`, [
+            { id: "empty", label: "Empty", variant: "outline" },
+            { id: "copy", label: `Copy \u201C${current.name}\u201D` }
+          ]).then((answer) => {
+            if (answer === null) return;
+            const added = answer === "copy" ? addSet(getStored(), `${current.name} (copy)`, current.id) : addSet(getStored(), "New set", null);
+            setStored(added.stored);
+            view.pick(added.id);
+            redraw();
+          });
+        }
+      }).dispose
+    );
+    if (!current.builtin) {
+      disposers.push(
+        mountButton(setButtons, {
+          label: "Delete set",
+          variant: "ghost",
+          size: "xs",
+          onClick: () => {
+            void askChoice(`Delete \u201C${current.name}\u201D?`, "Settings that chose it use the default set instead.", [
+              { id: "delete", label: "Delete", variant: "destructive" }
+            ]).then((answer) => {
+              if (answer !== "delete") return;
+              setStored(deleteSet(getStored(), current.id));
+              view.pick(sets[0].id);
+              redraw();
+            });
+          }
+        }).dispose
+      );
+      const nameSlot = el2("div", "kb-field");
+      root.append(nameSlot);
+      const name = mountTextField(nameSlot, {
+        label: "Set name",
+        value: current.name,
+        onChange: (v2) => {
+          name.update({ value: v2 });
+          setStored(renameSet(getStored(), current.id, v2));
+        }
+      });
+      disposers.push(name.dispose);
+    }
+    root.append(el2("p", "kb-settings-hint", setStatusLine(current.id, view.found, view.projectOpen)));
+    const presets2 = listPresets(getStored(), current.id);
+    if (presets2.length === 0) root.append(el2("p", "kb-settings-hint", "This set has no presets yet: cards that use it start with the Plain Implement text."));
+    for (const preset of presets2) {
       const box = el2("section", "kb-preset");
       root.append(box);
-      const head = el2("div", "kb-preset-head");
-      box.append(head);
+      const head2 = el2("div", "kb-preset-head");
+      box.append(head2);
       if (preset.builtin) {
-        head.append(el2("h3", "kb-settings-heading", preset.name));
+        head2.append(el2("h3", "kb-settings-heading", preset.name));
       } else {
         const nameSlot = el2("div", "kb-field");
-        head.append(nameSlot);
+        head2.append(nameSlot);
         const name = mountTextField(nameSlot, {
           label: "Name",
           value: preset.name,
           onChange: (v2) => {
             name.update({ value: v2 });
-            setStored(renamePreset(getStored(), preset.id, v2));
+            setStored(renamePreset(getStored(), current.id, preset.id, v2));
           }
         });
         disposers.push(name.dispose);
       }
       const buttons = el2("div", "kb-actions");
-      head.append(buttons);
-      const note = presetSkillsNote(preset, skills.use, isEdited(getStored(), preset.id));
+      head2.append(buttons);
+      const note = presetSkillsNote(preset, isEdited(getStored(), current.id, preset.id));
       const noteLine = note === null ? null : el2("p", "kb-settings-hint", note);
       if (noteLine !== null) box.append(noteLine);
       const textSlot = el2("div", "");
@@ -4469,10 +4780,10 @@ ${ref}`,
         rows: 5,
         onChange: (v2) => {
           text3.update({ value: v2 });
-          const next = setPresetText(getStored(), preset.id, v2);
+          const next = setPresetText(getStored(), current.id, preset.id, v2);
           setStored(next);
-          reset?.update({ disabled: !isEdited(next, preset.id) });
-          if (noteLine !== null) noteLine.textContent = presetSkillsNote(preset, skills.use, isEdited(next, preset.id)) ?? "";
+          reset?.update({ disabled: !isEdited(next, current.id, preset.id) });
+          if (noteLine !== null) noteLine.textContent = presetSkillsNote(preset, isEdited(next, current.id, preset.id)) ?? "";
         }
       });
       disposers.push(text3.dispose);
@@ -4481,9 +4792,9 @@ ${ref}`,
           label: "Reset",
           variant: "ghost",
           size: "xs",
-          disabled: !isEdited(getStored(), preset.id),
+          disabled: !isEdited(getStored(), current.id, preset.id),
           onClick: () => {
-            setStored(resetPreset(getStored(), preset.id));
+            setStored(resetPreset(getStored(), current.id, preset.id));
             redraw();
           }
         });
@@ -4499,7 +4810,7 @@ ${ref}`,
                 { id: "delete", label: "Delete", variant: "destructive" }
               ]).then((answer) => {
                 if (answer !== "delete") return;
-                setStored(deletePreset(getStored(), preset.id));
+                setStored(deletePreset(getStored(), current.id, preset.id));
                 redraw();
               });
             }
@@ -4515,7 +4826,7 @@ ${ref}`,
         variant: "outline",
         size: "sm",
         onClick: () => {
-          setStored(addPreset(getStored(), "New preset").stored);
+          setStored(addPreset(getStored(), current.id, "New preset").stored);
           redraw();
         }
       }).dispose
@@ -4547,23 +4858,34 @@ ${ref}`,
       disposers = [];
       body.replaceChildren();
       const found = m.skills ?? [];
-      const use = skillUse(resolveSettings(m.global, {}, found), found);
-      const skillsLine = skillsFoundLine(m.skills, m.project !== null);
-      const presets2 = listPresets(m.presets, use);
+      const projectOpen = m.project !== null;
+      const sets = listSets(m.presets);
+      const setName = (id) => sets.find((x) => x.id === id)?.name ?? id;
+      const setOptions = sets.map((x) => ({ id: x.id, label: setOptionLabel(x, m.skills) }));
+      const setOf = (project2) => effectiveSetId(m.presets, resolveSettings(m.global, project2, found).presetSet, found);
+      const globalSet = setOf({});
+      const projectSet = m.project === null ? globalSet : setOf(m.project.layer);
+      const redrawOnSet = (before, after) => {
+        if (before.presetSet !== after.presetSet) queueMicrotask(draw2);
+      };
       if (m.tab === "global") {
+        const fallback = defaultSetId(found);
         drawLayerForm(body, disposers, {
           layer: m.global,
-          // The built-in defaults, with the toggle as set here (a bug's default follows it).
-          base: resolveSettings({ useMattSkills: m.global.useMattSkills ?? DEFAULT_SETTINGS.useMattSkills }, {}, found),
+          base: resolveSettings({}, {}, found),
           inheritWord: "Default",
-          presets: presets2,
+          presets: listPresets(m.presets, globalSet),
           lists: callbacks.lists,
-          skillsLine,
+          sets: {
+            options: setOptions,
+            inheritLabel: m.skills === null ? "Default (by the skills installed)" : `Default (${setName(fallback)})`,
+            line: `${setName(globalSet)}: ${setStatusLine(globalSet, m.skills, projectOpen)}${m.skills === null ? "" : " Without a choice: Matt Pocock's skills when all are found, else Superpowers when found, else Plain."}`
+          },
           onChange: (layer) => {
-            const toggled = (layer.useMattSkills ?? DEFAULT_SETTINGS.useMattSkills) !== (m.global.useMattSkills ?? DEFAULT_SETTINGS.useMattSkills);
+            const before = m.global;
             m.global = layer;
             callbacks.onGlobal(layer);
-            if (toggled) queueMicrotask(draw2);
+            redrawOnSet(before, layer);
           }
         });
       } else if (m.tab === "project") {
@@ -4576,15 +4898,23 @@ ${ref}`,
             layer: project2.layer,
             base: resolveSettings(m.global, {}, found),
             inheritWord: "Use global",
-            presets: presets2,
+            presets: listPresets(m.presets, projectSet),
             lists: callbacks.lists,
+            sets: {
+              options: setOptions,
+              inheritLabel: `Use global (${setName(globalSet)})`,
+              line: `${setName(projectSet)}: ${setStatusLine(projectSet, m.skills, true)}`
+            },
             onChange: (layer) => {
+              const before = project2.layer;
               project2.layer = layer;
               callbacks.onProject(layer);
+              redrawOnSet(before, layer);
             }
           });
         }
       } else {
+        const shown = m.editSet !== void 0 && m.editSet !== null && sets.some((x) => x.id === m.editSet) ? m.editSet : projectSet;
         drawPresets(
           body,
           disposers,
@@ -4594,7 +4924,7 @@ ${ref}`,
             callbacks.onPresets(s);
           },
           draw2,
-          { use, line: skillsLine }
+          { setId: shown, pick: (id) => m.editSet = id, found: m.skills, projectOpen }
         );
       }
     };
@@ -4841,10 +5171,10 @@ ${ref}`,
         blockersBox.append(el3("p", "kb-muted", why));
         return;
       }
-      const list3 = el3("div", "kb-add-checks");
+      const list2 = el3("div", "kb-add-checks");
       const drawList = () => {
         const shown = new Set(filterSelectOptions(offered, blockerFilter).map((c) => c.id));
-        for (const node of list3.children) {
+        for (const node of list2.children) {
           const id = node.dataset.id ?? "";
           node.hidden = !shown.has(id) && !d.blockedBy.includes(id);
         }
@@ -4867,7 +5197,7 @@ ${ref}`,
       for (const c of offered) {
         const cell = el3("div", "kb-add-check");
         cell.dataset.id = c.id;
-        list3.append(cell);
+        list2.append(cell);
         const box = mountCheckbox(cell, {
           label: c.label,
           description: c.hint ?? c.id,
@@ -4880,7 +5210,7 @@ ${ref}`,
         });
         blockerDisposers.push(box.dispose);
       }
-      blockersBox.append(list3);
+      blockersBox.append(list2);
       drawList();
     };
     let subDisposers = [];
@@ -6626,12 +6956,12 @@ ${ref}`,
     });
     this.__cache__ = null;
   };
-  Ruler.prototype.enable = function(list3, ignoreInvalid) {
-    if (!Array.isArray(list3)) {
-      list3 = [list3];
+  Ruler.prototype.enable = function(list2, ignoreInvalid) {
+    if (!Array.isArray(list2)) {
+      list2 = [list2];
     }
     const result = [];
-    list3.forEach(function(name) {
+    list2.forEach(function(name) {
       const idx = this.__find__(name);
       if (idx < 0) {
         if (ignoreInvalid) {
@@ -6645,21 +6975,21 @@ ${ref}`,
     this.__cache__ = null;
     return result;
   };
-  Ruler.prototype.enableOnly = function(list3, ignoreInvalid) {
-    if (!Array.isArray(list3)) {
-      list3 = [list3];
+  Ruler.prototype.enableOnly = function(list2, ignoreInvalid) {
+    if (!Array.isArray(list2)) {
+      list2 = [list2];
     }
     this.__rules__.forEach(function(rule) {
       rule.enabled = false;
     });
-    this.enable(list3, ignoreInvalid);
+    this.enable(list2, ignoreInvalid);
   };
-  Ruler.prototype.disable = function(list3, ignoreInvalid) {
-    if (!Array.isArray(list3)) {
-      list3 = [list3];
+  Ruler.prototype.disable = function(list2, ignoreInvalid) {
+    if (!Array.isArray(list2)) {
+      list2 = [list2];
     }
     const result = [];
-    list3.forEach(function(name) {
+    list2.forEach(function(name) {
       const idx = this.__find__(name);
       if (idx < 0) {
         if (ignoreInvalid) {
@@ -7865,7 +8195,7 @@ ${ref}`,
       }
     }
   }
-  function list2(state2, startLine, endLine, silent) {
+  function list(state2, startLine, endLine, silent) {
     let max, pos, start2, token;
     let nextLine = startLine;
     let tight = true;
@@ -8524,7 +8854,7 @@ ${ref}`,
     ["fence", fence, ["paragraph", "reference", "blockquote", "list"]],
     ["blockquote", blockquote, ["paragraph", "reference", "blockquote", "list"]],
     ["hr", hr, ["paragraph", "reference", "blockquote", "list"]],
-    ["list", list2, ["paragraph", "reference", "blockquote"]],
+    ["list", list, ["paragraph", "reference", "blockquote"]],
     ["reference", reference],
     ["html_block", html_block, ["paragraph", "reference", "blockquote"]],
     ["heading", heading, ["paragraph", "reference", "blockquote"]],
@@ -10098,15 +10428,15 @@ ${ref}`,
     this.__compiled__[match2.schema].normalize(match2, this);
     return match2;
   };
-  LinkifyIt.prototype.tlds = function tlds(list3, keepOld) {
-    list3 = Array.isArray(list3) ? list3 : [list3];
+  LinkifyIt.prototype.tlds = function tlds(list2, keepOld) {
+    list2 = Array.isArray(list2) ? list2 : [list2];
     if (!keepOld) {
-      this.__tlds__ = list3.slice();
+      this.__tlds__ = list2.slice();
       this.__tlds_replaced__ = true;
       compile(this);
       return this;
     }
-    this.__tlds__ = this.__tlds__.concat(list3).sort().filter(function(el7, idx, arr) {
+    this.__tlds__ = this.__tlds__.concat(list2).sort().filter(function(el7, idx, arr) {
       return el7 !== arr[idx - 1];
     }).reverse();
     compile(this);
@@ -10626,16 +10956,16 @@ ${ref}`,
     }
     return this;
   };
-  MarkdownIt.prototype.enable = function(list3, ignoreInvalid) {
+  MarkdownIt.prototype.enable = function(list2, ignoreInvalid) {
     let result = [];
-    if (!Array.isArray(list3)) {
-      list3 = [list3];
+    if (!Array.isArray(list2)) {
+      list2 = [list2];
     }
     ["core", "block", "inline"].forEach(function(chain) {
-      result = result.concat(this[chain].ruler.enable(list3, true));
+      result = result.concat(this[chain].ruler.enable(list2, true));
     }, this);
-    result = result.concat(this.inline.ruler2.enable(list3, true));
-    const missed = list3.filter(function(name) {
+    result = result.concat(this.inline.ruler2.enable(list2, true));
+    const missed = list2.filter(function(name) {
       return result.indexOf(name) < 0;
     });
     if (missed.length && !ignoreInvalid) {
@@ -10643,16 +10973,16 @@ ${ref}`,
     }
     return this;
   };
-  MarkdownIt.prototype.disable = function(list3, ignoreInvalid) {
+  MarkdownIt.prototype.disable = function(list2, ignoreInvalid) {
     let result = [];
-    if (!Array.isArray(list3)) {
-      list3 = [list3];
+    if (!Array.isArray(list2)) {
+      list2 = [list2];
     }
     ["core", "block", "inline"].forEach(function(chain) {
-      result = result.concat(this[chain].ruler.disable(list3, true));
+      result = result.concat(this[chain].ruler.disable(list2, true));
     }, this);
-    result = result.concat(this.inline.ruler2.disable(list3, true));
-    const missed = list3.filter(function(name) {
+    result = result.concat(this.inline.ruler2.disable(list2, true));
+    const missed = list2.filter(function(name) {
       return result.indexOf(name) < 0;
     });
     if (missed.length && !ignoreInvalid) {
@@ -11171,7 +11501,7 @@ ${ref}`,
     let busy = false;
     let errorDispose = null;
     let disposed = false;
-    const typeOptions = (list3) => [{ id: NO_TYPE, label: "No type" }, ...list3.map((t) => ({ id: t, label: t }))];
+    const typeOptions = (list2) => [{ id: NO_TYPE, label: "No type" }, ...list2.map((t) => ({ id: t, label: t }))];
     const titleField = mountTextField(titleSlot, {
       label: "Title",
       value: "",
@@ -11229,7 +11559,7 @@ ${ref}`,
       submit();
     });
     return {
-      setTypes: (list3) => typeSelect.update({ options: typeOptions(list3) }),
+      setTypes: (list2) => typeSelect.update({ options: typeOptions(list2) }),
       dispose: () => {
         disposed = true;
         errorDispose?.();
@@ -11917,7 +12247,7 @@ ${note}` : note;
     if (text3 !== void 0) node.textContent = text3;
     return node;
   };
-  var askStart = (title, initial, presets2, lists2) => new Promise((resolve2) => {
+  var askStart = (title, initial, presets2, lists2) => new Promise((resolve) => {
     const options = { ...initial };
     const backdrop = el6("div", "kb-backdrop kb-confirm-backdrop");
     const box = el6("div", "kb-confirm");
@@ -11975,7 +12305,7 @@ ${note}` : note;
       document.removeEventListener("keydown", onKey);
       for (const d of disposers) d();
       backdrop.remove();
-      resolve2(answer);
+      resolve(answer);
     };
     const onKey = (e) => {
       if (e.key !== "Escape" || e.defaultPrevented) return;
@@ -12099,9 +12429,8 @@ ${note}` : note;
       const p = deps.project();
       if (p === null) throw new Error("No project is open");
       const ctx = deps.context();
-      const presets2 = ctx?.presets ?? [];
-      const preset = presets2.find((x) => x.id === opts.presetId) ?? presets2.find((x) => x.id === "implement") ?? presets2[0];
-      if (preset === void 0) throw new Error("Settings are loading, try again in a moment");
+      if (ctx === null) throw new Error("Settings are loading, try again in a moment");
+      const preset = pickPreset(ctx.presets, opts.presetId);
       const children = (deps.tasks() ?? []).filter((t) => t.parentId === task.id);
       return buildPrompt2(task, preset, await cliPath(p.directory), p.directory, children);
     };
@@ -12132,13 +12461,13 @@ ${note}` : note;
     const drainOnce = async () => {
       const ctx = deps.context();
       const p = deps.project();
-      const list3 = deps.tasks();
-      if (ctx === null || p === null || p.id !== ctx.projectId || list3 === null || shown !== p.id || queue.length === 0) return;
+      const list2 = deps.tasks();
+      if (ctx === null || p === null || p.id !== ctx.projectId || list2 === null || shown !== p.id || queue.length === 0) return;
       const api = createApi(host2, p.directory);
       const max = ctx.settings.maxParallel;
       let r;
       try {
-        const running = list3.filter((t) => hasLiveSession(t.id)).map((t) => t.id);
+        const running = list2.filter((t) => hasLiveSession(t.id)).map((t) => t.id);
         r = await api.takeFromQueue(max, launcher.starting(), running);
       } catch {
         return;
@@ -12150,7 +12479,7 @@ ${note}` : note;
       }
       queue = r.queue;
       for (const e of r.taken) {
-        const task = list3.find((t) => t.id === e.taskId);
+        const task = list2.find((t) => t.id === e.taskId);
         if (task === void 0 || task.state === "done") {
           void api.removeFromQueue(e.taskId).catch(() => {
           });
@@ -12517,18 +12846,18 @@ ${note}` : note;
           head.append(name, count);
           column.append(head);
           if (id === "done" && (done.archivable > 0 || done.archived > 0)) column.append(doneTools(done));
-          const list3 = div2("kb-cards");
+          const list2 = div2("kb-cards");
           if (cards.length === 0) {
             const none = div2("kb-none");
             none.textContent = "Nothing here";
-            list3.append(none);
+            list2.append(none);
           }
           for (const model of cards) {
             const card = renderCard(model, busy.has(model.task.id), summaryOf(model.task));
-            list3.append(card.node);
+            list2.append(card.node);
             cardDisposers.push(card.dispose);
           }
-          column.append(list3);
+          column.append(list2);
           columns.append(column);
         }
       }
@@ -12716,7 +13045,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     const actions = element("div", "kb-wizard-actions");
     wrap.append(title, body, listSlot, actions);
     root.append(wrap);
-    const list3 = mountList(listSlot, {
+    const list2 = mountList(listSlot, {
       ariaLabel: "Tracker",
       selectedId: choice2,
       items: [
@@ -12732,7 +13061,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
       onSelect: (id) => {
         if (busy || id !== "local" && id !== "github" || id === "github" && github.disabled) return;
         choice2 = id;
-        list3.update({ selectedId: id });
+        list2.update({ selectedId: id });
       }
     });
     const button2 = mountButton(actions, {
@@ -12747,7 +13076,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
         button2.update({ loading: next, disabled: next });
       },
       dispose: () => {
-        list3.dispose();
+        list2.dispose();
         button2.dispose();
         wrap.remove();
       }
@@ -12773,7 +13102,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     globalSettings: {},
     projectSettings: {},
     settingsFor: null,
-    presets: parseStoredPresets(void 0),
+    presets: EMPTY_SETS,
     skills: null,
     detached: /* @__PURE__ */ new Map(),
     detachedFor: null,
@@ -12841,7 +13170,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
   };
   var presets = () => {
     const skills = state.settingsFor === state.projectId ? state.skills : null;
-    return listPresets(state.presets, { ...skillUse(settings(), skills?.found ?? []), paths: skills?.paths ?? {} });
+    return listPresets(state.presets, effectiveSetId(state.presets, settings().presetSet, skills?.found ?? []), skills?.paths ?? {});
   };
   var applySettings = () => {
     const hide = settings().hideChildren;

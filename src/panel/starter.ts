@@ -12,7 +12,7 @@ import type { Task } from '../core/types.ts';
 import { ApiError, createApi } from './api.ts';
 import { ledByOrchestrator, markArchived, sessionForTask, type Detached, type SessionLink } from './columns.ts';
 import { createLauncher } from './launcher.ts';
-import type { Preset } from './presets.ts';
+import { pickPreset, type Preset } from './presets.ts';
 import { buildPrompt } from './prompt.ts';
 import type { QueueEntry } from './queue.ts';
 import type { StartLists } from './models.ts';
@@ -172,9 +172,9 @@ export const createStarter = (deps: StarterDeps) => {
     const p = deps.project();
     if (p === null) throw new Error('No project is open');
     const ctx = deps.context();
-    const presets = ctx?.presets ?? [];
-    const preset = presets.find((x) => x.id === opts.presetId) ?? presets.find((x) => x.id === 'implement') ?? presets[0];
-    if (preset === undefined) throw new Error('Settings are loading, try again in a moment');
+    if (ctx === null) throw new Error('Settings are loading, try again in a moment');
+    // A preset the set does not have falls back to its Implement, else Plain's (a set may be empty).
+    const preset = pickPreset(ctx.presets, opts.presetId);
     const children = (deps.tasks() ?? []).filter((t) => t.parentId === task.id);
     return buildPrompt(task, preset, await cliPath(p.directory), p.directory, children);
   };

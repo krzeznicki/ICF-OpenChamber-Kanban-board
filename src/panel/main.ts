@@ -14,13 +14,12 @@ import { archivableIds, archivedShown, archiveTasks, archiveWriteJob, createArch
 import { ApiError, createApi, type Api, type ConfigResult, type ProjectConfig } from './api.ts';
 import { groupTasks, pruneArchived, resolveSession, sessionForTask, sessionTarget, type Column, type SessionLookup } from './columns.ts';
 import { createEditor, type Editor } from './edit.ts';
-import { listPresets, parseStoredPresets, type Preset, type StoredPresets } from './presets.ts';
+import { EMPTY_SETS, effectiveSetId, listPresets, type Preset, type StoredSets } from './presets.ts';
 import {
   createLatestSaver,
   createSettingsStore,
   DEFAULT_SECTIONS,
   resolveSettings,
-  skillUse,
   type Sections,
   type Settings,
   type SettingsLayer,
@@ -64,8 +63,9 @@ type State = {
   globalSettings: SettingsLayer;
   projectSettings: SettingsLayer;
   settingsFor: string | null;
-  presets: StoredPresets;
-  /** Matt Pocock's skills installed for `settingsFor` and their SKILL.md (POST /skills/detect); null when the check failed. */
+  /** The preset sets as stored (presets.ts). */
+  presets: StoredSets;
+  /** The known skills (Matt Pocock's, Superpowers) installed for `settingsFor` and their SKILL.md (POST /skills/detect); null when the check failed. */
   skills: { found: string[]; paths: Record<string, string> } | null;
   /** Cards the user dragged away from their sessions (columns.ts Detached); `detachedFor` is their project. */
   detached: Map<string, number>;
@@ -95,7 +95,7 @@ const state: State = {
   globalSettings: {},
   projectSettings: {},
   settingsFor: null,
-  presets: parseStoredPresets(undefined),
+  presets: EMPTY_SETS,
   skills: null,
   detached: new Map(),
   detachedFor: null,
@@ -182,10 +182,10 @@ const settings = (): Settings => {
   return resolveSettings(state.globalSettings, loaded ? state.projectSettings : {}, loaded ? (state.skills?.found ?? []) : []);
 };
 
-/** The presets a start uses: built-ins switch to their skills text when the settings and the installed skills allow it. */
+/** The presets a start uses: those of the project's preset set (settings presetSet), with each skill's SKILL.md. */
 const presets = (): Preset[] => {
   const skills = state.settingsFor === state.projectId ? state.skills : null;
-  return listPresets(state.presets, { ...skillUse(settings(), skills?.found ?? []), paths: skills?.paths ?? {} });
+  return listPresets(state.presets, effectiveSetId(state.presets, settings().presetSet, skills?.found ?? []), skills?.paths ?? {});
 };
 
 /** After any settings change: the hide switch follows, the board and an open detail redraw. */
@@ -203,7 +203,7 @@ const applySettings = (): void => {
   summarySettingsChanged();
 };
 
-/** Matt Pocock's skills for the project, or null when the service could not tell. */
+/** The known skills installed for the project, or null when the service could not tell. */
 const detectSkills = async (id: string): Promise<State['skills']> => {
   const p = state.projects.find((x) => x.id === id);
   if (p === undefined) return null;

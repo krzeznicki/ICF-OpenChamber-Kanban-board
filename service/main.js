@@ -1249,7 +1249,7 @@ var createAgentList = (exec, now = Date.now) => {
 };
 
 // src/service/skills.ts
-import { stat as stat2 } from "node:fs/promises";
+import { readdir as readdir2, stat as stat2 } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join as join3 } from "node:path";
 
@@ -1268,6 +1268,16 @@ var MATT_SKILLS = [
   "diagnosing-bugs",
   "triage"
 ];
+var SUPERPOWERS_SKILLS = [
+  "brainstorming",
+  "writing-plans",
+  "test-driven-development",
+  "verification-before-completion",
+  "requesting-code-review",
+  "subagent-driven-development",
+  "systematic-debugging"
+];
+var KNOWN_SKILLS = [...MATT_SKILLS, ...SUPERPOWERS_SKILLS];
 
 // src/service/skills.ts
 var SKILLS_TTL_MS = 5 * 60 * 1e3;
@@ -1285,8 +1295,30 @@ var isFile = async (path) => {
     return false;
   }
 };
-var detectSkills = async (home, project, names = MATT_SKILLS) => {
-  const roots = skillRoots(home, project);
+var isDir = async (path) => {
+  try {
+    return (await stat2(path)).isDirectory();
+  } catch {
+    return false;
+  }
+};
+var dirs = async (path) => {
+  try {
+    return (await readdir2(path, { withFileTypes: true })).filter((d) => d.isDirectory()).map((d) => d.name);
+  } catch {
+    return [];
+  }
+};
+var pluginSkillRoots = async (home) => {
+  const npm = join3(home, ".cache", "opencode", "npm");
+  const candidates = [];
+  for (const plugin of await dirs(npm))
+    for (const version of await dirs(join3(npm, plugin))) candidates.push(join3(npm, plugin, version, "node_modules", "superpowers", "skills"));
+  const ok = await Promise.all(candidates.map(isDir));
+  return candidates.filter((_, i) => ok[i]).sort((a, b) => a < b ? 1 : a > b ? -1 : 0);
+};
+var detectSkills = async (home, project, names = KNOWN_SKILLS) => {
+  const roots = [...skillRoots(home, project), ...await pluginSkillRoots(home)];
   const hits = await Promise.all(
     names.map(async (name) => {
       const files = roots.map((r) => join3(r, name, "SKILL.md"));
@@ -1629,12 +1661,12 @@ var directoryOf = async (body) => {
   if (!isObject(body)) return invalid('Request body must be a JSON object with "directory"');
   const dir = body.directory;
   if (typeof dir !== "string" || !isAbsolute(dir)) return invalid('"directory" must be an absolute path');
-  let isDir = false;
+  let isDir2 = false;
   try {
-    isDir = (await stat3(dir)).isDirectory();
+    isDir2 = (await stat3(dir)).isDirectory();
   } catch {
   }
-  return isDir ? dir : invalid(`"directory" is not an existing directory: ${dir}`);
+  return isDir2 ? dir : invalid(`"directory" is not an existing directory: ${dir}`);
 };
 var newTask = (v) => {
   if (!isObject(v)) return invalid('"input" must be an object with "title"');
@@ -1855,7 +1887,7 @@ var POST = {
   "/models/list": async (_body, dir, deps2) => modelList(deps2)(dir),
   /** `{ agents: [{ id, name, description }] }` (session agents); a failure is `{ agents: [], error }`, never an error status. */
   "/agents/list": async (_body, dir, deps2) => agentList(deps2)(dir),
-  /** `{ found: [...], paths: {name: SKILL.md} }`: which of Matt Pocock's skills are installed for this project (core/skills.ts). */
+  /** `{ found: [...], paths: {name: SKILL.md} }`: which of the known skills (core/skills.ts) are installed for this project, plugin cache included. */
   "/skills/detect": async (_body, dir, deps2) => skillDetector(deps2)(dir),
   "/queue/list": async (_body, dir, deps2) => ({ queue: await listQueue(queueFile(deps2), dir) }),
   "/queue/add": async (body, dir, deps2) => ({ queue: await addToQueue(queueFile(deps2), dir, queueEntry(body.entry), maxParallelOf(body)) }),

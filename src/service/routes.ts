@@ -54,7 +54,7 @@ export type Deps = {
   models?: ModelList;
   /** `opencode api GET /api/agent`, cached; defaults to one cache per `exec`, like `models`. */
   agents?: AgentList;
-  /** Which of Matt Pocock's skills are installed, cached; defaults to one detector over the user's home. */
+  /** Which of the known skills (Matt Pocock's, Superpowers) are installed, cached; defaults to one detector over the user's home. */
   skills?: SkillDetector;
 };
 /** `after` runs once the answer is sent (session events: answer first, then work). */
@@ -377,7 +377,7 @@ const POST: Record<string, Route> = {
   '/models/list': async (_body, dir, deps) => modelList(deps)(dir),
   /** `{ agents: [{ id, name, description }] }` (session agents); a failure is `{ agents: [], error }`, never an error status. */
   '/agents/list': async (_body, dir, deps) => agentList(deps)(dir),
-  /** `{ found: [...], paths: {name: SKILL.md} }`: which of Matt Pocock's skills are installed for this project (core/skills.ts). */
+  /** `{ found: [...], paths: {name: SKILL.md} }`: which of the known skills (core/skills.ts) are installed for this project, plugin cache included. */
   '/skills/detect': async (_body, dir, deps) => skillDetector(deps)(dir),
   '/queue/list': async (_body, dir, deps) => ({ queue: await listQueue(queueFile(deps), dir) }),
   '/queue/add': async (body, dir, deps) => ({ queue: await addToQueue(queueFile(deps), dir, queueEntry(body.entry), maxParallelOf(body)) }),

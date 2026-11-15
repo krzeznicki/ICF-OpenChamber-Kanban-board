@@ -3,7 +3,7 @@
 // so they run under node:test; createSettingsStore is the only part that touches storage.
 import type { Task } from '../core/types.ts';
 import { parseArchivedTasks, serializeArchived, type ArchivedTasks } from './archive.ts';
-import { BUILTIN_PRESETS, isPristine, parseStoredPresets, usesMattSkills, type Preset, type SkillUse, type StoredPresets } from './presets.ts';
+import { BUILTIN_PRESETS, defaultSetId, EMPTY_SETS, isPristineSets, migrateStoredPresets, parseStoredSets, type Preset, type StoredSets } from './presets.ts';
 import { DEFAULT_SUMMARY_PROMPT } from './summaries.ts';
 
 export type { Preset } from './presets.ts';
@@ -26,8 +26,12 @@ export type Settings = {
   summary: SummarySettings;
   hideChildren: boolean;
   types: string[];
-  /** "Use Matt Pocock's skills when installed": global only (a project layer's value is ignored). */
-  useMattSkills: boolean;
+  /**
+   * The preset set (presets.ts): the project's choice, else the global one, else the default for the
+   * skills found (Matt's, else Superpowers, else Plain). A set that no longer exists reads as the
+   * default too (effectiveSetId).
+   */
+  presetSet: string;
 };
 
 /**
@@ -47,7 +51,7 @@ export const MAX_PARALLEL_MAX = 10;
 export const FALLBACK_PRESET_ID = 'implement';
 /** A parent (feature) starts one orchestrator session with this preset unless its card says otherwise. */
 export const ORCHESTRATE_PRESET_ID = 'orchestrate';
-/** With Matt Pocock's skills in use, a bug defaults to this preset (unless the user set the bug type). */
+/** A bug defaults to this preset (unless the user set the bug type); a set without it falls back to Implement (resolveStart). */
 export const DIAGNOSE_PRESET_ID = 'diagnose';
 export const LOCATIONS: readonly Location[] = ['worktree', 'project'];
 
@@ -55,11 +59,11 @@ export const DEFAULT_SETTINGS: Settings = {
   autoStart: true,
   maxParallel: 3,
   defaults: { presetId: 'implement', model: null, agent: null, variant: null, location: 'worktree' },
-  presetByType: { enhancement: 'implement', bug: 'implement', research: 'plan' },
+  presetByType: { enhancement: 'implement', bug: DIAGNOSE_PRESET_ID, research: 'plan' },
   summary: { auto: true, language: 'Polish', prompt: DEFAULT_SUMMARY_PROMPT },
   hideChildren: false,
   types: ['enhancement', 'bug', 'chore', 'research'],
-  useMattSkills: true,
+  presetSet: defaultSetId([]),
 };
 
 const record = (v: unknown): Record<string, unknown> | null =>
@@ -102,7 +106,8 @@ export const parseSettings = (raw: unknown): SettingsLayer => {
   if (typeof r.autoStart === 'boolean') out.autoStart = r.autoStart;
   if (typeof r.maxParallel === 'number' && Number.isFinite(r.maxParallel)) out.maxParallel = clampParallel(r.maxParallel);
   if (typeof r.hideChildren === 'boolean') out.hideChildren = r.hideChildren;
-  if (typeof r.useMattSkills === 'boolean') out.useMattSkills = r.useMattSkills;
+  const presetSet = text(r.presetSet);
+  if (presetSet !== undefined) out.presetSet = presetSet;
   if (Array.isArray(r.types)) {
     const types = [...new Set(r.types.map(text).filter((t): t is string => t !== undefined))];
     if (types.length > 0) out.types = types;
@@ -131,17 +136,16 @@ export const parseSettings = (raw: unknown): SettingsLayer => {
   return out;
 };
 
-const diagnose = BUILTIN_PRESETS.find((p) => p.id === DIAGNOSE_PRESET_ID) as Preset;
-
-/** The skills a session may use under these settings, given what the service found installed. */
-export const skillUse = (s: Settings, found: readonly string[]): SkillUse => ({ use: s.useMattSkills, found });
-
 /**
- * Global, then project, over the defaults, field by field. Layers go through parseSettings first.
- * `found` is the Matt Pocock skills installed for the project (POST /skills/detect): when they are
- * in use and cover Diagnose, the built-in default for `bug` is Diagnose instead of Implement. A
- * preset the user set for `bug` in either layer still wins.
+ * The stored global layer, with 0.2's "Use Matt Pocock's skills when installed" toggle migrated:
+ * switched off, it becomes the Plain set (unless a set is chosen already); on, the default set.
  */
+export const migrateGlobalLayer = (raw: unknown): SettingsLayer => {
+  const layer = parseSettings(raw);
+  if (record(raw)?.useMattSkills === false && layer.presetSet === undefined) layer.presetSet = 'plain';
+  return layer;
+};
+
 /**
  * The thinking level over layers, top first: a layer that sets a model owns the level (its own, or
  * none), so a level is never inherited onto another model; a layer setting only a level overrides.
@@ -155,30 +159,32 @@ const ownVariant = (layers: ReadonlyArray<Partial<StartOptions> | undefined>): s
   return null;
 };
 
+/**
+ * Global, then project, over the defaults, field by field. Layers go through parseSettings first.
+ * `found` is the skills installed for the project (POST /skills/detect); it picks the default set.
+ */
 export const resolveSettings = (global: SettingsLayer, project: SettingsLayer, found: readonly string[] = []): Settings => {
   const g = parseSettings(global);
   const p = parseSettings(project);
   const d = DEFAULT_SETTINGS;
   const maxParallel = p.maxParallel ?? g.maxParallel ?? d.maxParallel;
-  const useMattSkills = g.useMattSkills ?? d.useMattSkills;
-  const byType = usesMattSkills(diagnose, { use: useMattSkills, found }) ? { ...d.presetByType, bug: DIAGNOSE_PRESET_ID } : d.presetByType;
   return {
     autoStart: p.autoStart ?? g.autoStart ?? d.autoStart,
     maxParallel: clampParallel(maxParallel),
     defaults: { ...d.defaults, ...g.defaults, ...p.defaults, variant: ownVariant([p.defaults, g.defaults]) },
-    presetByType: { ...byType, ...g.presetByType, ...p.presetByType },
+    presetByType: { ...d.presetByType, ...g.presetByType, ...p.presetByType },
     summary: { ...d.summary, ...g.summary, ...p.summary },
     hideChildren: p.hideChildren ?? g.hideChildren ?? d.hideChildren,
     types: [...(p.types ?? g.types ?? d.types)],
-    useMattSkills,
+    presetSet: p.presetSet ?? g.presetSet ?? defaultSetId(found),
   };
 };
 
 /**
  * The options a session starts with: the card's choice, else the settings. The preset is the
  * card's, else 'orchestrate' for a parent (a feature), else the default for the task's type, else defaults.presetId; whichever id is chosen,
- * one that is not among `presets` (e.g. a deleted custom preset) becomes 'implement'.
- * `presets` defaults to the built-ins; pass listPresets(...) so custom presets count.
+ * one that is not among `presets` (a deleted preset, or one the project's set does not have) becomes
+ * 'implement'. `presets` defaults to the Plain set; pass the project's set (listPresets) so its own count.
  */
 export const resolveStart = (
   s: Settings,
@@ -231,7 +237,10 @@ const fit = (key: string): string => (key.length <= MAX_KEY ? key : `${key.slice
 export const STORAGE_KEYS = {
   global: 'settings:global',
   project: (projectId: string): string => fit(`settings:project:${projectId}`),
+  /** 0.2's presets ({ builtin, custom }); read once, migrated to presetSets and deleted. */
   presets: 'presets',
+  /** The preset sets: edits of the built-in sets and the user's own sets (presets.ts StoredSets). */
+  presetSets: 'presetSets',
   card: (projectId: string, taskId: string): string => fit(`card:${projectId}:${taskId}`),
   /** Per project: task id -> when the user dragged the card away from its session (columns.ts Detached). */
   detached: (projectId: string): string => fit(`detached:${projectId}`),
@@ -303,14 +312,24 @@ export const createSettingsStore = (storage: SettingsStorage) => {
     return put(key, clean, isEmptyLayer(clean));
   };
   return {
-    loadGlobal: async (): Promise<SettingsLayer> => parseSettings(await storage.get(STORAGE_KEYS.global)),
+    loadGlobal: async (): Promise<SettingsLayer> => migrateGlobalLayer(await storage.get(STORAGE_KEYS.global)),
     saveGlobal: (layer: SettingsLayer): Promise<void> => saveLayer(STORAGE_KEYS.global, layer),
     loadProject: async (projectId: string): Promise<SettingsLayer> => parseSettings(await storage.get(STORAGE_KEYS.project(projectId))),
     saveProject: (projectId: string, layer: SettingsLayer): Promise<void> => saveLayer(STORAGE_KEYS.project(projectId), layer),
-    loadPresets: async (): Promise<StoredPresets> => parseStoredPresets(await storage.get(STORAGE_KEYS.presets)),
-    savePresets: (stored: StoredPresets): Promise<void> => {
-      const clean = parseStoredPresets(stored);
-      return put(STORAGE_KEYS.presets, clean, isPristine(clean));
+    /** The preset sets; 0.2's `presets` key, when still there, is migrated once (written as presetSets, then deleted). */
+    loadPresets: async (): Promise<StoredSets> => {
+      const raw = await storage.get(STORAGE_KEYS.presetSets);
+      if (raw !== undefined) return parseStoredSets(raw);
+      const old = await storage.get(STORAGE_KEYS.presets);
+      if (old === undefined) return EMPTY_SETS;
+      const migrated = migrateStoredPresets(old);
+      if (!isPristineSets(migrated)) await storage.set(STORAGE_KEYS.presetSets, migrated as never);
+      await storage.delete(STORAGE_KEYS.presets);
+      return migrated;
+    },
+    savePresets: (stored: StoredSets): Promise<void> => {
+      const clean = parseStoredSets(stored);
+      return put(STORAGE_KEYS.presetSets, clean, isPristineSets(clean));
     },
     loadCard: async (projectId: string, taskId: string): Promise<CardOptions> =>
       parseCardOptions(await storage.get(STORAGE_KEYS.card(projectId, taskId))),

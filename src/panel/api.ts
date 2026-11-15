@@ -92,7 +92,7 @@ export const createApi = (host: HostClient, directory: string) => {
     listModels: () => call<ModelsAnswer>('POST', '/models/list'),
     /** The project's session agents (cached by the service); a failure comes back as `{ agents: [], error }`. */
     listAgents: () => call<AgentsAnswer>('POST', '/agents/list'),
-    /** Which of Matt Pocock's skills are installed for this project, and each one's SKILL.md (cached by the service). */
+    /** Which of the known skills (Matt Pocock's, Superpowers) are installed for this project, and each one's SKILL.md (cached by the service). */
     detectSkills: () => call<{ found: string[]; paths: Record<string, string> }>('POST', '/skills/detect'),
     listQueue: () => call<{ queue: QueueEntry[] }>('POST', '/queue/list').then((r) => r.queue),
     /** Idempotent per task; `maxParallel` is stored so the service drains with the same limit. */
