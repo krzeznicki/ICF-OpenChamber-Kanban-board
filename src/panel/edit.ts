@@ -16,6 +16,7 @@ import type { Board } from './ui/board.ts';
 import { askChoice } from './ui/confirm.ts';
 import { openDetail, type DetailHandle, type DetailModel, type SessionView, type SummaryModel } from './ui/detail.ts';
 import { attachDrag } from './ui/dnd.ts';
+import { canLinkUnder, linkConfirm } from './link.ts';
 
 export type EditorDeps = {
   host: HostClient;
@@ -288,6 +289,16 @@ export const createEditor = (deps: EditorDeps) => {
     apply(task, from, planMove(task, from, to, openChildren(task, deps.tasks())));
   };
 
+  /** A card dropped onto an accepting card: confirm, then link it under that card (run reloads; a failure is a toast). */
+  const link = async (id: string, parentId: string): Promise<void> => {
+    const child = find(id);
+    const parent = find(parentId);
+    if (child === null || parent === null || moving.has(id)) return;
+    const { title, body } = linkConfirm(deps.tracker(), child, parent);
+    if ((await askChoice(title, body, [{ id: 'link', label: 'Make sub-task' }])) !== 'link') return;
+    await run(id, (api) => api.setParent(id, parentId));
+  };
+
   const closeDetail = (): void => {
     const d = detail;
     detail = null;
@@ -456,6 +467,12 @@ export const createEditor = (deps: EditorDeps) => {
   const detachDrag = attachDrag(deps.board.columns, {
     canDrag: (id) => !moving.has(id),
     onDrop: move,
+    canLink: (id, parentId) => {
+      const child = find(id);
+      const parent = find(parentId);
+      return child !== null && parent !== null && canLinkUnder(deps.tracker(), child, parent, deps.tasks());
+    },
+    onLink: (id, parentId) => void link(id, parentId),
     onOpen: showDetail,
   });
 

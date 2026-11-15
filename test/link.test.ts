@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Task } from '../src/core/types.ts';
-import { canLinkUnder, childCandidates, parentTargets } from '../src/panel/link.ts';
+import { canLinkUnder, childCandidates, linkConfirm, parentTargets } from '../src/panel/link.ts';
 
 const task = (id: string, over: Partial<Task> = {}): Task => ({
   id,
@@ -64,4 +64,20 @@ test('github: any issue, but never under itself, its parent or its descendant', 
   assert.equal(canLinkUnder('github', p, g, tasks), false);
   assert.equal(canLinkUnder('github', p, o, tasks), true);
   assert.equal(canLinkUnder('github', g, p, tasks), true);
+});
+
+test('the link confirm names both tasks; locally it warns about the new id and dropped blockers', () => {
+  const fb = task(B, { kind: 'parent', title: 'Feature B' });
+  const t1 = task('.scratch/a/issues/01-x.md', { title: 'Fix X' });
+  const local = linkConfirm('local', t1, fb);
+  assert.equal(local.title, 'Make “Fix X” a sub-task of “Feature B”?');
+  assert.match(local.body, /\.scratch\/a\/issues\/01-x\.md/);
+  assert.match(local.body, /\.scratch\/b\/spec\.md/);
+  assert.match(local.body, /new id/);
+  assert.match(local.body, /blockers/);
+  const gh = linkConfirm('github', task('#2', { title: 'Fix X' }), task('#1', { title: 'Epic' }));
+  assert.equal(gh.title, 'Make “Fix X” a sub-task of “Epic”?');
+  assert.doesNotMatch(gh.body, /new id|blockers/);
+  assert.match(gh.body, /#2/);
+  assert.match(gh.body, /#1/);
 });
