@@ -6,7 +6,7 @@ A Kanban board for [OpenChamber](https://github.com/openchamber/openchamber) ove
 - Drag a card to **In Progress** and an agent session starts with the card's preset, model, thinking level, agent and location. No dialog unless you want one.
 - Parents (features) start one orchestrator session that works through their sub-tasks.
 - A limit on agents running at once, with a queue that keeps draining while the board is closed.
-- A short personal summary at the top of each card, in your language (default Polish).
+- A short personal summary at the top of each card, in your language (default English).
 - Agent skills and a `task-board` CLI, so agents create, take and close tasks in the same format.
 
 Requires OpenChamber 2.7.1 or later. Licence: MIT.
@@ -206,7 +206,7 @@ The first entry of each, **Default (…)**, means "not set here" and names what 
 | Hide sub-tasks | off |
 | Types | `enhancement`, `bug`, `chore`, `research` |
 | Summarise automatically | on |
-| Summary language | Polish |
+| Summary language | English |
 | Summary prompt | a built-in prompt (2 to 4 plain sentences); `{language}`, `{title}` and `{body}` are filled in |
 | Suggest type and state for new tasks (Global only) | on |
 
