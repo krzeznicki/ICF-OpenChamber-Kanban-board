@@ -120,7 +120,7 @@ A click on any card (or Enter on a focused card) opens the task in a modal, in e
 - **Sub-tasks**: the children with their states (a click opens that task), and **Add sub-task** (a title and an optional type; Enter adds). Locally it is offered on open features (`spec.md`), since a ticket cannot have tickets; on GitHub on any open issue, which then becomes a parent.
 - **Settings**, collapsed by default: state and type, **Move to**, **Open on GitHub**, and the card's start options.
 
-Sections fold open and shut; which ones are open is remembered on this device for every task.
+Sections fold open and shut; which ones are open is remembered for every task in the extension's storage (key `detail-sections`, the default instance storage kept on the connected OpenChamber server, so every browser connected to it shares it).
 
 The session behind **Open session** is checked before it opens. A session the board knows only from `~/.icf-kanban/links.json` (path B) is looked up in every project's session list first and opens only when it is there and not archived. (In 0.1 a click on a Review or Done card whose session had been archived opened an unrelated session of another project: the link's live status reads `idle` for an archived session too, and OpenChamber was asked to open an id it no longer listed.) The board also looks up such finished link-only sessions on its own (once per panel session): one found archived no longer places its card, which leaves Review for the column of its tracker state. Those ids are remembered per project in the extension's storage (`archivedSessions:<projectId>`, only while a link still names them).
 
@@ -177,7 +177,7 @@ Three layers, each overriding the one before, field by field:
 
 All of them are per user and stored in the extension's storage.
 
-**Model** is picked from a list, not typed: the models `opencode models` reports for the project (fetched the first time a picker opens, kept for the panel session; the service caches it for 10 minutes). Type to filter, arrows and Enter to pick. The first entry, **Default (…)**, means "not set here" and names what it falls back to; at the end that is your current selection in OpenChamber. A stored model that is no longer listed still shows, marked "not in the list". If the list cannot be loaded, the picker says why and tries again the next time it opens.
+**Model** is picked from a list, not typed: the models `opencode models` reports for the project (fetched the first time a picker opens in that project, then kept for the panel session, one list per project; the service caches it for 10 minutes). Type to filter, arrows and Enter to pick. The first entry, **Default (…)**, means "not set here" and names what it falls back to; at the end that is your current selection in OpenChamber. A stored model that is no longer listed still shows, marked "not in the list". If the list cannot be loaded, the picker says why and tries again the next time it opens.
 
 | Setting | Default |
 |---|---|
