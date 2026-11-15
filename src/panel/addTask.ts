@@ -103,9 +103,12 @@ export const subtasksToCreate = (d: AddDraft, tracker: TrackerKind): string[] =>
 export const existingSubtaskChoices = (tasks: readonly Task[], tracker: TrackerKind, parentId: string): Choice[] =>
   canHaveSubtasks(tracker, parentId) ? newChildCandidates(tracker, parentId === '' ? null : parentId, tasks).map(choice) : [];
 
-/** The picked existing tasks to link under the new task: none when it may not have sub-tasks. */
-export const existingToLink = (d: AddDraft, tracker: TrackerKind): string[] =>
-  canHaveSubtasks(tracker, d.parentId) ? [...d.existing] : [];
+/**
+ * The picked existing tasks to link under the new task, re-checked against what is offered now
+ * (a pick that went stale, e.g. done since, is dropped): none when it may not have sub-tasks.
+ */
+export const existingToLink = (d: AddDraft, tracker: TrackerKind, tasks: readonly Task[]): string[] =>
+  keepOffered(d.existing, existingSubtaskChoices(tasks, tracker, d.parentId));
 
 /** What the new task will be, so its inherited start options (preset by kind) can be shown. */
 export const draftKind = (d: AddDraft, tracker: TrackerKind): TaskKind => {
@@ -132,8 +135,8 @@ export const toNewTask = (d: AddDraft, tracker: TrackerKind): NewTask => {
   };
 };
 
-/** `link`: an existing task that could not be linked under the new one (else a sub-task not created). */
-export type SubtaskFailure = { title: string; message: string; link?: true };
+/** `create`: a sub-task not created; `link`: an existing task that could not be linked under the new one. */
+export type SubtaskFailure = { title: string; message: string; kind: 'create' | 'link' };
 
 const messageOf = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
@@ -160,31 +163,26 @@ export const createWithSubtasks = async (
     try {
       await create({ title, state: 'needs-triage', parentId: task.id });
     } catch (e) {
-      failed.push({ title, message: messageOf(e) });
+      failed.push({ title, message: messageOf(e), kind: 'create' });
     }
   }
   for (const c of link?.existing ?? []) {
     try {
       await link!.setParent(c.id, task.id);
     } catch (e) {
-      failed.push({ title: c.label, message: messageOf(e), link: true });
+      failed.push({ title: c.label, message: messageOf(e), kind: 'link' });
     }
   }
   return { task, failed };
 };
 
 export const partialMessage = (taskId: string, failed: readonly SubtaskFailure[]): string => {
-  const list = (fs: readonly SubtaskFailure[]): string => fs.map((f) => `“${f.title}” (${f.message})`).join('; ');
-  const created = failed.filter((f) => f.link !== true);
-  const linked = failed.filter((f) => f.link === true);
-  const parts: string[] = [];
-  if (created.length > 0) {
-    const n = created.length;
-    parts.push(`${n} sub-task${n === 1 ? ' was' : 's were'} not created: ${list(created)}`);
-  }
-  if (linked.length > 0) {
-    const n = linked.length;
-    parts.push(`${n} existing task${n === 1 ? ' was' : 's were'} not linked under it: ${list(linked)}`);
-  }
+  const part = (kind: SubtaskFailure['kind'], noun: string, what: string): string[] => {
+    const fs = failed.filter((f) => f.kind === kind);
+    const n = fs.length;
+    if (n === 0) return [];
+    return [`${n} ${noun}${n === 1 ? ' was' : 's were'} ${what}: ${fs.map((f) => `“${f.title}” (${f.message})`).join('; ')}`];
+  };
+  const parts = [...part('create', 'sub-task', 'not created'), ...part('link', 'existing task', 'not linked under it')];
   return `Created ${taskId}, but ${parts.join('; ')}.`;
 };

@@ -157,10 +157,18 @@ test('existingSubtaskChoices github: open issues, not the chosen parent or above
   assert.deepEqual(existingSubtaskChoices(GITHUB, 'github', '#1').map((c) => c.id), ['#2', '#3']);
 });
 
-test('existingToLink: the picked ids, none when the new task may not have sub-tasks', () => {
-  assert.deepEqual(existingToLink(draft({ existing: ['a', 'b'] }), 'local'), ['a', 'b']);
-  assert.deepEqual(existingToLink(draft({ parentId: '.scratch/f/spec.md', existing: ['a'] }), 'local'), []);
-  assert.deepEqual(existingToLink(draft({ parentId: '#1', existing: ['#3'] }), 'github'), ['#3']);
+test('existingToLink: the picked ids still offered, in pick order; none when the new task may not have sub-tasks', () => {
+  const F1 = '.scratch/f/issues/01-a.md';
+  const G1 = '.scratch/g/issues/01-a.md';
+  assert.deepEqual(existingToLink(draft({ existing: [G1, F1] }), 'local', LOCAL), [G1, F1]);
+  assert.deepEqual(existingToLink(draft({ parentId: '.scratch/f/spec.md', existing: [F1] }), 'local', LOCAL), []);
+  assert.deepEqual(existingToLink(draft({ parentId: '#1', existing: ['#3'] }), 'github', GITHUB), ['#3']);
+});
+
+test('existingToLink drops a stale pick: done since, gone, or above the chosen parent', () => {
+  // F2 is done, a vanished id is not listed, #1 is the chosen parent (a cycle).
+  assert.deepEqual(existingToLink(draft({ existing: ['.scratch/f/issues/02-b.md', '.scratch/gone/spec.md'] }), 'local', LOCAL), []);
+  assert.deepEqual(existingToLink(draft({ parentId: '#2', existing: ['#1', '#3'] }), 'github', GITHUB), ['#3']);
 });
 
 test('subtaskTitles trims and drops empty rows', () => {
@@ -231,7 +239,7 @@ test('createWithSubtasks: a failing sub-task is collected, the rest still run', 
   };
   const r = await createWithSubtasks(create, { title: 'P' }, ['a', 'bad', 'c']);
   assert.equal(r.task.id, 'P');
-  assert.deepEqual(r.failed, [{ title: 'bad', message: 'boom' }]);
+  assert.deepEqual(r.failed, [{ title: 'bad', message: 'boom', kind: 'create' }]);
 });
 
 test('createWithSubtasks: picked existing tasks are linked under the new task after the creates', async () => {
@@ -265,7 +273,7 @@ test('createWithSubtasks: a failing link is collected, the task stays, the rest 
     setParent,
   });
   assert.equal(r.task.id, '#10');
-  assert.deepEqual(r.failed, [{ title: 'Loose', message: 'nope', link: true }]);
+  assert.deepEqual(r.failed, [{ title: 'Loose', message: 'nope', kind: 'link' }]);
   assert.deepEqual(linked, ['#2']);
 });
 
@@ -282,24 +290,24 @@ test('createWithSubtasks: the parent failing rejects, no sub-task is tried', asy
 test('partialMessage names the created task and each missing sub-task', () => {
   assert.equal(
     partialMessage('#10', [
-      { title: 'a', message: 'boom' },
-      { title: 'b', message: 'bang' },
+      { title: 'a', message: 'boom', kind: 'create' },
+      { title: 'b', message: 'bang', kind: 'create' },
     ]),
     'Created #10, but 2 sub-tasks were not created: “a” (boom); “b” (bang).',
   );
-  assert.equal(partialMessage('#10', [{ title: 'a', message: 'boom' }]), 'Created #10, but 1 sub-task was not created: “a” (boom).');
+  assert.equal(partialMessage('#10', [{ title: 'a', message: 'boom', kind: 'create' }]), 'Created #10, but 1 sub-task was not created: “a” (boom).');
 });
 
 test('partialMessage names existing tasks that were not linked', () => {
   assert.equal(
-    partialMessage('#10', [{ title: 'L', message: 'nope', link: true }]),
+    partialMessage('#10', [{ title: 'L', message: 'nope', kind: 'link' }]),
     'Created #10, but 1 existing task was not linked under it: “L” (nope).',
   );
   assert.equal(
     partialMessage('#10', [
-      { title: 'a', message: 'boom' },
-      { title: 'L', message: 'nope', link: true },
-      { title: 'M', message: 'no', link: true },
+      { title: 'a', message: 'boom', kind: 'create' },
+      { title: 'L', message: 'nope', kind: 'link' },
+      { title: 'M', message: 'no', kind: 'link' },
     ]),
     'Created #10, but 1 sub-task was not created: “a” (boom); 2 existing tasks were not linked under it: “L” (nope); “M” (no).',
   );
