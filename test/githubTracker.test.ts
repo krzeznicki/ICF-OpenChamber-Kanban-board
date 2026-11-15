@@ -287,3 +287,20 @@ test('setParent refuses a parent that is the task itself’s descendant (walking
   assert.deepEqual(gh.commands(), []);
   assert.equal((await tracker.setParent('#4', '#3')).parentId, '#3');
 });
+
+test('edit changes the title and body with gh issue edit; only what is given is sent', async () => {
+  const { tracker, gh } = setup();
+  const both = await tracker.edit('#4', { title: ' New title ', body: 'New body' });
+  assert.equal(both.id, '#4');
+  assert.equal(both.title, 'New title');
+  assert.equal(both.body, 'New body');
+  await tracker.edit('#5', { body: '' });
+  assert.equal((await tracker.get('#5')).title, 'Line blocker');
+  assert.deepEqual(gh.commands(), ['gh issue edit 4 --title New title --body New body', 'gh issue edit 5 --body ']);
+});
+
+test('edit with a blank title is INVALID and runs no edit', async () => {
+  const { tracker, gh } = setup();
+  await rejectsWith(tracker.edit('#4', { title: ' ' }), 'INVALID');
+  assert.deepEqual(gh.commands(), []);
+});

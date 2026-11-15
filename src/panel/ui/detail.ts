@@ -10,7 +10,8 @@
 // It sits on the shell it shares with Add task (ui/modal.ts). Which sections are open is
 // remembered (settings.ts Sections). It draws what it is given and reports choices; the editor
 // (edit.ts) runs them and asks to confirm. The compact row also has a "Parent" picker when the task
-// has a parent or may move under one (link.ts linkChoices).
+// has a parent or may move under one (link.ts linkChoices). The header's "Edit" turns the Task
+// section into a title and description form (taskEdit.ts) until Save or Cancel.
 import { mountBadge, mountBanner, mountButton, mountList, mountSelect, mountSpinner, mountTextField } from '@openchamber/sdk/ui';
 import type { Tone } from '@openchamber/sdk/ui';
 import type { Task, TaskState } from '../../core/types.ts';
@@ -20,6 +21,7 @@ import type { Preset } from '../presets.ts';
 import type { StartLists } from '../models.ts';
 import type { CardOptions, Sections, StartOptions } from '../settings.ts';
 import type { SummaryStatus } from '../summaries.ts';
+import type { EditText } from '../taskEdit.ts';
 import { mountCloseButton } from './closeButton.ts';
 import { renderMarkdown } from './markdownView.ts';
 import { FILTER_OVER, openModalShell } from './modal.ts';
@@ -57,6 +59,8 @@ export type DetailModel = {
    * parent is set), `children` the tasks "Link existing task" may make its sub-tasks (empty hides it).
    */
   links: { parent: LinkChoice | null; parents: LinkChoice[]; children: LinkChoice[] };
+  /** What the Edit form starts with (taskEdit.ts editableText). */
+  text: EditText;
 };
 
 /**
@@ -107,6 +111,11 @@ export type DetailCallbacks = {
   onSetParent: (parentId: string) => Promise<string | null>;
   /** "Link existing task": resolves to null on success, or the message to show under it. */
   onLinkChild: (childId: string) => Promise<string | null>;
+  /**
+   * The Edit form's Save, with the values the form opened with (only what differs from them is
+   * saved): resolves to null on success (the form closes), or the message to show in it.
+   */
+  onEdit: (from: EditText, draft: EditText) => Promise<string | null>;
   /** The user opened or collapsed a section. */
   onSections: (sections: Sections) => void;
   /** "Unarchive" on an archived task: it shows in Done again. */
@@ -229,6 +238,11 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
     }
     row.append(badges);
     const session = el('div', 'kb-modal-session');
+    if (editing === null) {
+      disposers.push(
+        mountButton(session, { label: 'Edit', variant: 'ghost', size: 'sm', disabled: m.busy, onClick: () => startEdit(m) }).dispose,
+      );
+    }
     if (m.archived) {
       disposers.push(mountButton(session, { label: 'Unarchive', variant: 'outline', size: 'sm', onClick: callbacks.onUnarchive }).dispose);
     }
@@ -278,8 +292,33 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
 
   /** The Task section redraws only when what it shows changes, so a reload keeps a text selection. */
   let taskKey: string | null = null;
+  /** The open Edit form: it stays in place across updates (what is typed survives a poll). */
+  let editing: { taskId: string; dispose: () => void } | null = null;
+  const stopEdit = (): void => {
+    editing?.dispose();
+    editing = null;
+    taskKey = null;
+  };
+  const startEdit = (m: DetailModel): void => {
+    if (editing !== null) return;
+    const box = taskSec.content;
+    box.replaceChildren();
+    taskKey = null;
+    editing = {
+      taskId: m.task.id,
+      dispose: mountEditForm(box, m.text, (draft) => callbacks.onEdit(m.text, draft), () => {
+        stopEdit();
+        if (current !== null) draw(current);
+      }),
+    };
+    taskSec.box.open = true;
+    if (current !== null) draw(current); // the header drops its Edit button
+    box.querySelector('input')?.focus();
+  };
   const drawTask = (m: DetailModel): void => {
     const { task } = m;
+    if (editing !== null && editing.taskId !== task.id) stopEdit(); // another task now (a link moved it)
+    if (editing !== null) return;
     const key = JSON.stringify([task.id, task.body, task.parentId, task.blockedBy, m.openChildren]);
     if (key === taskKey) return;
     taskKey = key;
@@ -540,6 +579,7 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
       clearStart();
       clearQuick();
       clearLink();
+      editing?.dispose();
       addHandle?.dispose();
       shell.dispose();
     },
@@ -638,5 +678,91 @@ const mountAddSubtask = (
       typeSelect.dispose();
       add.dispose();
     },
+  };
+};
+
+/**
+ * The Task section's Edit form: title, description (markdown), Save and Cancel. The service's
+ * error shows in it; `onDone` runs after a successful save or Cancel (the section redraws).
+ */
+const mountEditForm = (
+  box: HTMLElement,
+  initial: EditText,
+  onSave: (draft: EditText) => Promise<string | null>,
+  onDone: () => void,
+): (() => void) => {
+  const titleSlot = el('div', 'kb-field');
+  const bodySlot = el('div', 'kb-field');
+  const errorSlot = el('div', 'kb-add-error');
+  const actions = el('div', 'kb-actions kb-actions-start');
+  box.append(titleSlot, bodySlot, errorSlot, actions);
+
+  const draft: EditText = { ...initial };
+  let busy = false;
+  let disposed = false;
+  let errorDispose: (() => void) | null = null;
+  const titleField = mountTextField(titleSlot, {
+    label: 'Title',
+    value: draft.title,
+    onChange: (v) => {
+      draft.title = v;
+      titleField.update({ value: v, ...(v.trim() !== '' ? { error: undefined } : {}) });
+    },
+  });
+  const bodyField = mountTextField(bodySlot, {
+    label: 'Description',
+    value: draft.body,
+    multiline: true,
+    rows: 12,
+    placeholder: 'Markdown',
+    onChange: (v) => {
+      draft.body = v;
+      bodyField.update({ value: v });
+    },
+  });
+  const save = mountButton(actions, { label: 'Save', size: 'sm', onClick: () => submit() });
+  const cancel = mountButton(actions, { label: 'Cancel', size: 'sm', variant: 'outline', onClick: () => !busy && onDone() });
+
+  const showError = (message: string | null): void => {
+    errorDispose?.();
+    errorDispose = null;
+    if (message !== null) errorDispose = mountBanner(errorSlot, { tone: 'error', title: 'Could not save the task', body: message }).dispose;
+  };
+  const setBusy = (next: boolean): void => {
+    busy = next;
+    save.update({ loading: next, disabled: next });
+    cancel.update({ disabled: next });
+    titleField.update({ disabled: next });
+    bodyField.update({ disabled: next });
+  };
+  const submit = (): void => {
+    if (busy) return;
+    if (draft.title.trim() === '') {
+      titleField.update({ error: 'A title is required' });
+      titleSlot.querySelector('input')?.focus();
+      return;
+    }
+    showError(null);
+    setBusy(true);
+    void onSave({ ...draft }).then((error) => {
+      if (disposed) return;
+      setBusy(false);
+      if (error === null) onDone();
+      else showError(error);
+    });
+  };
+  titleSlot.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' || e.isComposing) return;
+    e.preventDefault();
+    submit();
+  });
+
+  return () => {
+    disposed = true;
+    errorDispose?.();
+    titleField.dispose();
+    bodyField.dispose();
+    save.dispose();
+    cancel.dispose();
   };
 };

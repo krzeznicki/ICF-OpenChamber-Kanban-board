@@ -324,3 +324,17 @@ test('parent <id> <parentId> moves a ticket under another feature and prints its
   assert.equal((await run(['parent', ids[1]!], root)).code, 2);
   assert.match((await run(['--help'], root)).out, /parent <id> <parentId>/);
 });
+
+test('edit <id> --title / --body-file changes the title and description, keeping Status; needs one of them', async (t) => {
+  const { root, ids } = await project(t);
+  await writeFile(join(root, 'desc.md'), 'New description.\n');
+  const r = await run(['edit', ids[0]!, '--title', 'Renamed', '--body-file', 'desc.md', '--json'], root);
+  assert.equal(r.code, 0, r.err);
+  const task = json<Task>(r);
+  assert.equal(task.id, ids[0]);
+  assert.equal(task.title, 'Renamed');
+  assert.equal(task.state, 'needs-info');
+  assert.match(task.body, /New description\./);
+  assert.equal((await run(['edit', ids[0]!], root)).code, 2);
+  assert.match((await run(['--help'], root)).out, /edit <id>/);
+});

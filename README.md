@@ -120,7 +120,7 @@ Right before writing, the board reads the task again and only sets a field the t
 
 A click on any card (or Enter on a focused card) opens the task in a modal, in every column; a click never jumps to a session. Reading comes first:
 
-- **Header**: title, id, state and type badges and the × close. **Open session** opens the task's agent session (running, waiting or finished) when it has one that is not archived; **Session archived** says that its only session was archived; **Session not listed in OpenChamber** that the board knows a session for it that no project lists (it is never opened). While the board is open, the rest of the page is inactive: Tab stays in the modal.
+- **Header**: title, id, state and type badges and the × close. **Open session** opens the task's agent session (running, waiting or finished) when it has one that is not archived; **Session archived** says that its only session was archived; **Session not listed in OpenChamber** that the board knows a session for it that no project lists (it is never opened). **Edit** turns the Task section into a form for the title and the description (markdown); locally the heading's number, the `Type` / `Status` / `Blocked by` lines and the `## Comments` / `## Answer` sections are kept and not shown in it, and the file keeps its name (the id stays). While the board is open, the rest of the page is inactive: Tab stays in the modal.
 - **State, Type and Move to**: a compact row right under the header, always shown (not a section): the state and type selects and the **Move to** buttons (the keyboard path for drag and drop; **Done** asks about open sub-tasks). The selects sit side by side and wrap under each other in a narrow rail panel.
 - **Summary**: the personal summary (see [Summaries](#summaries)), or a **Summarise** button.
 - **Task**: the full body as formatted markdown: headings, lists, task-list checkboxes (read-only), code, quotes, tables, links. Raw HTML in a body is shown as text; only `http` and `https` links are links, opened in your browser; images are not loaded but shown as links.
@@ -246,6 +246,9 @@ Commands:
   create --title <t> [--type <x>] [--body-file <f>|-] [--parent <id>] [--state <state>]
          [--blocked-by <id>[,<id>...]]...   blockers: repeat the option or separate ids with commas
   state <id> <state>                    set the state ('done' closes)
+  edit <id> [--title <t>] [--body-file <f>|-]
+                                        change the title and/or the description (local: the
+                                        heading number, Status/Type/Blocked by and ## Comments stay)
   claim <id>                            take a sub-task before working on it (orchestrator)
   parent <id> <parentId>                make an existing task a sub-task of another (prints its id,
                                         which changes in a local tracker: the file moves)

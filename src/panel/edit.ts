@@ -17,6 +17,7 @@ import { askChoice } from './ui/confirm.ts';
 import { openDetail, type DetailHandle, type DetailModel, type SessionView, type SummaryModel } from './ui/detail.ts';
 import { attachDrag } from './ui/dnd.ts';
 import { canLinkUnder, followingSetParent, linkChoices, linkConfirm } from './link.ts';
+import { editChanges, editableText, type EditText } from './taskEdit.ts';
 
 export type EditorDeps = {
   host: HostClient;
@@ -204,6 +205,7 @@ export const createEditor = (deps: EditorDeps) => {
           ...offered,
         };
       })(),
+      text: editableText(deps.tracker(), task),
     };
   };
 
@@ -365,6 +367,29 @@ export const createEditor = (deps: EditorDeps) => {
     if (error !== null) fail(error);
   };
 
+  /** The modal's Edit form: saves only what changed. Resolves to null, or the error for the form to show. */
+  const editTask = async (id: string, from: EditText, draft: EditText): Promise<string | null> => {
+    const api = deps.api();
+    if (api === null) return 'No project is open.';
+    const result = editChanges(from, draft);
+    if ('error' in result) return result.error;
+    if (result.changes === null || moving.has(id)) return null;
+    const changes = result.changes;
+    moving.add(id);
+    deps.redraw();
+    refreshDetail();
+    try {
+      await api.edit(id, changes);
+      return null;
+    } catch (e) {
+      return errorText(e);
+    } finally {
+      moving.delete(id);
+      await deps.reload();
+      refreshDetail();
+    }
+  };
+
   const closeDetail = (): void => {
     const d = detail;
     detail = null;
@@ -397,6 +422,7 @@ export const createEditor = (deps: EditorDeps) => {
         return null;
       },
       onSetParent: (parentId) => linkTask(id, parentId),
+      onEdit: (from, draft) => editTask(id, from, draft),
       onLinkChild: (childId) => linkTask(childId, id),
       onSections: deps.sections.save,
       onUnarchive: () => {

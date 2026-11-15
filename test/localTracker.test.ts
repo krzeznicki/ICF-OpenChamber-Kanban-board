@@ -341,3 +341,61 @@ test('setParent refuses a feature without tickets whose folder holds other files
   assert.deepEqual((await tracker.list()).map((x) => x.id), [SPEC, T1, T2, lone.id]);
   assert.equal(existsSync(join(root, '.scratch/example-feature/issues/03-lone-idea.md')), false);
 });
+
+test('edit title rewrites only the heading (keeping its NN: prefix); the id and file name stay', async (t) => {
+  const root = await repo(t);
+  const before = await readFile(join(root, T2), 'utf8');
+  const task = await createLocalTracker(root).edit(T2, { title: '  Renamed  ' });
+  assert.equal(task.id, T2);
+  assert.equal(task.title, 'Renamed');
+  assert.equal(await readFile(join(root, T2), 'utf8'), before.replace('# 02: Second', '# 02: Renamed'));
+});
+
+test('edit body replaces only the description: heading, field lines and ## Comments stay', async (t) => {
+  const root = await repo(t);
+  const T3 = '.scratch/example-feature/issues/03-third.md';
+  await writeFile(
+    join(root, T3),
+    '# 03: Third\n\nOld lead.\n\n**Blocked by:** 02\n\n**Type:** chore\n\n**Status:** ready-for-agent\n\n- [ ] old criterion\n\n## Comments\n\nagent: on it\n',
+  );
+  const tracker = createLocalTracker(root);
+  const task = await tracker.edit(T3, { body: 'New lead.\n\n- [ ] new criterion\n' });
+  assert.equal(
+    await readFile(join(root, T3), 'utf8'),
+    '# 03: Third\n\nNew lead.\n\n**Blocked by:** 02\n\n**Type:** chore\n\n**Status:** ready-for-agent\n\n- [ ] new criterion\n\n## Comments\n\nagent: on it\n',
+  );
+  assert.equal(task.state, 'ready-for-agent');
+  assert.equal(task.type, 'chore');
+  assert.deepEqual(task.blockedBy, [T2]);
+});
+
+test('edit body that starts with a list or heading puts the field lines right under the title', async (t) => {
+  const root = await repo(t);
+  await createLocalTracker(root).edit(T2, { body: '## What\n\nStatus: not a field here' });
+  assert.equal(
+    await readFile(join(root, T2), 'utf8'),
+    '# 02: Second\n\n**Blocked by:** 01, 07\n\n**Type:** bug\n\n**Status:** needs-info\n\n## What\n\nStatus: not a field here\n',
+  );
+  assert.equal((await createLocalTracker(root).get(T2)).state, 'needs-info');
+});
+
+test('edit a feature: its spec.md gets a heading (no number); a feature without spec.md gets one written', async (t) => {
+  const root = await repo(t);
+  const tracker = createLocalTracker(root);
+  const spec = await tracker.edit(SPEC, { title: 'Example' });
+  assert.equal(spec.id, SPEC);
+  assert.equal(spec.title, 'Example');
+  assert.match(await readFile(join(root, SPEC), 'utf8'), /^# Example\n\n## Problem Statement\n/);
+  await mkdir(join(root, '.scratch/bare'));
+  const bare = await tracker.edit('.scratch/bare/spec.md', { body: 'What it is.' });
+  assert.equal(await readFile(join(root, '.scratch/bare/spec.md'), 'utf8'), '# bare\n\nWhat it is.\n');
+  assert.equal(bare.title, 'bare');
+});
+
+test('edit with a blank title is INVALID and writes nothing; a missing task is NOT_FOUND', async (t) => {
+  const root = await repo(t);
+  const before = await readFile(join(root, T2), 'utf8');
+  await rejectsWith(createLocalTracker(root).edit(T2, { title: '  ', body: 'x' }), 'INVALID');
+  assert.equal(await readFile(join(root, T2), 'utf8'), before);
+  await rejectsWith(createLocalTracker(root).edit('.scratch/example-feature/issues/09-none.md', { title: 'x' }), 'NOT_FOUND');
+});

@@ -42,6 +42,13 @@ export type NewTask = {
   blockedBy?: string[];
 };
 
+/** What `Tracker.edit` changes; an omitted field stays as it is. */
+export type TaskEdit = {
+  title?: string;
+  /** The description only (local: without the heading, field lines and `## Comments` / `## Answer`). */
+  body?: string;
+};
+
 export interface Tracker {
   /** open tasks + done ones from the last 30 days */
   list(): Promise<Task[]>;
@@ -50,6 +57,12 @@ export interface Tracker {
   /** 'done' closes; from 'done' reopens */
   setState(id: string, state: TaskState): Promise<Task>;
   setType(id: string, type: string): Promise<Task>;
+  /**
+   * Changes the title and/or the description; the id stays (local: the file is not renamed). Local
+   * keeps the heading's `NN:`, the Type / Status / Blocked by lines and the `## Comments` /
+   * `## Answer` sections (localFormat.ts withDescription). A blank title is INVALID.
+   */
+  edit(id: string, changes: TaskEdit): Promise<Task>;
   /** Marks a sub-task as taken by the orchestrator (local: `Status: claimed`; GitHub: assign @me). */
   claim(id: string): Promise<Task>;
   /**

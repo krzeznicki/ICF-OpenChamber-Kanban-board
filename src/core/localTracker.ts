@@ -3,8 +3,8 @@
 import type { Dirent } from 'node:fs';
 import { mkdir, readdir, readFile, rmdir, stat, unlink, writeFile } from 'node:fs/promises';
 import { join, posix } from 'node:path';
-import { blockersValue, issueFileName, parseIssue, parseSpec, patchLine, renderIssue, renumberIssue } from './localFormat.ts';
-import type { NewTask, Task, TaskState, Tracker } from './types.ts';
+import { blockersValue, issueFileName, parseIssue, parseSpec, patchLine, renderIssue, renumberIssue, setTitle, withDescription } from './localFormat.ts';
+import type { NewTask, Task, TaskEdit, TaskState, Tracker } from './types.ts';
 import { TrackerError } from './types.ts';
 
 const SCRATCH = '.scratch';
@@ -175,6 +175,23 @@ export const createLocalTracker = (root: string): Tracker => {
   };
 
   const setState = (id: string, state: TaskState): Promise<Task> => patch(id, 'Status', statusWord(state));
+
+  /** Rewrites the file in place: the id (path) stays even when the title changes, so links and queue entries keep pointing at it. */
+  const edit = async (id: string, changes: TaskEdit): Promise<Task> => {
+    if (changes.title !== undefined && (typeof changes.title !== 'string' || changes.title.trim() === '')) {
+      throw new TrackerError('INVALID', 'Title is required');
+    }
+    const task = await get(id);
+    const ref = parseId(task.id);
+    let text = task.body === '' && ref.kind === 'parent' ? `# ${task.title}\n` : task.body;
+    if (changes.title !== undefined) text = setTitle(text, changes.title, ref.kind === 'ticket');
+    if (changes.body !== undefined) {
+      if (typeof changes.body !== 'string') throw new TrackerError('INVALID', 'The description must be a string');
+      text = withDescription(text, changes.body);
+    }
+    if (text !== task.body) await writeFile(abs(task.id), text);
+    return get(task.id);
+  };
 
   const slugOf = (title: string): string => issueFileName(0, title).slice(3, -3);
 
@@ -356,6 +373,8 @@ export const createLocalTracker = (root: string): Tracker => {
     },
 
     setState,
+
+    edit,
 
     setParent,
 

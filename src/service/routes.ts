@@ -7,7 +7,7 @@ import { readSessionEventRequest, SESSION_EVENTS_PATH, type GuestSessionEventReq
 import { readConfig, readLabels, writeConfig, type ProjectConfig } from '../core/config.ts';
 import { createGithubTracker } from '../core/githubTracker.ts';
 import { openTracker } from '../core/openTracker.ts';
-import type { Exec, NewTask, TaskState, Tracker } from '../core/types.ts';
+import type { Exec, NewTask, TaskEdit, TaskState, Tracker } from '../core/types.ts';
 import { TrackerError } from '../core/types.ts';
 import type { QueueEntry } from '../core/queue.ts';
 import { createAgentList, createModelList, type AgentList, type ModelList } from './models.ts';
@@ -344,6 +344,18 @@ const POST: Record<string, Route> = {
     const id = str(body, 'id');
     const type = str(body, 'type');
     return { task: await (await tracker(dir, deps)).setType(id, type) };
+  },
+  /** Title and/or description (the tracker checks a blank title); the task keeps its id. */
+  '/tasks/edit': async (body, dir, deps) => {
+    const id = str(body, 'id');
+    const changes: TaskEdit = {};
+    for (const key of ['title', 'body'] as const) {
+      const v = body[key];
+      if (v === undefined) continue;
+      changes[key] = typeof v === 'string' ? v : invalid(`"${key}" must be a string`);
+    }
+    if (Object.keys(changes).length === 0) return invalid('Give "title", "body" or both');
+    return { task: await (await tracker(dir, deps)).edit(id, changes) };
   },
   /**
    * Links an existing task under an existing parent. The answer's task can have a new id (local:

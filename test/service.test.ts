@@ -342,3 +342,21 @@ test('POST /tasks/state changes exactly one line of a local issue file', async (
   assert.deepEqual(changed, [6]);
   assert.equal(b[6], '**Status:** ready-for-agent');
 });
+
+test('POST /tasks/edit changes the title and description; bad parameters are 400', async (t) => {
+  const directory = await local(t);
+  const spec = (await handle('POST', '/tasks/create', { directory, input: { title: 'Feature' } }, deps)).json as { task: Task };
+  const edited = await handle('POST', '/tasks/edit', { directory, id: spec.task.id, title: 'Renamed', body: 'Now with text.' }, deps);
+  assert.equal(edited.status, 200, JSON.stringify(edited.json));
+  const task = (edited.json as { task: Task }).task;
+  assert.equal(task.id, spec.task.id);
+  assert.equal(task.title, 'Renamed');
+  assert.match(task.body, /Now with text\./);
+  const none = await handle('POST', '/tasks/edit', { directory, id: spec.task.id }, deps);
+  assert.equal(none.status, 400);
+  const bad = await handle('POST', '/tasks/edit', { directory, id: spec.task.id, body: 3 }, deps);
+  assert.equal(bad.status, 400);
+  const blank = await handle('POST', '/tasks/edit', { directory, id: spec.task.id, title: ' ' }, deps);
+  assert.equal(blank.status, 422);
+  assert.equal((blank.json as Err).error.code, 'INVALID');
+});

@@ -2,7 +2,7 @@
 // State is a triage label (strings from triage-labels.md), closed = done. Type is the `bug` /
 // `enhancement` label or a `type:<x>` label. Parents are issues with sub-issues.
 import type { LabelRole, ProjectConfig } from './config.ts';
-import type { Exec, NewTask, Task, TaskState, Tracker } from './types.ts';
+import type { Exec, NewTask, Task, TaskEdit, TaskState, Tracker } from './types.ts';
 import { TrackerError } from './types.ts';
 
 /**
@@ -362,6 +362,19 @@ export const createGithubTracker = (root: string, exec: Exec, labels: ProjectCon
       const remove = issue.labels.filter((l) => isTypeLabel(l) && l !== label);
       await swapLabels(issue.number, issue.labels.includes(label) ? null : label, remove);
       return get(idOf(issue.number));
+    },
+
+    async edit(id: string, changes: TaskEdit) {
+      const n = parseNumber(id);
+      if (changes.title !== undefined && (typeof changes.title !== 'string' || changes.title.trim() === '')) {
+        throw new TrackerError('INVALID', 'Title is required');
+      }
+      if (changes.body !== undefined && typeof changes.body !== 'string') throw new TrackerError('INVALID', 'The description must be a string');
+      const args = ['issue', 'edit', String(n)];
+      if (changes.title !== undefined) args.push('--title', changes.title.trim());
+      if (changes.body !== undefined) args.push('--body', changes.body);
+      if (args.length > 3) await run(args);
+      return get(idOf(n));
     },
 
     async claim(id) {
