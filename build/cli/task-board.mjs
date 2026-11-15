@@ -393,6 +393,16 @@ var createGithubTracker = (root, exec, labels) => {
       await run(["issue", "edit", String(issue.number), "--add-assignee", "@me"]);
       return get(task.id);
     },
+    async setParent(id, parentId) {
+      const n = parseNumber(id);
+      const p = parseNumber(parentId);
+      if (n === p) throw new TrackerError("INVALID", `A task cannot be its own parent: ${idOf(n)}`);
+      const found = await graph([n, p], false);
+      for (const k of [n, p]) if ((found.get(k) ?? null) === null) throw new TrackerError("NOT_FOUND", `Issue not found: #${k}`);
+      if (relationsOf(found.get(n)).parent === p) throw new TrackerError("INVALID", `${idOf(n)} is already a sub-issue of ${idOf(p)}`);
+      await run(["issue", "edit", String(n), "--parent", String(p)]);
+      return get(idOf(n));
+    },
     async close(id, opts) {
       const { issue, rel } = await load(parseNumber(id));
       const closed = [];
@@ -411,7 +421,7 @@ var createGithubTracker = (root, exec, labels) => {
 };
 
 // src/core/localTracker.ts
-import { mkdir as mkdir2, readdir, readFile as readFile2, stat, writeFile as writeFile2 } from "node:fs/promises";
+import { mkdir as mkdir2, readdir, readFile as readFile2, rmdir, stat, unlink, writeFile as writeFile2 } from "node:fs/promises";
 import { join as join2, posix } from "node:path";
 
 // src/core/localFormat.ts
@@ -559,6 +569,16 @@ var blockerRef = (id) => {
   const base = id.split("/").pop() ?? id;
   const m = /^(\d+)(?:-|\.md$|$)/.exec(base);
   return m ? pad(Number(m[1])) : id;
+};
+var blockersValue = (numbers) => numbers.length > 0 ? numbers.map(pad).join(", ") : NONE_BLOCKERS;
+var renumberIssue = (text, n, title) => {
+  const heading = `# ${pad(n)}: ${title.trim()}`;
+  const lines = splitLines(text);
+  const i = headingIndex(lines);
+  if (i < 0) return text.trim() === "" ? `${heading}
+` : `${heading}${text.includes("\r\n") ? "\r\n\r\n" : "\n\n"}${text}`;
+  lines[i] = heading + (lines[i].endsWith("\r") ? "\r" : "");
+  return lines.join("\n");
 };
 var NOT_PARAGRAPH = /^\s*(?:[-+]\s|\*\s|\d+[.)]\s|#|```|~~~|>|\|)/;
 var renderIssue = (n, input) => {
@@ -780,6 +800,64 @@ var createLocalTracker = (root) => {
       return get(ticketId(ref.feature, file));
     }
   };
+  const writeNextTicket = async (feature, title, text) => {
+    await mkdir2(issuesDir(feature), { recursive: true });
+    for (; ; ) {
+      const files = await issueFiles(issuesDir(feature));
+      const n = files.map(fileNumber).filter(Number.isFinite).reduce((a, b) => Math.max(a, b), 0) + 1;
+      const file = issueFileName(n, title);
+      try {
+        await writeFile2(join2(issuesDir(feature), file), renumberIssue(text, n, title), { flag: "wx" });
+      } catch (e) {
+        if (e.code === "EEXIST") continue;
+        throw e;
+      }
+      return ticketId(feature, file);
+    }
+  };
+  const dropBlocker = async (feature, n) => {
+    for (const file of await issueFiles(issuesDir(feature))) {
+      const data = await readText(join2(issuesDir(feature), file));
+      if (data === null) continue;
+      const numbers = parseIssue(data.text, file).blockedBy;
+      if (!numbers.includes(n)) continue;
+      const rest = numbers.filter((b) => b !== n);
+      await writeFile2(join2(issuesDir(feature), file), patchLine(data.text, "Blocked by", blockersValue(rest)));
+    }
+  };
+  const removeIfEmpty = async (path) => {
+    try {
+      await rmdir(path);
+    } catch (e) {
+      const c = e.code;
+      if (c !== "ENOENT" && c !== "ENOTEMPTY" && c !== "EEXIST") throw e;
+    }
+  };
+  const setParent = async (id, parentId) => {
+    const ref = parseId(id);
+    const to = parseId(parentId);
+    if (to.kind !== "parent") throw new TrackerError("INVALID", `A parent must be a feature (spec.md), not a ticket: ${parentId}`);
+    if (ref.kind === "parent" && ref.feature === to.feature) throw new TrackerError("INVALID", `A task cannot be its own parent: ${id}`);
+    const task = await get(id);
+    if (!await featureExists(to.feature)) throw new TrackerError("NOT_FOUND", `Parent not found: ${parentId}`);
+    if (ref.kind === "ticket" && ref.feature === to.feature) throw new TrackerError("INVALID", `${id} is already a ticket of ${parentId}`);
+    if (ref.kind === "parent" && (await issueFiles(issuesDir(ref.feature))).length > 0) {
+      throw new TrackerError("INVALID", `${id} has tickets of its own; a feature with tickets cannot become a ticket (two levels only)`);
+    }
+    const text = task.body === "" ? `# ${task.title}
+` : task.body;
+    const newId = await writeNextTicket(to.feature, task.title, patchLine(text, "Blocked by", blockersValue([])));
+    await unlink(abs(task.id)).catch((e) => {
+      if (!isNotFound2(e)) throw e;
+    });
+    if (ref.kind === "ticket") {
+      await dropBlocker(ref.feature, fileNumber(ref.file));
+    } else {
+      await removeIfEmpty(issuesDir(ref.feature));
+      await removeIfEmpty(featureDir(ref.feature));
+    }
+    return get(newId);
+  };
   return {
     async list() {
       const now = Date.now();
@@ -803,6 +881,7 @@ var createLocalTracker = (root) => {
       return input.parentId === void 0 ? createParent(input) : createTicket(input, input.parentId);
     },
     setState,
+    setParent,
     setType(id, type) {
       return patch(id, "Type", type.trim());
     },
@@ -843,6 +922,8 @@ Commands:
          [--blocked-by <id>[,<id>...]]...   blockers: repeat the option or separate ids with commas
   state <id> <state>                    set the state ('done' closes)
   claim <id>                            take a sub-task before working on it (orchestrator)
+  parent <id> <parentId>                make an existing task a sub-task of another (prints its id,
+                                        which changes in a local tracker: the file moves)
   next                                  first ready-for-agent ticket with no open blocker
   close <id> [--with-children]          close a task (and a feature's tickets)
   init <local|github>                   write docs/agents/issue-tracker.md
@@ -876,6 +957,7 @@ var COMMANDS = {
   create: { positionals: 0, options: ["title", "type", "body-file", "parent", "state", "blocked-by"] },
   state: { positionals: 2, options: [] },
   claim: { positionals: 1, options: [] },
+  parent: { positionals: 2, options: [] },
   next: { positionals: 0, options: [] },
   close: { positionals: 1, options: ["with-children"] },
   init: { positionals: 1, options: [] }
@@ -998,6 +1080,11 @@ ${task.body.replace(/\s*$/, "\n")}`);
       }
       case "claim": {
         const task = await (await openTracker(root, exec)).claim(args[0]);
+        print(task, line(task));
+        return 0;
+      }
+      case "parent": {
+        const task = await (await openTracker(root, exec)).setParent(args[0], args[1]);
         print(task, line(task));
         return 0;
       }

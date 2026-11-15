@@ -2870,6 +2870,11 @@ ${GUEST_UI_LOOK_CSS}`;
       create: (input) => call("POST", "/tasks/create", { input }).then((r) => r.task),
       setState: (id, state2) => call("POST", "/tasks/state", { id, state: state2 }).then((r) => r.task),
       setType: (id, type) => call("POST", "/tasks/type", { id, type }).then((r) => r.task),
+      /**
+       * Makes an existing task a sub-task of `parentId`. The returned task can have a new id (local:
+       * the file moves into the parent's feature); the service has re-keyed its session links and queue entry.
+       */
+      setParent: (id, parentId) => call("POST", "/tasks/parent", { id, parentId }).then((r) => r.task),
       close: (id, withChildren = false) => call("POST", "/tasks/close", { id, withChildren }).then((r) => r.tasks),
       cliPath: () => call("GET", "/cli").then((r) => r.path),
       /** Path B: the service makes the worktree (if asked) and starts the session with this model, agent and thinking level. */

@@ -28,6 +28,8 @@ Commands:
          [--blocked-by <id>[,<id>...]]...   blockers: repeat the option or separate ids with commas
   state <id> <state>                    set the state ('done' closes)
   claim <id>                            take a sub-task before working on it (orchestrator)
+  parent <id> <parentId>                make an existing task a sub-task of another (prints its id,
+                                        which changes in a local tracker: the file moves)
   next                                  first ready-for-agent ticket with no open blocker
   close <id> [--with-children]          close a task (and a feature's tickets)
   init <local|github>                   write docs/agents/issue-tracker.md
@@ -74,6 +76,7 @@ const COMMANDS: Record<string, { positionals: number; options: Option[] }> = {
   create: { positionals: 0, options: ['title', 'type', 'body-file', 'parent', 'state', 'blocked-by'] },
   state: { positionals: 2, options: [] },
   claim: { positionals: 1, options: [] },
+  parent: { positionals: 2, options: [] },
   next: { positionals: 0, options: [] },
   close: { positionals: 1, options: ['with-children'] },
   init: { positionals: 1, options: [] },
@@ -206,6 +209,11 @@ export const main = async (argv: string[], io: CliIO): Promise<number> => {
       }
       case 'claim': {
         const task = await (await openTracker(root, exec)).claim(args[0]!);
+        print(task, line(task));
+        return 0;
+      }
+      case 'parent': {
+        const task = await (await openTracker(root, exec)).setParent(args[0]!, args[1]!);
         print(task, line(task));
         return 0;
       }

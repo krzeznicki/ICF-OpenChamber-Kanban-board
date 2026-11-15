@@ -102,6 +102,21 @@ export const removeFromQueue = (file: string, dir: string, taskId: string): Prom
   });
 };
 
+/** A task got a new id (local: its file moved to another feature): its entry, and a start in progress, follow it. */
+export const renameInQueue = (file: string, dir: string, from: string, to: string): Promise<QueueEntry[]> => {
+  const p = pendingFor(file, dir);
+  const at = p.reserved.get(from);
+  if (at !== undefined) {
+    p.reserved.delete(from);
+    p.reserved.set(to, at);
+  }
+  if (p.removed.delete(from)) p.removed.add(to);
+  return update(file, dir, (q) => {
+    q.entries = q.entries.map((e) => (e.taskId === from ? { ...e, taskId: to } : e));
+    return [...q.entries];
+  });
+};
+
 /** An entry that failed MAX_START_FAILURES times: it stays listed but is never taken automatically. */
 export const isStuck = (e: QueueEntry): boolean => (e.failures ?? 0) >= MAX_START_FAILURES;
 

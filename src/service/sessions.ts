@@ -87,6 +87,16 @@ export const addLink = (file: string, project: string, link: Link): Promise<void
     await writeJson(file, data);
   });
 
+/** A task got a new id (local: its file moved to another feature): its links follow it. */
+export const renameLinks = (file: string, project: string, from: string, to: string): Promise<void> =>
+  serial(file, async () => {
+    const data = await readLinksFile(file);
+    const list = data.projects[project] ?? [];
+    if (!list.some((l) => l.taskId === from)) return;
+    data.projects[project] = list.map((l) => (l.taskId === from ? { ...l, taskId: to } : l));
+    await writeJson(file, data);
+  });
+
 /** How many tasks' newest sessions get their live status asked; older links answer `unknown`. */
 export const STATUS_CHECK_MAX = 50;
 const STATUS_CONCURRENCY = 8;

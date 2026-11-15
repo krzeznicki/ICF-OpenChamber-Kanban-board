@@ -70,6 +70,12 @@ export const createApi = (host: HostClient, directory: string) => {
     setState: (id: string, state: TaskState) =>
       call<{ task: Task }>('POST', '/tasks/state', { id, state }).then((r) => r.task),
     setType: (id: string, type: string) => call<{ task: Task }>('POST', '/tasks/type', { id, type }).then((r) => r.task),
+    /**
+     * Makes an existing task a sub-task of `parentId`. The returned task can have a new id (local:
+     * the file moves into the parent's feature); the service has re-keyed its session links and queue entry.
+     */
+    setParent: (id: string, parentId: string) =>
+      call<{ task: Task }>('POST', '/tasks/parent', { id, parentId }).then((r) => r.task),
     close: (id: string, withChildren = false) =>
       call<{ tasks: Task[] }>('POST', '/tasks/close', { id, withChildren }).then((r) => r.tasks),
     cliPath: () => call<{ path: string }>('GET', '/cli').then((r) => r.path),

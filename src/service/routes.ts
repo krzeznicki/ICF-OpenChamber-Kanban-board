@@ -22,6 +22,7 @@ import {
   forgetRemoval,
   release,
   removeFromQueue,
+  renameInQueue,
   requeueFailed,
   takeFromQueue,
 } from './queue.ts';
@@ -30,6 +31,7 @@ import {
   defaultLinksFile,
   isInside,
   listLinks,
+  renameLinks,
   startSession,
   withStatus,
   worktreesRoot,
@@ -342,6 +344,20 @@ const POST: Record<string, Route> = {
     const id = str(body, 'id');
     const type = str(body, 'type');
     return { task: await (await tracker(dir, deps)).setType(id, type) };
+  },
+  /**
+   * Links an existing task under an existing parent. The answer's task can have a new id (local:
+   * the file moved); the task's session links and queue entry are re-keyed to it first.
+   */
+  '/tasks/parent': async (body, dir, deps) => {
+    const id = str(body, 'id');
+    const parentId = str(body, 'parentId');
+    const task = await (await tracker(dir, deps)).setParent(id, parentId);
+    if (task.id !== id) {
+      await renameLinks(linksFile(deps), dir, id, task.id);
+      await renameInQueue(queueFile(deps), dir, id, task.id);
+    }
+    return { task };
   },
   '/tasks/close': async (body, dir, deps) => {
     const id = str(body, 'id');
