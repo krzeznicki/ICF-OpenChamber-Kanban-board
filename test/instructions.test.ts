@@ -41,6 +41,28 @@ test('instructions text names the CLI by absolute path, is short and fits the ho
   assert.ok(!text.includes('\n'));
 });
 
+test('instructions: always pass --dir with the project root (main checkout, not a worktree); claim only for list --ready/next picks', () => {
+  const text = instructionsText(CLI);
+  assert.match(text, /--dir <the project root, i\.e\. the main checkout, not a worktree>/);
+  assert.match(text, /claim applies to sub-tasks you take from `list --ready`\/`next`; skip lines marked claimed/);
+});
+
+test('every skill tells the agent to always pass --dir with the project root, even in a worktree', () => {
+  for (const name of SKILLS) {
+    const text = readFileSync(`${root}skills/${name}/SKILL.md`, 'utf8');
+    assert.match(text, /always pass `--dir <project root>`/i, name);
+    assert.match(text, /even in a worktree/i, name);
+  }
+});
+
+test('icf-kanban-start reads claimed from show before claim and stops when already claimed', () => {
+  const text = readFileSync(`${root}skills/icf-kanban-start/SKILL.md`, 'utf8');
+  assert.ok(text.indexOf('claimed') < text.indexOf('task-board claim <id>'), 'claimed is checked before claim');
+  assert.match(text, /already claimed.*stop and ask the user/i);
+  assert.match(text, /exit code 4/i);
+  assert.doesNotMatch(text, /"Only a ready-for-agent task can be claimed"/);
+});
+
 test('publishInstructions calls setInstructions(null, text) once; a failure is logged, not thrown', async () => {
   const calls: Array<[string | null, string]> = [];
   const logs: string[] = [];

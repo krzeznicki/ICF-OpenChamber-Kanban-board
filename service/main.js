@@ -295,7 +295,7 @@ var realExec = (cmd, args, opts) => new Promise((resolve) => {
 // src/service/instructions.ts
 var instructionsText = (cliPath) => {
   const tb = `node ${JSON.stringify(cliPath)}`;
-  return `Task board (ICF-kanban): in projects with docs/agents/issue-tracker.md, tasks are managed with \`${tb}\` (run in the project root or add --dir): \`list --ready\` or \`next\` for ready tickets, \`show <id>\`, \`claim <id>\` before working, \`state <id> <state>\` (done closes), \`create --title <t> [--type bug|enhancement] [--parent <id>]\`; --json for data. Skills icf-kanban-create/status/next/start describe the steps. The ICF-kanban board in OpenChamber shows the same tasks.`;
+  return `Task board (ICF-kanban): in projects with docs/agents/issue-tracker.md, tasks are managed with \`${tb}\`; always pass --dir <the project root, i.e. the main checkout, not a worktree>. \`list --ready\` or \`next\` for ready tickets, \`show <id>\`, \`claim <id>\` (claim applies to sub-tasks you take from \`list --ready\`/\`next\`; skip lines marked claimed), \`state <id> <state>\` (done closes), \`create --title <t> [--type bug|enhancement] [--parent <id>]\`; --json for data. Skills icf-kanban-create/status/next/start describe the steps. The ICF-kanban board in OpenChamber shows the same tasks.`;
 };
 var publishInstructions = async (host2, cliPath, log = console.error) => {
   log("icf-kanban: setting agent instructions");

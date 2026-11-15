@@ -167,7 +167,7 @@ export const createStarter = (deps: StarterDeps) => {
     const preset = presets.find((x) => x.id === opts.presetId) ?? presets.find((x) => x.id === 'implement') ?? presets[0];
     if (preset === undefined) throw new Error('Settings are loading, try again in a moment');
     const children = (deps.tasks() ?? []).filter((t) => t.parentId === task.id);
-    return buildPrompt(task, preset, await cliPath(p.directory), children);
+    return buildPrompt(task, preset, await cliPath(p.directory), p.directory, children);
   };
 
   const isStarting = new Set<string>();

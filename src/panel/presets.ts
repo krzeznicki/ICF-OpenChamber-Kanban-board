@@ -65,7 +65,8 @@ export const BUILTIN_PRESETS: readonly Preset[] = [
     builtin: true,
     text: [
       'Break this task down and orchestrate the work.',
-      '- If it has no sub-tasks yet, split it into small tickets and create them with the task-board CLI.',
+      '- If it has no sub-tasks yet, split it into small tickets and create them with the task-board CLI, with `--parent <this task id> --state ready-for-agent`.',
+      '- Claim each ticket before work starts on it; claim needs ready-for-agent, so move a sub-task to ready-for-agent first if needed.',
       '- Hand each ticket to a subagent; start a ticket only when the tickets blocking it are done.',
       '- Move each ticket with the task-board CLI as it starts and finishes.',
       '- Keep working until all sub-tasks are done, then summarise the result.',

@@ -2906,7 +2906,8 @@ ${GUEST_UI_LOOK_CSS}`;
       builtin: true,
       text: [
         "Break this task down and orchestrate the work.",
-        "- If it has no sub-tasks yet, split it into small tickets and create them with the task-board CLI.",
+        "- If it has no sub-tasks yet, split it into small tickets and create them with the task-board CLI, with `--parent <this task id> --state ready-for-agent`.",
+        "- Claim each ticket before work starts on it; claim needs ready-for-agent, so move a sub-task to ready-for-agent first if needed.",
         "- Hand each ticket to a subagent; start a ticket only when the tickets blocking it are done.",
         "- Move each ticket with the task-board CLI as it starts and finishes.",
         "- Keep working until all sub-tasks are done, then summarise the result."
@@ -4750,22 +4751,27 @@ ${ref}`,
   var STATES2 = "needs-triage, needs-info, ready-for-agent, ready-for-human, wontfix, done";
   var shellWord = (s) => /^[A-Za-z0-9_./:@%+=,-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`;
   var isGithub = (task) => task.url !== null || /^#\d+$/.test(task.id);
-  var buildPrompt2 = (task, preset, cliPath, children) => {
-    const cli = `node ${shellWord(cliPath)}`;
+  var buildPrompt2 = (task, preset, cliPath, projectDir, children) => {
+    const cli = `node ${shellWord(cliPath)} --dir ${shellWord(projectDir)}`;
     const id = shellWord(task.id);
+    const leads = children.length > 0 || task.kind === "parent";
     const head = [`# Task: ${task.title}`, `Id: ${task.id}`, ...task.url !== null ? [`URL: ${task.url}`] : []].join("\n");
     const tracker = [
       "## Tracker",
       isGithub(task) ? "This task is a GitHub issue of this repository." : "This task is a local issue file under .scratch/ in this repository.",
       `Move it with the task-board CLI: ${cli} state ${id} <state>`,
-      `States: ${STATES2}. Set "done" only when the work is finished.`
+      "Always pass --dir exactly as shown (the project root), even in a worktree: without it the CLI misses the tracker or writes to a copy the board never reads.",
+      `States: ${STATES2}. Set "done" only when the work is finished.`,
+      ...leads ? [] : ["This task was started from the board; you don't need to claim it."]
     ].join("\n");
-    const kids = children.length === 0 && task.kind !== "parent" ? "" : [
+    const kids = !leads ? "" : [
       "## Sub-tasks",
       ...children.length === 0 ? ["No sub-tasks yet."] : children.map((c) => `- ${c.id}: ${c.title} (${c.state})`),
       "",
       "Work until every sub-task is done; move each sub-task with the CLI as you go.",
+      `Create missing sub-tasks ready for work: ${cli} create --title <title> --parent ${id} --state ready-for-agent`,
       `Before working on a sub-task, claim it (the board then shows it In Progress): ${cli} claim <sub-task id>`,
+      "claim needs ready-for-agent: move a sub-task to ready-for-agent first if needed.",
       `When a sub-task is finished, move it: ${cli} state <sub-task id> done`
     ].join("\n");
     const instructions = preset.text.trim() === "" ? "" : `## Instructions (${preset.name})
@@ -4972,7 +4978,7 @@ ${note}` : note;
       const preset = presets.find((x) => x.id === opts.presetId) ?? presets.find((x) => x.id === "implement") ?? presets[0];
       if (preset === void 0) throw new Error("Settings are loading, try again in a moment");
       const children = (deps.tasks() ?? []).filter((t) => t.parentId === task.id);
-      return buildPrompt2(task, preset, await cliPath(p.directory), children);
+      return buildPrompt2(task, preset, await cliPath(p.directory), p.directory, children);
     };
     const isStarting = /* @__PURE__ */ new Set();
     const launcher = createLauncher({

@@ -15,9 +15,15 @@ export const shellWord = (s: string): string => (/^[A-Za-z0-9_./:@%+=,-]+$/.test
 
 const isGithub = (task: Task): boolean => task.url !== null || /^#\d+$/.test(task.id);
 
-export const buildPrompt = (task: Task, preset: Preset, cliPath: string, children: Task[]): string => {
-  const cli = `node ${shellWord(cliPath)}`;
+/**
+ * `projectDir` is the project root (the main checkout). Every CLI line passes it with --dir: the
+ * agent usually runs in its own worktree, where the tracker config is missing (GitHub) or the
+ * `.scratch/` files are a copy the board never reads (local).
+ */
+export const buildPrompt = (task: Task, preset: Preset, cliPath: string, projectDir: string, children: Task[]): string => {
+  const cli = `node ${shellWord(cliPath)} --dir ${shellWord(projectDir)}`;
   const id = shellWord(task.id);
+  const leads = children.length > 0 || task.kind === 'parent';
   const head = [`# Task: ${task.title}`, `Id: ${task.id}`, ...(task.url !== null ? [`URL: ${task.url}`] : [])].join('\n');
   const tracker = [
     '## Tracker',
@@ -25,21 +31,24 @@ export const buildPrompt = (task: Task, preset: Preset, cliPath: string, childre
       ? 'This task is a GitHub issue of this repository.'
       : 'This task is a local issue file under .scratch/ in this repository.',
     `Move it with the task-board CLI: ${cli} state ${id} <state>`,
+    'Always pass --dir exactly as shown (the project root), even in a worktree: without it the CLI misses the tracker or writes to a copy the board never reads.',
     `States: ${STATES}. Set "done" only when the work is finished.`,
+    ...(leads ? [] : ["This task was started from the board; you don't need to claim it."]),
   ].join('\n');
-  const kids =
-    children.length === 0 && task.kind !== 'parent'
-      ? ''
-      : [
-          '## Sub-tasks',
-          ...(children.length === 0
-            ? ['No sub-tasks yet.']
-            : children.map((c) => `- ${c.id}: ${c.title} (${c.state})`)),
-          '',
-          'Work until every sub-task is done; move each sub-task with the CLI as you go.',
-          `Before working on a sub-task, claim it (the board then shows it In Progress): ${cli} claim <sub-task id>`,
-          `When a sub-task is finished, move it: ${cli} state <sub-task id> done`,
-        ].join('\n');
+  const kids = !leads
+    ? ''
+    : [
+        '## Sub-tasks',
+        ...(children.length === 0
+          ? ['No sub-tasks yet.']
+          : children.map((c) => `- ${c.id}: ${c.title} (${c.state})`)),
+        '',
+        'Work until every sub-task is done; move each sub-task with the CLI as you go.',
+        `Create missing sub-tasks ready for work: ${cli} create --title <title> --parent ${id} --state ready-for-agent`,
+        `Before working on a sub-task, claim it (the board then shows it In Progress): ${cli} claim <sub-task id>`,
+        'claim needs ready-for-agent: move a sub-task to ready-for-agent first if needed.',
+        `When a sub-task is finished, move it: ${cli} state <sub-task id> done`,
+      ].join('\n');
   const instructions = preset.text.trim() === '' ? '' : `## Instructions (${preset.name})\n${preset.text.trim()}`;
 
   const body = task.body.trim() === '' ? 'No description.' : task.body.trim();

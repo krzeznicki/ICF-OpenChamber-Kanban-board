@@ -5,7 +5,7 @@ description: Add a task, bug, feature or ticket to the project's task board (ICF
 
 # Create a task on the board
 
-`task-board` below means `node "<path>"`, the task-board CLI path given in your instructions (fallback: `node <ICF-kanban extension folder>/build/cli/task-board.mjs`). Run it in the project root or add `--dir <root>`.
+`task-board` below means `node "<path>"`, the task-board CLI path given in your instructions (fallback: `node <ICF-kanban extension folder>/build/cli/task-board.mjs`). Always pass `--dir <project root>` (the main checkout of the project, where `docs/agents/issue-tracker.md` lives), even in a worktree: there the CLI would miss the tracker or write to a copy the board never reads.
 
 If `docs/agents/issue-tracker.md` is missing, ask the user which tracker they want (local `.scratch/` files or GitHub Issues), then run `task-board init local` or `task-board init github`. Never run `init` without asking.
 
