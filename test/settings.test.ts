@@ -402,23 +402,56 @@ test('every built-in names its skills and carries a mattText that invokes each o
   for (const p of BUILTIN_PRESETS) {
     assert.ok(p.skills !== undefined && p.skills.length > 0, p.id);
     assert.ok(p.mattText !== undefined && p.mattText.trim().length > 80, p.id);
-    for (const name of p.skills) {
-      assert.ok((MATT_SKILLS as readonly string[]).includes(name), `${p.id}: ${name} is detected`);
-      assert.ok(p.mattText.includes(`/${name}`), `${p.id} mattText names /${name}`);
-    }
-    // Board state still moves through the task-board CLI, which writes the same format as the skills.
+    for (const name of [...p.skills, ...(p.requires ?? [])]) assert.ok((MATT_SKILLS as readonly string[]).includes(name), `${p.id}: ${name} is detected`);
+    for (const name of p.skills) assert.ok(p.mattText.includes(`/${name}`), `${p.id} mattText names /${name}`);
+    // Hidden dependencies are checked, not invoked by name.
+    for (const name of p.requires ?? []) assert.ok(!p.mattText.includes(`/${name}`), `${p.id} does not invoke /${name}`);
+    // The tracker is at the project root; tracker writes go through the task-board CLI, which writes the skills' format.
     assert.match(p.mattText, /task-board CLI/, p.id);
     assert.match(p.mattText, /same format/, p.id);
+    assert.ok(p.mattText.includes('{root}/docs/agents/issue-tracker.md'), p.id);
+    assert.match(p.mattText, /never run \/setup-matt-pocock-skills/, p.id);
   }
   assert.deepEqual(preset('plan').skills, ['grill-with-docs', 'to-spec', 'to-tickets']);
-  assert.deepEqual(preset('prototype').skills, ['prototype', 'handoff']);
+  assert.deepEqual(preset('plan').requires, ['grilling', 'domain-modeling']);
+  assert.deepEqual(preset('prototype').skills, ['prototype']);
   assert.deepEqual(preset('implement').skills, ['implement', 'tdd', 'code-review']);
   assert.deepEqual(preset('implement-no-questions').skills, ['implement', 'tdd', 'code-review']);
   assert.deepEqual(preset('orchestrate').skills, ['to-tickets', 'implement-spec', 'tdd', 'code-review']);
   assert.deepEqual(preset('diagnose').skills, ['diagnosing-bugs', 'implement', 'tdd', 'code-review']);
   assert.deepEqual(preset('triage').skills, ['triage']);
+  assert.deepEqual(preset('triage').requires, ['grilling', 'domain-modeling']);
+  assert.ok(BUILTIN_PRESETS.every((p) => !p.mattText!.includes('handoff')));
   assert.match(preset('prototype').mattText!, /prototype\/<name>/);
+  assert.match(preset('prototype').mattText!, /worktree/);
   assert.match(preset('orchestrate').mattText!, /task graph/);
+});
+
+test('skills texts that create or record tracker items do it through the CLI at the root ({cli} carries --dir)', () => {
+  const creates = ['plan', 'orchestrate'];
+  for (const id of creates) {
+    const t = preset(id).mattText!;
+    assert.ok(t.includes('{cli} create --title'), id);
+    assert.ok(t.includes('--blocked-by'), id);
+    assert.ok(t.includes('--state ready-for-agent --body-file -'), id);
+  }
+  assert.ok(preset('orchestrate').mattText!.includes('--parent {id}'));
+  // Notes go to the root's issue file or the GitHub issue ({note}); states through `state`.
+  for (const id of ['plan', 'prototype', 'triage']) assert.ok(preset(id).mattText!.includes('{note}'), id);
+  for (const id of ['plan', 'triage', 'orchestrate']) assert.ok(preset(id).mattText!.includes('{cli} state'), id);
+  assert.ok(preset('orchestrate').mattText!.includes('{cli} claim'));
+  // Plan says what becomes of this task once a feature supersedes it.
+  assert.ok(preset('plan').mattText!.includes('{cli} state {id} done'));
+  // Triage never relabels or closes by itself; wontfix goes through the CLI too.
+  const triage = preset('triage').mattText!;
+  assert.ok(triage.includes('{cli} state {id} <state>'));
+  assert.match(triage, /wontfix/);
+  assert.match(triage, /do not change labels or close/i);
+  // Diagnose: no correct seam is itself the finding; cleanup before done.
+  const diagnose = preset('diagnose').mattText!;
+  assert.match(diagnose, /no correct seam/);
+  assert.match(diagnose, /\[DEBUG-/);
+  assert.match(diagnose, /throwaway/);
 });
 
 test('usesMattSkills: only when switched on and every skill the preset names is found', () => {
@@ -427,6 +460,9 @@ test('usesMattSkills: only when switched on and every skill the preset names is 
   assert.equal(usesMattSkills(implement, { use: false, found: ALL }), false);
   assert.equal(usesMattSkills(implement, { use: true, found: ['implement', 'tdd'] }), false);
   assert.equal(usesMattSkills(implement, NO_SKILLS), false);
+  // A hidden dependency missing keeps the plain text.
+  assert.equal(usesMattSkills(preset('plan'), { use: true, found: ALL.filter((n) => n !== 'domain-modeling') }), false);
+  assert.equal(usesMattSkills(preset('plan'), { use: true, found: ['grill-with-docs', 'to-spec', 'to-tickets', 'grilling', 'domain-modeling'] }), true);
   assert.equal(usesMattSkills({ id: 'custom-x', name: 'X', text: 'x', builtin: false }, { use: true, found: ALL }), false);
 });
 
@@ -438,7 +474,7 @@ test('listPresets: mattText when the skills are in use, text otherwise; a user e
   assert.equal(byId(listPresets(pristine, { use: false, found: ALL }), 'implement'), preset('implement').text);
   assert.equal(byId(listPresets(pristine), 'implement'), preset('implement').text);
   // Only the presets whose skills are all found switch.
-  const some = listPresets(pristine, { use: true, found: ['triage', 'implement'] });
+  const some = listPresets(pristine, { use: true, found: ['triage', 'grilling', 'domain-modeling', 'implement'] });
   assert.equal(byId(some, 'triage'), preset('triage').mattText);
   assert.equal(byId(some, 'implement'), preset('implement').text);
   // An edited built-in keeps the user's text whatever is installed.
@@ -473,15 +509,17 @@ test('parseSettings keeps a boolean useMattSkills only', () => {
 });
 
 test('the Settings lines: which skills were found, and what each built-in runs with', () => {
-  assert.equal(skillsFoundLine(['implement', 'tdd']), "Matt Pocock's skills found: implement, tdd. Missing: grill-with-docs, to-spec, to-tickets, prototype, handoff, implement-spec, code-review, diagnosing-bugs, triage.");
-  assert.equal(skillsFoundLine(ALL), `Matt Pocock's skills found: ${ALL.join(', ')}.`);
-  assert.match(skillsFoundLine([]), /^None of Matt Pocock's skills were found/);
-  assert.match(skillsFoundLine(null), /^Could not check/);
+  assert.equal(skillsFoundLine(['implement', 'tdd'], true), "Matt Pocock's skills found: implement, tdd. Missing: grill-with-docs, grilling, domain-modeling, to-spec, to-tickets, prototype, implement-spec, code-review, diagnosing-bugs, triage.");
+  assert.equal(skillsFoundLine(ALL, true), `Matt Pocock's skills found: ${ALL.join(', ')}.`);
+  assert.match(skillsFoundLine([], true), /^None of Matt Pocock's skills were found/);
+  assert.equal(skillsFoundLine(null, true), 'The service could not check for skills; the presets use their plain instructions.');
+  assert.equal(skillsFoundLine(null, false), "Open a project to check which of Matt Pocock's skills are installed.");
   const on = { use: true, found: ALL };
   assert.equal(presetSkillsNote(preset('implement'), on, false), "Runs with Matt Pocock's skills: /implement, /tdd, /code-review.");
   assert.equal(presetSkillsNote(preset('implement'), { use: false, found: ALL }, false), "Plain instructions: Matt Pocock's skills are switched off (Global).");
   assert.equal(presetSkillsNote(preset('implement'), { use: true, found: ['implement'] }, false), 'Plain instructions until /tdd, /code-review are installed.');
-  assert.equal(presetSkillsNote(preset('triage'), { use: true, found: [] }, false), 'Plain instructions until /triage is installed.');
+  assert.equal(presetSkillsNote(preset('triage'), { use: true, found: ['grilling', 'domain-modeling'] }, false), 'Plain instructions until /triage is installed.');
+  assert.equal(presetSkillsNote(preset('triage'), { use: true, found: ['triage'] }, false), 'Plain instructions until grilling, domain-modeling are installed.');
   assert.equal(presetSkillsNote(preset('implement'), on, true), 'Your text is used, whatever skills are installed.');
   assert.equal(presetSkillsNote({ id: 'custom-x', name: 'X', text: '', builtin: false }, on, false), null);
 });

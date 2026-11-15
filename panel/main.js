@@ -717,12 +717,12 @@
       if (disposed || target.parent === target) {
         return Promise.reject(new HostRequestError("HOST_UNAVAILABLE", "No host frame. This page is not in an iframe."));
       }
-      return new Promise((resolve, reject) => {
+      return new Promise((resolve2, reject) => {
         const timer = setTimeout(() => {
           pending.delete(message.id);
           reject(new HostRequestError("HOST_TIMEOUT", "Host did not answer in time."));
         }, timeoutMs);
-        pending.set(message.id, { resolve, reject, timer });
+        pending.set(message.id, { resolve: resolve2, reject, timer });
         post(message);
       });
     };
@@ -2798,8 +2798,8 @@ ${GUEST_UI_LOOK_CSS}`;
       addLink: (taskId, sessionId, sessionDirectory) => call("POST", "/links/add", { taskId, sessionId, sessionDirectory }).then(() => void 0),
       /** `opencode models` (cached by the service); a failure comes back as `{ models: [], error }`. */
       listModels: () => call("POST", "/models/list"),
-      /** Which of Matt Pocock's skills are installed for this project (cached by the service). */
-      detectSkills: () => call("POST", "/skills/detect").then((r) => r.found),
+      /** Which of Matt Pocock's skills are installed for this project, and each one's SKILL.md (cached by the service). */
+      detectSkills: () => call("POST", "/skills/detect"),
       listQueue: () => call("POST", "/queue/list").then((r) => r.queue),
       /** Idempotent per task; `maxParallel` is stored so the service drains with the same limit. */
       addToQueue: (entry, maxParallel) => call("POST", "/queue/add", { entry, maxParallel }).then((r) => r.queue),
@@ -3011,10 +3011,11 @@ ${GUEST_UI_LOOK_CSS}`;
   // src/core/skills.ts
   var MATT_SKILLS = [
     "grill-with-docs",
+    "grilling",
+    "domain-modeling",
     "to-spec",
     "to-tickets",
     "prototype",
-    "handoff",
     "implement",
     "implement-spec",
     "tdd",
@@ -3026,9 +3027,9 @@ ${GUEST_UI_LOOK_CSS}`;
   // src/panel/presets.ts
   var NO_SKILLS = Object.freeze({ use: false, found: [] });
   var SKILLS_NOTE = [
-    "About the skills: load each skill named here with your skill tool; if it cannot be loaded, read its SKILL.md and follow it.",
-    "Matt's skills and the task-board CLI write the same format: the skills read the tracker setup in docs/agents/issue-tracker.md, which the board wrote, so what they create shows on the board (do not run /setup-matt-pocock-skills).",
-    "Still change states with the task-board CLI (`state`, and `claim` for sub-tasks) as shown above, so the board follows."
+    "About the skills: load each skill named here with your skill tool; if it cannot be loaded, read its SKILL.md (listed below) and follow it.",
+    "The tracker lives at the project root {root}, not in your worktree, where docs/agents/ and .scratch/ are missing or a copy the board never reads. When a skill asks for the issue tracker, it is {root}/docs/agents/issue-tracker.md; never run /setup-matt-pocock-skills.",
+    "Matt's skills and the task-board CLI write the same format, so make every tracker write through the CLI at the root instead of the skills' own publishing: new issues with `{cli} create`, states with `{cli} state` (and `{cli} claim` for sub-tasks). For a note on this task, {note}. The board then follows."
   ].join("\n");
   var withSkills = (lines) => [...lines, SKILLS_NOTE].join("\n");
   var BUILTIN_PRESETS = [
@@ -3043,11 +3044,13 @@ ${GUEST_UI_LOOK_CSS}`;
         "- Ask the user to approve the plan and answer the questions. Do not write code until they do."
       ].join("\n"),
       skills: ["grill-with-docs", "to-spec", "to-tickets"],
+      requires: ["grilling", "domain-modeling"],
       mattText: withSkills([
         "Plan this task with Matt Pocock's skills before changing any code.",
         "- Run /grill-with-docs to sharpen the task with the user, a round of questions at a time; it keeps the terms in GLOSSARY.md and the decisions as ADRs.",
         "- If a question needs a runnable answer, do not build it here: suggest a Prototype task for it.",
-        "- If this is a multi-session build, stay in this context and run /to-spec, then /to-tickets: the spec and its tickets (each with its blocking edges, ready-for-agent) land on the board as a feature with its sub-tasks.",
+        "- If this is a multi-session build, stay in this context: write the spec with /to-spec and draft the tickets with /to-tickets (its review with the user included), but publish them with the CLI: the spec as a feature with `{cli} create --title <title> --state ready-for-agent --body-file -`, then each ticket in dependency order with `{cli} create --title <title> --parent <feature id> --blocked-by <ticket ids> --state ready-for-agent --body-file -` (leave out --blocked-by when it has none).",
+        "- Then record the feature id on this task: {note}. If the feature fully replaces this task, close it with `{cli} state {id} done`; otherwise leave its state and keep the link.",
         "- Otherwise finish with the sharpened plan and ask the user to approve it. Do not write code."
       ])
     },
@@ -3061,12 +3064,12 @@ ${GUEST_UI_LOOK_CSS}`;
         "- Skip polish, tests and edge cases unless the question is about them.",
         "- Finish with the answer, what the prototype shows, and what a real implementation would need."
       ].join("\n"),
-      skills: ["prototype", "handoff"],
+      skills: ["prototype"],
       mattText: withSkills([
         "Answer this task's design question with Matt Pocock's skills.",
-        "- Run /prototype: throwaway code that answers the one question in this task, kept on a `prototype/<name>` branch out of main.",
-        "- Record the answer on this task: the verdict, the question it settled and the branch (a comment on the GitHub issue, or a note in the local issue file).",
-        "- Finish with /handoff, so the session that plans or builds this picks up what you learned, and say where the handoff file is."
+        "- In your session's worktree, create a `prototype/<name>` branch (`git switch -c prototype/<name>`) and run /prototype there: throwaway code that answers the one question in this task. Commit it on that branch.",
+        "- Record the answer on this task (the verdict, the question it settled and the branch): {note}.",
+        "- Finish with the answer and what a real implementation would need."
       ])
     },
     {
@@ -3084,7 +3087,7 @@ ${GUEST_UI_LOOK_CSS}`;
       skills: ["implement", "tdd", "code-review"],
       mattText: withSkills([
         "Implement this task with Matt Pocock's skills.",
-        "- Run /implement with this task as its ticket. It drives /tdd (agree the seams, then one red-green slice at a time) and closes with /code-review of your diff against the branch you started from.",
+        "- Run /implement with this task as its ticket (`{cli} show {id}` reads it). It drives /tdd (agree the seams, then one red-green slice at a time) and closes with /code-review of your diff against the branch you started from.",
         "- When a decision is unclear, ask the user before going on.",
         "- Finish with a short summary of what changed and how you tested it."
       ])
@@ -3103,7 +3106,7 @@ ${GUEST_UI_LOOK_CSS}`;
       skills: ["implement", "tdd", "code-review"],
       mattText: withSkills([
         "Implement this task with Matt Pocock's skills, without stopping to ask questions.",
-        "- Run /implement with this task as its ticket; it drives /tdd and closes with /code-review.",
+        "- Run /implement with this task as its ticket (`{cli} show {id}` reads it); it drives /tdd and closes with /code-review.",
         "- Where a skill would ask the user (the seams for /tdd, the fixed point for /code-review, an unclear decision), decide yourself: choose the simplest reasonable option and go on.",
         "- Finish with a short summary of what changed, how you tested it, and every assumption you made."
       ])
@@ -3123,9 +3126,9 @@ ${GUEST_UI_LOOK_CSS}`;
       skills: ["to-tickets", "implement-spec", "tdd", "code-review"],
       mattText: withSkills([
         "Break this task down and orchestrate the work with Matt Pocock's skills.",
-        "- If it has no sub-tasks yet, run /to-tickets on it: tracer-bullet tickets with their blocking edges, published as sub-tasks of this task in ready-for-agent.",
-        "- Then run /implement-spec over the sub-tasks: it reads them as a task graph, runs implementer subagents (each driving /tdd) across the ready frontier on one integration branch, and ends with one /code-review.",
-        "- Claim each sub-task as its implementer starts and move it to done once merged.",
+        "- If it has no sub-tasks yet, draft tracer-bullet tickets with /to-tickets, then publish them with the CLI in dependency order: `{cli} create --title <title> --parent {id} --blocked-by <ticket ids> --state ready-for-agent --body-file -` (leave out --blocked-by when it has none).",
+        "- Then run /implement-spec over the sub-tasks: it reads them as a task graph, runs implementer subagents (each driving /tdd) across the ready frontier on one integration branch, and ends with one /code-review. Give each implementer the CLI line with its --dir.",
+        "- Claim each sub-task with `{cli} claim <id>` as its implementer starts, and resolve it with `{cli} state <id> done` once merged.",
         "- Keep working until all sub-tasks are done, then summarise the result and name the integration branch."
       ])
     },
@@ -3144,8 +3147,9 @@ ${GUEST_UI_LOOK_CSS}`;
       mattText: withSkills([
         "Diagnose and fix this bug with Matt Pocock's skills.",
         "- Run /diagnosing-bugs: build a tight feedback loop that goes red on this bug before any theory, reproduce and minimise, rank hypotheses, instrument.",
-        "- Once the cause is found, make the fix through /implement: the minimised repro is the first /tdd slice, as a regression test, and it closes with /code-review.",
-        "- Finish with the cause, the fix, and the command that went red before and green after."
+        "- Once the cause is found, make the fix through /implement: the minimised repro is the first /tdd slice, as a regression test, and it closes with /code-review. If no correct seam exists for that test, that is itself the finding: say so rather than write a shallow test.",
+        "- Before calling it done: re-run the original loop, remove every [DEBUG-\u2026] log, and delete throwaway prototypes (or move them to a clearly marked debug location).",
+        "- Finish with the cause (the hypothesis that held), the fix, and the command that went red before and green after."
       ])
     },
     {
@@ -3160,17 +3164,21 @@ ${GUEST_UI_LOOK_CSS}`;
         "- Write the brief, questions or reason on the task, and set the state with the task-board CLI."
       ].join("\n"),
       skills: ["triage"],
+      requires: ["grilling", "domain-modeling"],
       mattText: withSkills([
         "Triage this task with Matt Pocock's skills; it arrived raw and nobody has evaluated it yet.",
         "- Run /triage on this task: gather context, check it is not already implemented or rejected, recommend a category and state, verify the claim (reproduce a bug), and grill it into shape if needed.",
-        "- Apply the outcome as /triage says: an agent brief for ready-for-agent, triage notes for needs-info, a reason for ready-for-human or wontfix.",
+        "- Write the outcome as /triage says (an agent brief, triage notes, or the reason for ready-for-human or wontfix, each starting with its AI disclaimer): {note}.",
+        "- Then set the state with `{cli} state {id} <state>`, wontfix included. Do not change labels or close the issue yourself.",
         "- Do not implement it."
       ])
     }
   ];
   var list = (names) => names.map((n) => `/${n}`).join(", ");
-  var skillsFoundLine = (found) => {
-    if (found === null) return "Could not check which of Matt Pocock's skills are installed; open a project.";
+  var skillsFoundLine = (found, projectOpen) => {
+    if (found === null) {
+      return projectOpen ? "The service could not check for skills; the presets use their plain instructions." : "Open a project to check which of Matt Pocock's skills are installed.";
+    }
     if (found.length === 0) {
       return "None of Matt Pocock's skills were found in ~/.config/opencode/skills, ~/.claude/skills, ~/.agents/skills or the project's .opencode/skills and .claude/skills.";
     }
@@ -3182,12 +3190,23 @@ ${GUEST_UI_LOOK_CSS}`;
     if (edited) return "Your text is used, whatever skills are installed.";
     if (usesMattSkills(preset, skills)) return `Runs with Matt Pocock's skills: ${list(preset.skills)}.`;
     if (!skills.use) return "Plain instructions: Matt Pocock's skills are switched off (Global).";
-    const missing = preset.skills.filter((n) => !skills.found.includes(n));
-    return `Plain instructions until ${list(missing)} ${missing.length === 1 ? "is" : "are"} installed.`;
+    const absent = (names) => names.filter((n) => !skills.found.includes(n));
+    const missing = [...absent(preset.skills).map((n) => `/${n}`), ...absent(preset.requires ?? [])];
+    return `Plain instructions until ${missing.join(", ")} ${missing.length === 1 ? "is" : "are"} installed.`;
   };
   var BUILTIN_IDS = new Set(BUILTIN_PRESETS.map((p) => p.id));
   var shipped = (id) => BUILTIN_PRESETS.find((p) => p.id === id);
-  var usesMattSkills = (preset, skills) => skills.use && preset.mattText !== void 0 && preset.skills !== void 0 && preset.skills.length > 0 && preset.skills.every((name) => skills.found.includes(name));
+  var needed = (preset) => [...preset.skills ?? [], ...preset.requires ?? []];
+  var usesMattSkills = (preset, skills) => skills.use && preset.mattText !== void 0 && preset.skills !== void 0 && preset.skills.length > 0 && needed(preset).every((name) => skills.found.includes(name));
+  var resolve = (p, edit, skills) => {
+    if (edit !== void 0) return { ...p, text: edit };
+    if (!usesMattSkills(p, skills)) return p;
+    const skillFiles = needed(p).flatMap((name) => {
+      const path = skills.paths?.[name];
+      return path === void 0 ? [] : [{ name, path }];
+    });
+    return { ...p, text: p.mattText, skillFiles };
+  };
   var record = (v2) => typeof v2 === "object" && v2 !== null && !Array.isArray(v2) ? v2 : null;
   var parseStoredPresets = (raw) => {
     const r = record(raw);
@@ -3210,7 +3229,7 @@ ${GUEST_UI_LOOK_CSS}`;
     return { builtin, custom };
   };
   var listPresets = (stored, skills = NO_SKILLS) => [
-    ...BUILTIN_PRESETS.map((p) => ({ ...p, text: stored.builtin[p.id] ?? (usesMattSkills(p, skills) ? p.mattText : p.text) })),
+    ...BUILTIN_PRESETS.map((p) => resolve(p, stored.builtin[p.id], skills)),
     ...stored.custom.map((c) => ({ ...c, builtin: false }))
   ];
   var isEdited = (stored, id) => Object.hasOwn(stored.builtin, id);
@@ -3311,7 +3330,7 @@ Title: {title}
     let active2 = 0;
     const waiting = [];
     const slot = async (fn) => {
-      if (active2 >= CONCURRENCY) await new Promise((resolve2) => waiting.push(resolve2));
+      if (active2 >= CONCURRENCY) await new Promise((resolve3) => waiting.push(resolve3));
       else active2++;
       try {
         return await fn();
@@ -3330,7 +3349,7 @@ Title: {title}
       const own = languages.get(k);
       return { projectId: ctx.projectId, summary: own === void 0 ? ctx.summary : { ...ctx.summary, language: own } };
     };
-    const resolve = async (task) => {
+    const resolve2 = async (task) => {
       const ctx = deps.context();
       if (ctx === null) return null;
       const k = langKey(ctx.projectId, task.id);
@@ -3425,7 +3444,7 @@ ${ref}`,
       return p;
     };
     const ensure = async (task, force = false) => {
-      const r = await resolve(task);
+      const r = await resolve2(task);
       if (r === null) return null;
       const stored = await readStored(r.key, task.id);
       if (stored !== null) return stored;
@@ -3454,7 +3473,7 @@ ${ref}`,
       },
       /** Reads a stored summary (and the card's language); never generates. */
       load: async (task) => {
-        const r = await resolve(task);
+        const r = await resolve2(task);
         return r === null ? null : readStored(r.key, task.id);
       },
       /** The stored summary, else a new one; not after a failure for this body or a missing model. */
@@ -3882,7 +3901,7 @@ ${ref}`,
   };
 
   // src/panel/ui/confirm.ts
-  var askChoice = (title, body, choices) => new Promise((resolve) => {
+  var askChoice = (title, body, choices) => new Promise((resolve2) => {
     const backdrop = document.createElement("div");
     backdrop.className = "kb-backdrop kb-confirm-backdrop";
     const box = document.createElement("div");
@@ -3904,7 +3923,7 @@ ${ref}`,
       document.removeEventListener("keydown", onKey, true);
       for (const d of disposers) d();
       backdrop.remove();
-      resolve(answer);
+      resolve2(answer);
     };
     const onKey = (e) => {
       if (e.key !== "Escape") return;
@@ -4262,7 +4281,7 @@ ${ref}`,
       body.replaceChildren();
       const found = m.skills ?? [];
       const use = skillUse(resolveSettings(m.global, {}, found), found);
-      const skillsLine = skillsFoundLine(m.skills);
+      const skillsLine = skillsFoundLine(m.skills, m.project !== null);
       const presets2 = listPresets(m.presets, use);
       if (m.tab === "global") {
         drawLayerForm(body, disposers, {
@@ -11522,6 +11541,15 @@ ${ref}`,
   var STATES2 = "needs-triage, needs-info, ready-for-agent, ready-for-human, wontfix, done";
   var shellWord = (s) => /^[A-Za-z0-9_./:@%+=,-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`;
   var isGithub = (task) => task.url !== null || /^#\d+$/.test(task.id);
+  var noteHow = (task, projectDir) => {
+    const n = /^#(\d+)$/.exec(task.id)?.[1] ?? /\/issues\/(\d+)/.exec(task.url ?? "")?.[1];
+    if (isGithub(task) && n !== void 0) return `post it with \`gh issue comment ${n} --body-file -\``;
+    return `append it to the issue file ${projectDir.replace(/\/+$/, "")}/${task.id}`;
+  };
+  var fillPreset = (text3, task, cli, projectDir) => text3.replace(
+    /\{(cli|root|id|note)\}/g,
+    (_, key) => key === "cli" ? cli : key === "root" ? projectDir : key === "id" ? shellWord(task.id) : noteHow(task, projectDir)
+  );
   var buildPrompt2 = (task, preset, cliPath, projectDir, children) => {
     const cli = `node ${shellWord(cliPath)} --dir ${shellWord(projectDir)}`;
     const id = shellWord(task.id);
@@ -11545,8 +11573,13 @@ ${ref}`,
       "claim needs ready-for-agent: move a sub-task to ready-for-agent first if needed.",
       `When a sub-task is finished, move it: ${cli} state <sub-task id> done`
     ].join("\n");
+    const files = preset.skillFiles ?? [];
+    const skillFiles = files.length === 0 ? "" : `
+
+Skill files, for a skill your skill tool cannot load:
+${files.map((f) => `- ${f.name}: ${f.path}`).join("\n")}`;
     const instructions = preset.text.trim() === "" ? "" : `## Instructions (${preset.name})
-${preset.text.trim()}`;
+${fillPreset(preset.text.trim(), task, cli, projectDir)}${skillFiles}`;
     const body = task.body.trim() === "" ? "No description." : task.body.trim();
     const compose = (b) => [head, b, tracker, kids, instructions].filter((part) => part !== "").join("\n\n");
     const full = compose(body);
@@ -11568,7 +11601,7 @@ ${note}` : note;
     if (text3 !== void 0) node.textContent = text3;
     return node;
   };
-  var askStart = (title, initial, presets2, loadModels2) => new Promise((resolve) => {
+  var askStart = (title, initial, presets2, loadModels2) => new Promise((resolve2) => {
     const options = { ...initial };
     const backdrop = el6("div", "kb-backdrop kb-confirm-backdrop");
     const box = el6("div", "kb-confirm");
@@ -11632,7 +11665,7 @@ ${note}` : note;
       document.removeEventListener("keydown", onKey);
       for (const d of disposers) d();
       backdrop.remove();
-      resolve(answer);
+      resolve2(answer);
     };
     const onKey = (e) => {
       if (e.key !== "Escape" || e.defaultPrevented) return;
@@ -12449,9 +12482,12 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
   });
   var settings = () => {
     const loaded = state.settingsFor !== null && state.settingsFor === state.projectId;
-    return resolveSettings(state.globalSettings, loaded ? state.projectSettings : {}, loaded ? state.skills ?? [] : []);
+    return resolveSettings(state.globalSettings, loaded ? state.projectSettings : {}, loaded ? state.skills?.found ?? [] : []);
   };
-  var presets = () => listPresets(state.presets, skillUse(settings(), state.settingsFor === state.projectId ? state.skills ?? [] : []));
+  var presets = () => {
+    const skills = state.settingsFor === state.projectId ? state.skills : null;
+    return listPresets(state.presets, { ...skillUse(settings(), skills?.found ?? []), paths: skills?.paths ?? {} });
+  };
   var applySettings = () => {
     const hide = settings().hideChildren;
     if (hide !== state.hideSubtasks) {
@@ -12517,7 +12553,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
         global: state.globalSettings,
         project: p !== null && id !== null ? { name: p.name, layer: state.projectSettings } : null,
         presets: state.presets,
-        skills: id !== null ? state.skills : null
+        skills: id !== null ? state.skills?.found ?? null : null
       },
       {
         onGlobal: (layer) => {

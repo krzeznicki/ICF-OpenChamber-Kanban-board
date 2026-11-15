@@ -62,8 +62,8 @@ type State = {
   projectSettings: SettingsLayer;
   settingsFor: string | null;
   presets: StoredPresets;
-  /** Matt Pocock's skills installed for `settingsFor` (POST /skills/detect); null when the check failed. */
-  skills: string[] | null;
+  /** Matt Pocock's skills installed for `settingsFor` and their SKILL.md (POST /skills/detect); null when the check failed. */
+  skills: { found: string[]; paths: Record<string, string> } | null;
   /** Cards the user dragged away from their sessions (columns.ts Detached); `detachedFor` is their project. */
   detached: Map<string, number>;
   detachedFor: string | null;
@@ -151,11 +151,14 @@ const loadModels = createModelLoader(async () => {
 /** The settings in force for the shown project (global only until its layer has loaded). */
 const settings = (): Settings => {
   const loaded = state.settingsFor !== null && state.settingsFor === state.projectId;
-  return resolveSettings(state.globalSettings, loaded ? state.projectSettings : {}, loaded ? (state.skills ?? []) : []);
+  return resolveSettings(state.globalSettings, loaded ? state.projectSettings : {}, loaded ? (state.skills?.found ?? []) : []);
 };
 
 /** The presets a start uses: built-ins switch to their skills text when the settings and the installed skills allow it. */
-const presets = (): Preset[] => listPresets(state.presets, skillUse(settings(), state.settingsFor === state.projectId ? (state.skills ?? []) : []));
+const presets = (): Preset[] => {
+  const skills = state.settingsFor === state.projectId ? state.skills : null;
+  return listPresets(state.presets, { ...skillUse(settings(), skills?.found ?? []), paths: skills?.paths ?? {} });
+};
 
 /** After any settings change: the hide switch follows, the board and an open detail redraw. */
 const applySettings = (): void => {
@@ -173,7 +176,7 @@ const applySettings = (): void => {
 };
 
 /** Matt Pocock's skills for the project, or null when the service could not tell. */
-const detectSkills = async (id: string): Promise<string[] | null> => {
+const detectSkills = async (id: string): Promise<State['skills']> => {
   const p = state.projects.find((x) => x.id === id);
   if (p === undefined) return null;
   try {
@@ -233,7 +236,7 @@ const showSettings = (): void => {
       global: state.globalSettings,
       project: p !== null && id !== null ? { name: p.name, layer: state.projectSettings } : null,
       presets: state.presets,
-      skills: id !== null ? state.skills : null,
+      skills: id !== null ? (state.skills?.found ?? null) : null,
     },
     {
       onGlobal: (layer) => {

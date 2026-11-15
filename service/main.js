@@ -1168,10 +1168,11 @@ import { join as join3 } from "node:path";
 // src/core/skills.ts
 var MATT_SKILLS = [
   "grill-with-docs",
+  "grilling",
+  "domain-modeling",
   "to-spec",
   "to-tickets",
   "prototype",
-  "handoff",
   "implement",
   "implement-spec",
   "tdd",
@@ -1198,17 +1199,27 @@ var isFile = async (path) => {
 };
 var detectSkills = async (home, project, names = MATT_SKILLS) => {
   const roots = skillRoots(home, project);
-  const found = await Promise.all(names.map(async (name) => (await Promise.all(roots.map((r) => isFile(join3(r, name, "SKILL.md"))))).some(Boolean)));
-  return names.filter((_, i) => found[i]);
+  const hits = await Promise.all(
+    names.map(async (name) => {
+      const files = roots.map((r) => join3(r, name, "SKILL.md"));
+      const ok = await Promise.all(files.map(isFile));
+      return files.find((_, i) => ok[i]);
+    })
+  );
+  return names.flatMap((name, i) => hits[i] === void 0 ? [] : [{ name, path: hits[i] }]);
 };
 var createSkillDetector = (home = homedir(), now = Date.now) => {
   const cache = /* @__PURE__ */ new Map();
+  const result = (found) => ({
+    found: found.map((f) => f.name),
+    paths: Object.fromEntries(found.map((f) => [f.name, f.path]))
+  });
   return async (directory) => {
     const hit = cache.get(directory);
-    if (hit !== void 0 && now() - hit.at < SKILLS_TTL_MS) return { found: [...hit.found] };
+    if (hit !== void 0 && now() - hit.at < SKILLS_TTL_MS) return result(hit.found);
     const found = await detectSkills(home, directory);
     cache.set(directory, { at: now(), found });
-    return { found: [...found] };
+    return result(found);
   };
 };
 
@@ -1741,7 +1752,7 @@ var POST = {
   },
   /** `{ models: ['provider/model', …] }`; a failure is `{ models: [], error }`, never an error status. */
   "/models/list": async (_body, dir, deps2) => modelList(deps2)(dir),
-  /** `{ found: [...] }`: which of Matt Pocock's skills are installed for this project (core/skills.ts). */
+  /** `{ found: [...], paths: {name: SKILL.md} }`: which of Matt Pocock's skills are installed for this project (core/skills.ts). */
   "/skills/detect": async (_body, dir, deps2) => skillDetector(deps2)(dir),
   "/queue/list": async (_body, dir, deps2) => ({ queue: await listQueue(queueFile(deps2), dir) }),
   "/queue/add": async (body, dir, deps2) => ({ queue: await addToQueue(queueFile(deps2), dir, queueEntry(body.entry), maxParallelOf(body)) }),

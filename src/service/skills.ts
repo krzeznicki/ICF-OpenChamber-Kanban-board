@@ -25,24 +25,40 @@ const isFile = async (path: string): Promise<boolean> => {
   }
 };
 
-/** The names of `names` that have a SKILL.md file in any root, in the order of `names`. */
-export const detectSkills = async (home: string, project: string, names: readonly string[] = MATT_SKILLS): Promise<string[]> => {
+export type FoundSkill = { name: string; path: string };
+
+/**
+ * The names of `names` that have a SKILL.md file in any root, in the order of `names`, each with
+ * the SKILL.md of the first root (skillRoots order) that has it.
+ */
+export const detectSkills = async (home: string, project: string, names: readonly string[] = MATT_SKILLS): Promise<FoundSkill[]> => {
   const roots = skillRoots(home, project);
-  const found = await Promise.all(names.map(async (name) => (await Promise.all(roots.map((r) => isFile(join(r, name, 'SKILL.md'))))).some(Boolean)));
-  return names.filter((_, i) => found[i]);
+  const hits = await Promise.all(
+    names.map(async (name) => {
+      const files = roots.map((r) => join(r, name, 'SKILL.md'));
+      const ok = await Promise.all(files.map(isFile));
+      return files.find((_, i) => ok[i]);
+    }),
+  );
+  return names.flatMap((name, i) => (hits[i] === undefined ? [] : [{ name, path: hits[i] }]));
 };
 
-export type SkillsResult = { found: string[] };
+/** `found` in MATT_SKILLS order; `paths` gives each found skill's SKILL.md (the prompt names it as a fallback). */
+export type SkillsResult = { found: string[]; paths: Record<string, string> };
 
 /** A cached detectSkills per project directory. `home` defaults to the user's home folder. */
 export const createSkillDetector = (home: string = homedir(), now: () => number = Date.now) => {
-  const cache = new Map<string, { at: number; found: string[] }>();
+  const cache = new Map<string, { at: number; found: FoundSkill[] }>();
+  const result = (found: FoundSkill[]): SkillsResult => ({
+    found: found.map((f) => f.name),
+    paths: Object.fromEntries(found.map((f) => [f.name, f.path])),
+  });
   return async (directory: string): Promise<SkillsResult> => {
     const hit = cache.get(directory);
-    if (hit !== undefined && now() - hit.at < SKILLS_TTL_MS) return { found: [...hit.found] };
+    if (hit !== undefined && now() - hit.at < SKILLS_TTL_MS) return result(hit.found);
     const found = await detectSkills(home, directory);
     cache.set(directory, { at: now(), found });
-    return { found: [...found] };
+    return result(found);
   };
 };
 

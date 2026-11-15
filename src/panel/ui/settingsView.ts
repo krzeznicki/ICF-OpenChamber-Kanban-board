@@ -456,7 +456,7 @@ export const openSettings = (initial: SettingsModel, callbacks: SettingsCallback
     body.replaceChildren();
     const found = m.skills ?? [];
     const use = skillUse(resolveSettings(m.global, {}, found), found);
-    const skillsLine = skillsFoundLine(m.skills);
+    const skillsLine = skillsFoundLine(m.skills, m.project !== null);
     const presets = listPresets(m.presets, use);
     if (m.tab === 'global') {
       drawLayerForm(body, disposers, {

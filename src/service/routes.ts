@@ -360,7 +360,7 @@ const POST: Record<string, Route> = {
   },
   /** `{ models: ['provider/model', …] }`; a failure is `{ models: [], error }`, never an error status. */
   '/models/list': async (_body, dir, deps) => modelList(deps)(dir),
-  /** `{ found: [...] }`: which of Matt Pocock's skills are installed for this project (core/skills.ts). */
+  /** `{ found: [...], paths: {name: SKILL.md} }`: which of Matt Pocock's skills are installed for this project (core/skills.ts). */
   '/skills/detect': async (_body, dir, deps) => skillDetector(deps)(dir),
   '/queue/list': async (_body, dir, deps) => ({ queue: await listQueue(queueFile(deps), dir) }),
   '/queue/add': async (body, dir, deps) => ({ queue: await addToQueue(queueFile(deps), dir, queueEntry(body.entry), maxParallelOf(body)) }),

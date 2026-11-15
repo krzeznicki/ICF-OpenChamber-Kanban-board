@@ -7,18 +7,36 @@
 
 import { MATT_SKILLS } from '../core/skills.ts';
 
-/** `skills` and `mattText` are set on built-ins only. */
-export type Preset = { id: string; name: string; text: string; builtin: boolean; skills?: readonly string[]; mattText?: string };
+/**
+ * `skills` (invoked by name in `mattText`), `requires` (loaded by those skills themselves) and
+ * `mattText` are set on built-ins only. `skillFiles` is set by listPresets when the skills text is
+ * used: the SKILL.md of each, which the prompt names for a harness that cannot load a skill.
+ * A text may use {cli}, {root}, {id} and {note}; buildPrompt fills them in (prompt.ts).
+ */
+export type Preset = {
+  id: string;
+  name: string;
+  text: string;
+  builtin: boolean;
+  skills?: readonly string[];
+  requires?: readonly string[];
+  mattText?: string;
+  skillFiles?: ReadonlyArray<{ name: string; path: string }>;
+};
 
-/** Whether Matt Pocock's skills may be used (the global setting) and which are installed. */
-export type SkillUse = { use: boolean; found: readonly string[] };
+/** Whether Matt Pocock's skills may be used (the global setting), which are installed and where. */
+export type SkillUse = { use: boolean; found: readonly string[]; paths?: Readonly<Record<string, string>> };
 export const NO_SKILLS: SkillUse = Object.freeze({ use: false, found: [] });
 
-/** Closes every skills text: how to load the skills, and that the board still moves through the CLI. */
+/**
+ * Closes every skills text. The session usually runs in a fresh worktree, where docs/agents/ and
+ * .scratch/ are missing or a copy the board never reads, so the skills are pointed at the root and
+ * every tracker write goes through the task-board CLI ({cli} carries --dir).
+ */
 const SKILLS_NOTE = [
-  'About the skills: load each skill named here with your skill tool; if it cannot be loaded, read its SKILL.md and follow it.',
-  "Matt's skills and the task-board CLI write the same format: the skills read the tracker setup in docs/agents/issue-tracker.md, which the board wrote, so what they create shows on the board (do not run /setup-matt-pocock-skills).",
-  'Still change states with the task-board CLI (`state`, and `claim` for sub-tasks) as shown above, so the board follows.',
+  'About the skills: load each skill named here with your skill tool; if it cannot be loaded, read its SKILL.md (listed below) and follow it.',
+  'The tracker lives at the project root {root}, not in your worktree, where docs/agents/ and .scratch/ are missing or a copy the board never reads. When a skill asks for the issue tracker, it is {root}/docs/agents/issue-tracker.md; never run /setup-matt-pocock-skills.',
+  "Matt's skills and the task-board CLI write the same format, so make every tracker write through the CLI at the root instead of the skills' own publishing: new issues with `{cli} create`, states with `{cli} state` (and `{cli} claim` for sub-tasks). For a note on this task, {note}. The board then follows.",
 ].join('\n');
 
 const withSkills = (lines: string[]): string => [...lines, SKILLS_NOTE].join('\n');
@@ -41,11 +59,13 @@ export const BUILTIN_PRESETS: readonly Preset[] = [
       '- Ask the user to approve the plan and answer the questions. Do not write code until they do.',
     ].join('\n'),
     skills: ['grill-with-docs', 'to-spec', 'to-tickets'],
+    requires: ['grilling', 'domain-modeling'],
     mattText: withSkills([
       "Plan this task with Matt Pocock's skills before changing any code.",
       '- Run /grill-with-docs to sharpen the task with the user, a round of questions at a time; it keeps the terms in GLOSSARY.md and the decisions as ADRs.',
       '- If a question needs a runnable answer, do not build it here: suggest a Prototype task for it.',
-      '- If this is a multi-session build, stay in this context and run /to-spec, then /to-tickets: the spec and its tickets (each with its blocking edges, ready-for-agent) land on the board as a feature with its sub-tasks.',
+      "- If this is a multi-session build, stay in this context: write the spec with /to-spec and draft the tickets with /to-tickets (its review with the user included), but publish them with the CLI: the spec as a feature with `{cli} create --title <title> --state ready-for-agent --body-file -`, then each ticket in dependency order with `{cli} create --title <title> --parent <feature id> --blocked-by <ticket ids> --state ready-for-agent --body-file -` (leave out --blocked-by when it has none).",
+      '- Then record the feature id on this task: {note}. If the feature fully replaces this task, close it with `{cli} state {id} done`; otherwise leave its state and keep the link.',
       '- Otherwise finish with the sharpened plan and ask the user to approve it. Do not write code.',
     ]),
   },
@@ -59,12 +79,12 @@ export const BUILTIN_PRESETS: readonly Preset[] = [
       '- Skip polish, tests and edge cases unless the question is about them.',
       '- Finish with the answer, what the prototype shows, and what a real implementation would need.',
     ].join('\n'),
-    skills: ['prototype', 'handoff'],
+    skills: ['prototype'],
     mattText: withSkills([
       "Answer this task's design question with Matt Pocock's skills.",
-      '- Run /prototype: throwaway code that answers the one question in this task, kept on a `prototype/<name>` branch out of main.',
-      '- Record the answer on this task: the verdict, the question it settled and the branch (a comment on the GitHub issue, or a note in the local issue file).',
-      '- Finish with /handoff, so the session that plans or builds this picks up what you learned, and say where the handoff file is.',
+      '- In your session\'s worktree, create a `prototype/<name>` branch (`git switch -c prototype/<name>`) and run /prototype there: throwaway code that answers the one question in this task. Commit it on that branch.',
+      '- Record the answer on this task (the verdict, the question it settled and the branch): {note}.',
+      '- Finish with the answer and what a real implementation would need.',
     ]),
   },
   {
@@ -82,7 +102,7 @@ export const BUILTIN_PRESETS: readonly Preset[] = [
     skills: ['implement', 'tdd', 'code-review'],
     mattText: withSkills([
       "Implement this task with Matt Pocock's skills.",
-      '- Run /implement with this task as its ticket. It drives /tdd (agree the seams, then one red-green slice at a time) and closes with /code-review of your diff against the branch you started from.',
+      '- Run /implement with this task as its ticket (`{cli} show {id}` reads it). It drives /tdd (agree the seams, then one red-green slice at a time) and closes with /code-review of your diff against the branch you started from.',
       '- When a decision is unclear, ask the user before going on.',
       '- Finish with a short summary of what changed and how you tested it.',
     ]),
@@ -101,7 +121,7 @@ export const BUILTIN_PRESETS: readonly Preset[] = [
     skills: ['implement', 'tdd', 'code-review'],
     mattText: withSkills([
       "Implement this task with Matt Pocock's skills, without stopping to ask questions.",
-      '- Run /implement with this task as its ticket; it drives /tdd and closes with /code-review.',
+      '- Run /implement with this task as its ticket (`{cli} show {id}` reads it); it drives /tdd and closes with /code-review.',
       '- Where a skill would ask the user (the seams for /tdd, the fixed point for /code-review, an unclear decision), decide yourself: choose the simplest reasonable option and go on.',
       '- Finish with a short summary of what changed, how you tested it, and every assumption you made.',
     ]),
@@ -121,9 +141,9 @@ export const BUILTIN_PRESETS: readonly Preset[] = [
     skills: ['to-tickets', 'implement-spec', 'tdd', 'code-review'],
     mattText: withSkills([
       "Break this task down and orchestrate the work with Matt Pocock's skills.",
-      '- If it has no sub-tasks yet, run /to-tickets on it: tracer-bullet tickets with their blocking edges, published as sub-tasks of this task in ready-for-agent.',
-      '- Then run /implement-spec over the sub-tasks: it reads them as a task graph, runs implementer subagents (each driving /tdd) across the ready frontier on one integration branch, and ends with one /code-review.',
-      '- Claim each sub-task as its implementer starts and move it to done once merged.',
+      '- If it has no sub-tasks yet, draft tracer-bullet tickets with /to-tickets, then publish them with the CLI in dependency order: `{cli} create --title <title> --parent {id} --blocked-by <ticket ids> --state ready-for-agent --body-file -` (leave out --blocked-by when it has none).',
+      '- Then run /implement-spec over the sub-tasks: it reads them as a task graph, runs implementer subagents (each driving /tdd) across the ready frontier on one integration branch, and ends with one /code-review. Give each implementer the CLI line with its --dir.',
+      '- Claim each sub-task with `{cli} claim <id>` as its implementer starts, and resolve it with `{cli} state <id> done` once merged.',
       '- Keep working until all sub-tasks are done, then summarise the result and name the integration branch.',
     ]),
   },
@@ -142,8 +162,9 @@ export const BUILTIN_PRESETS: readonly Preset[] = [
     mattText: withSkills([
       "Diagnose and fix this bug with Matt Pocock's skills.",
       '- Run /diagnosing-bugs: build a tight feedback loop that goes red on this bug before any theory, reproduce and minimise, rank hypotheses, instrument.',
-      '- Once the cause is found, make the fix through /implement: the minimised repro is the first /tdd slice, as a regression test, and it closes with /code-review.',
-      '- Finish with the cause, the fix, and the command that went red before and green after.',
+      '- Once the cause is found, make the fix through /implement: the minimised repro is the first /tdd slice, as a regression test, and it closes with /code-review. If no correct seam exists for that test, that is itself the finding: say so rather than write a shallow test.',
+      '- Before calling it done: re-run the original loop, remove every [DEBUG-…] log, and delete throwaway prototypes (or move them to a clearly marked debug location).',
+      '- Finish with the cause (the hypothesis that held), the fix, and the command that went red before and green after.',
     ]),
   },
   {
@@ -158,10 +179,12 @@ export const BUILTIN_PRESETS: readonly Preset[] = [
       '- Write the brief, questions or reason on the task, and set the state with the task-board CLI.',
     ].join('\n'),
     skills: ['triage'],
+    requires: ['grilling', 'domain-modeling'],
     mattText: withSkills([
       "Triage this task with Matt Pocock's skills; it arrived raw and nobody has evaluated it yet.",
       '- Run /triage on this task: gather context, check it is not already implemented or rejected, recommend a category and state, verify the claim (reproduce a bug), and grill it into shape if needed.',
-      '- Apply the outcome as /triage says: an agent brief for ready-for-agent, triage notes for needs-info, a reason for ready-for-human or wontfix.',
+      '- Write the outcome as /triage says (an agent brief, triage notes, or the reason for ready-for-human or wontfix, each starting with its AI disclaimer): {note}.',
+      '- Then set the state with `{cli} state {id} <state>`, wontfix included. Do not change labels or close the issue yourself.',
       '- Do not implement it.',
     ]),
   },
@@ -169,9 +192,16 @@ export const BUILTIN_PRESETS: readonly Preset[] = [
 
 const list = (names: readonly string[]): string => names.map((n) => `/${n}`).join(', ');
 
-/** The Settings line under the toggle and atop Presets: what was found, null when it could not be checked. */
-export const skillsFoundLine = (found: readonly string[] | null): string => {
-  if (found === null) return "Could not check which of Matt Pocock's skills are installed; open a project.";
+/**
+ * The Settings line under the toggle and atop Presets: what was found. `found` is null when it is
+ * not known: no project open, or the service's check failed.
+ */
+export const skillsFoundLine = (found: readonly string[] | null, projectOpen: boolean): string => {
+  if (found === null) {
+    return projectOpen
+      ? 'The service could not check for skills; the presets use their plain instructions.'
+      : "Open a project to check which of Matt Pocock's skills are installed.";
+  }
   if (found.length === 0) {
     return "None of Matt Pocock's skills were found in ~/.config/opencode/skills, ~/.claude/skills, ~/.agents/skills or the project's .opencode/skills and .claude/skills.";
   }
@@ -185,20 +215,35 @@ export const presetSkillsNote = (preset: Preset, skills: SkillUse, edited: boole
   if (edited) return 'Your text is used, whatever skills are installed.';
   if (usesMattSkills(preset, skills)) return `Runs with Matt Pocock's skills: ${list(preset.skills)}.`;
   if (!skills.use) return "Plain instructions: Matt Pocock's skills are switched off (Global).";
-  const missing = preset.skills.filter((n) => !skills.found.includes(n));
-  return `Plain instructions until ${list(missing)} ${missing.length === 1 ? 'is' : 'are'} installed.`;
+  const absent = (names: readonly string[]): string[] => names.filter((n) => !skills.found.includes(n));
+  const missing = [...absent(preset.skills).map((n) => `/${n}`), ...absent(preset.requires ?? [])];
+  return `Plain instructions until ${missing.join(', ')} ${missing.length === 1 ? 'is' : 'are'} installed.`;
 };
 
 const BUILTIN_IDS = new Set(BUILTIN_PRESETS.map((p) => p.id));
 const shipped = (id: string): Preset | undefined => BUILTIN_PRESETS.find((p) => p.id === id);
 
-/** True when the user allows Matt's skills and every skill this (built-in) preset names is installed. */
+/** Every skill a (built-in) preset's skills text needs: the ones it names, then the ones they load. */
+const needed = (preset: Preset): string[] => [...(preset.skills ?? []), ...(preset.requires ?? [])];
+
+/** True when the user allows Matt's skills and every skill this (built-in) preset names or requires is installed. */
 export const usesMattSkills = (preset: Preset, skills: SkillUse): boolean =>
   skills.use &&
   preset.mattText !== undefined &&
   preset.skills !== undefined &&
   preset.skills.length > 0 &&
-  preset.skills.every((name) => skills.found.includes(name));
+  needed(preset).every((name) => skills.found.includes(name));
+
+/** A built-in as listed: the user's edit, else its skills text (with the SKILL.md paths known), else its plain text. */
+const resolve = (p: Preset, edit: string | undefined, skills: SkillUse): Preset => {
+  if (edit !== undefined) return { ...p, text: edit };
+  if (!usesMattSkills(p, skills)) return p;
+  const skillFiles = needed(p).flatMap((name) => {
+    const path = skills.paths?.[name];
+    return path === undefined ? [] : [{ name, path }];
+  });
+  return { ...p, text: p.mattText as string, skillFiles };
+};
 
 export const isBuiltinPreset = (id: string): boolean => BUILTIN_IDS.has(id);
 
@@ -230,7 +275,7 @@ export const parseStoredPresets = (raw: unknown): StoredPresets => {
  * user's edit, else its skills text when `skills` allows it (usesMattSkills), else its plain text.
  */
 export const listPresets = (stored: StoredPresets, skills: SkillUse = NO_SKILLS): Preset[] => [
-  ...BUILTIN_PRESETS.map((p) => ({ ...p, text: stored.builtin[p.id] ?? (usesMattSkills(p, skills) ? (p.mattText as string) : p.text) })),
+  ...BUILTIN_PRESETS.map((p) => resolve(p, stored.builtin[p.id], skills)),
   ...stored.custom.map((c) => ({ ...c, builtin: false })),
 ];
 

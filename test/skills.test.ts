@@ -28,7 +28,7 @@ const noExec = async () => {
 test('MATT_SKILLS lists every skill a preset may name', () => {
   assert.deepEqual(
     [...MATT_SKILLS],
-    ['grill-with-docs', 'to-spec', 'to-tickets', 'prototype', 'handoff', 'implement', 'implement-spec', 'tdd', 'code-review', 'diagnosing-bugs', 'triage'],
+    ['grill-with-docs', 'grilling', 'domain-modeling', 'to-spec', 'to-tickets', 'prototype', 'implement', 'implement-spec', 'tdd', 'code-review', 'diagnosing-bugs', 'triage'],
   );
 });
 
@@ -58,7 +58,11 @@ test('detectSkills finds a skill in any root, only with a SKILL.md, in MATT_SKIL
   await skill(join(home, '.config/opencode/skills'), 'not-matt');
   // ~/.config/openchamber is never read.
   await skill(join(home, '.config/openchamber/skills'), 'prototype');
-  assert.deepEqual(await detectSkills(home, project), ['grill-with-docs', 'implement', 'tdd', 'code-review', 'triage']);
+  const found = await detectSkills(home, project);
+  assert.deepEqual(found.map((f) => f.name), ['grill-with-docs', 'implement', 'tdd', 'code-review', 'triage']);
+  // Each with the SKILL.md it was found at.
+  assert.equal(found.find((f) => f.name === 'implement')?.path, join(home, '.claude/skills/implement/SKILL.md'));
+  assert.equal(found.find((f) => f.name === 'code-review')?.path, join(project, '.opencode/skills/code-review/SKILL.md'));
 });
 
 test('detectSkills with no skill folders at all finds nothing', async (t) => {
@@ -67,18 +71,27 @@ test('detectSkills with no skill folders at all finds nothing', async (t) => {
   assert.deepEqual(await detectSkills(home, project), []);
 });
 
+test('a skill in several roots is reported once, with the first root in skillRoots order', async (t) => {
+  const home = await tmp(t, 'icf-home-');
+  const project = await tmp(t, 'icf-proj-');
+  await skill(join(project, '.claude/skills'), 'tdd');
+  await skill(join(home, '.agents/skills'), 'tdd');
+  assert.deepEqual(await detectSkills(home, project), [{ name: 'tdd', path: join(home, '.agents/skills/tdd/SKILL.md') }]);
+});
+
 test('the detector caches per directory for SKILLS_TTL_MS', async (t) => {
   const home = await tmp(t, 'icf-home-');
   const a = await tmp(t, 'icf-a-');
   const b = await tmp(t, 'icf-b-');
   let now = 1000;
   const detect = createSkillDetector(home, () => now);
-  assert.deepEqual(await detect(a), { found: [] });
+  const tdd = { found: ['tdd'], paths: { tdd: join(home, '.claude/skills/tdd/SKILL.md') } };
+  assert.deepEqual(await detect(a), { found: [], paths: {} });
   await skill(join(home, '.claude/skills'), 'tdd');
-  assert.deepEqual(await detect(a), { found: [] }, 'cached');
-  assert.deepEqual(await detect(b), { found: ['tdd'] }, 'another directory is its own entry');
+  assert.deepEqual(await detect(a), { found: [], paths: {} }, 'cached');
+  assert.deepEqual(await detect(b), tdd, 'another directory is its own entry');
   now += SKILLS_TTL_MS;
-  assert.deepEqual(await detect(a), { found: ['tdd'] }, 'expired');
+  assert.deepEqual(await detect(a), tdd, 'expired');
   assert.ok(SKILLS_TTL_MS >= 60_000 && SKILLS_TTL_MS <= 10 * 60_000);
 });
 
@@ -86,9 +99,15 @@ test('POST /skills/detect answers { found } for the project, with the injected d
   const home = await tmp(t, 'icf-home-');
   const directory = await tmp(t, 'icf-proj-');
   await skill(join(home, '.config/opencode/skills'), 'prototype');
-  await skill(join(directory, '.claude/skills'), 'handoff');
+  await skill(join(directory, '.claude/skills'), 'triage');
   const r = await handle('POST', '/skills/detect', { directory }, { exec: noExec, skills: createSkillDetector(home) });
-  assert.deepEqual(r, { status: 200, json: { found: ['prototype', 'handoff'] } });
+  assert.deepEqual(r, {
+    status: 200,
+    json: {
+      found: ['prototype', 'triage'],
+      paths: { prototype: join(home, '.config/opencode/skills/prototype/SKILL.md'), triage: join(directory, '.claude/skills/triage/SKILL.md') },
+    },
+  });
   const bad = await handle('POST', '/skills/detect', { directory: 'relative' }, { exec: noExec, skills: createSkillDetector(home) });
   assert.equal(bad.status, 400);
 });
