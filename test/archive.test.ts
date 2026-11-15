@@ -6,13 +6,16 @@ import {
   archivableIds,
   archiveTasks,
   archivedShown,
+  createArchiveSync,
+  isArchived,
+  mergeArchived,
   parseArchivedTasks,
   reconcileArchived,
   serializeArchived,
   unarchiveTask,
 } from '../src/panel/archive.ts';
 import { groupTasks } from '../src/panel/columns.ts';
-import { createSettingsStore, STORAGE_KEYS } from '../src/panel/settings.ts';
+import { createLatestSaver, createSettingsStore, STORAGE_KEYS } from '../src/panel/settings.ts';
 
 const task = (id: string, state: TaskState, extra: Partial<Task> = {}): Task => ({
   id,
@@ -121,4 +124,69 @@ test('archived tasks: stored per project under archivedTasks:<projectId>, apart 
   assert.deepEqual([...(await store.loadArchivedTasks('p1'))], [['a', 4]]);
   await store.saveArchivedTasks('p1', new Map());
   assert.equal(data.has('archivedTasks:p1'), false);
+});
+
+test('isArchived: a done task with a mark; a reopened one with a stale mark is not', () => {
+  const marks = new Set(['a', 'b']);
+  assert.equal(isArchived(task('a', 'done'), marks), true);
+  assert.equal(isArchived(task('b', 'needs-triage'), marks), false);
+  assert.equal(isArchived(task('c', 'done'), marks), false);
+});
+
+test('mergeArchived: newest archivedAt per id; a local unarchive drops older stored marks', () => {
+  const mine = new Map([['a', 5], ['b', 1]]);
+  const stored = new Map([['a', 3], ['b', 4], ['c', 2], ['d', 9]]);
+  const removed = new Map([['c', 7]]); // this frame unarchived c at 7, after c's stored mark
+  assert.deepEqual(
+    [...mergeArchived(mine, stored, removed)].sort(),
+    [['a', 5], ['b', 4], ['d', 9]],
+  );
+  // A mark archived again elsewhere after the local unarchive wins.
+  assert.deepEqual([...mergeArchived(new Map(), new Map([['c', 8]]), removed)], [['c', 8]]);
+});
+
+test('archive sync: storage is trusted only when every local change was written', () => {
+  const sync = createArchiveSync();
+  assert.equal(sync.trusts(sync.loadToken()), true);
+  const n = sync.edit();
+  const token = sync.loadToken();
+  assert.equal(sync.trusts(token), false); // unwritten at load start
+  sync.written(n);
+  assert.equal(sync.trusts(sync.loadToken()), true);
+  const t2 = sync.loadToken();
+  sync.edit(); // a change during the load
+  assert.equal(sync.trusts(t2), false);
+});
+
+test('archive sync: a waiting write replaced by a newer one (createLatestSaver) still lets storage be trusted', async () => {
+  const sync = createArchiveSync();
+  const writes: number[] = [];
+  let release: () => void = () => {};
+  const gate = new Promise<void>((r) => (release = r));
+  const saver = createLatestSaver<() => Promise<void>>((_k, run) => run(), () => {});
+  const job = (n: number, wait?: Promise<void>) => async () => {
+    if (wait !== undefined) await wait;
+    writes.push(n);
+    sync.written(n);
+  };
+  const a = sync.edit();
+  saver.save('k', job(a, gate)); // running
+  const b = sync.edit();
+  saver.save('k', job(b)); // waiting
+  const c = sync.edit(); // the load's reconcile write
+  saver.save('k', job(c)); // replaces b; b never runs
+  release();
+  await saver.idle();
+  assert.deepEqual(writes, [a, c]);
+  assert.equal(sync.trusts(sync.loadToken()), true);
+});
+
+test('archive sync: a failed write does not count as written (memory is kept)', async () => {
+  const sync = createArchiveSync();
+  const saver = createLatestSaver<() => Promise<void>>((_k, run) => run(), () => {});
+  const n = sync.edit();
+  // As in main.ts: written only after the store's write resolved.
+  saver.save('k', () => Promise.reject(new Error('disk')).then(() => sync.written(n)));
+  await saver.idle();
+  assert.equal(sync.trusts(sync.loadToken()), false);
 });

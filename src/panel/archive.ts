@@ -63,3 +63,43 @@ export const reconcileArchived = (marks: ArchivedTasks, tasks: readonly Task[]):
 /** How many listed tasks are archived (the "Show archived (N)" count). */
 export const archivedShown = (tasks: readonly Task[], marks: ArchivedTasks): number =>
   tasks.filter((t) => t.state === 'done' && marks.has(t.id)).length;
+
+/** The one rule for "archived": a done task with a mark (a stale mark on a reopened task does not count). */
+export const isArchived = (task: Task, marks: { has: (id: string) => boolean }): boolean => task.state === 'done' && marks.has(task.id);
+
+/**
+ * Two frames' marks (rail panel and full-screen page share the storage): the newest archivedAt per
+ * id. `removed` (id -> when this frame unarchived it) drops marks of the other side archived before then.
+ */
+export const mergeArchived = (mine: ArchivedTasks, stored: ArchivedTasks, removed: ArchivedTasks = new Map()): Map<string, number> => {
+  const out = new Map<string, number>();
+  for (const source of [mine, stored]) {
+    for (const [id, at] of source) {
+      if (at <= (removed.get(id) ?? 0)) continue;
+      if (at > (out.get(id) ?? 0)) out.set(id, at);
+    }
+  }
+  return out;
+};
+
+/**
+ * Whether a load may take the stored marks over this frame's memory. Every write of the marks
+ * (a user change or a load's reconcile) takes a number from `edit()` and reports `written(n)` only
+ * once the store accepted it. Writes are collapsed (createLatestSaver): a waiting job may be replaced
+ * by a newer one and never run, which is fine because numbers grow, so the newest write covers it.
+ * A failed write leaves memory in charge until a later one succeeds.
+ */
+export const createArchiveSync = () => {
+  let edits = 0;
+  let written = 0;
+  return {
+    edit: (): number => ++edits,
+    written: (n: number): void => {
+      if (n > written) written = n;
+    },
+    /** Taken when a load starts reading storage. */
+    loadToken: (): number => (written === edits ? edits : -1),
+    /** Storage read with this token is current: nothing was unwritten at the start, nothing changed since. */
+    trusts: (token: number): boolean => token !== -1 && token === edits,
+  };
+};

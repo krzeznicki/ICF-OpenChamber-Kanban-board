@@ -2,6 +2,7 @@
 // In Progress and Review come only from OpenChamber sessions and are never written to the repo.
 import type { GuestSessionActivity, GuestSessionRecord } from '@openchamber/sdk';
 import type { Task } from '../core/types.ts';
+import { isArchived } from './archive.ts';
 
 export type Column = 'backlog' | 'ready' | 'in_progress' | 'review' | 'done';
 
@@ -234,8 +235,8 @@ export const groupTasks = (
   const cards = new Map<string, { column: Column; card: CardModel }>();
   for (const task of tasks) {
     if (hideSubtasks && task.parentId !== null) continue;
-    const isArchived = task.state === 'done' && archive.ids.has(task.id);
-    if (isArchived && !archive.show) continue;
+    const archived = isArchived(task, archive.ids);
+    if (archived && !archive.show) continue;
     const session = sessionForTask(task.id, sessions, links, detached.get(task.id));
     const kids = children.get(task.id) ?? [];
     const led = task.state !== 'done' && parentRunning(task.parentId);
@@ -254,7 +255,7 @@ export const groupTasks = (
         queued: queued.has(task.id) && !starting.has(task.id) && task.state !== 'done',
         queueError: queued.has(task.id) && !starting.has(task.id) && task.state !== 'done' ? (queueErrors.get(task.id) ?? null) : null,
         ledByOrchestrator: led,
-        archived: isArchived,
+        archived,
       },
     });
   }

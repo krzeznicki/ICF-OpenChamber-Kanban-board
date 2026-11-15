@@ -2772,6 +2772,31 @@ ${GUEST_UI_LOOK_CSS}`;
     return { marks: next, changed: next.size !== marks.size };
   };
   var archivedShown = (tasks, marks) => tasks.filter((t) => t.state === "done" && marks.has(t.id)).length;
+  var isArchived = (task, marks) => task.state === "done" && marks.has(task.id);
+  var mergeArchived = (mine, stored, removed = /* @__PURE__ */ new Map()) => {
+    const out = /* @__PURE__ */ new Map();
+    for (const source of [mine, stored]) {
+      for (const [id, at] of source) {
+        if (at <= (removed.get(id) ?? 0)) continue;
+        if (at > (out.get(id) ?? 0)) out.set(id, at);
+      }
+    }
+    return out;
+  };
+  var createArchiveSync = () => {
+    let edits = 0;
+    let written = 0;
+    return {
+      edit: () => ++edits,
+      written: (n) => {
+        if (n > written) written = n;
+      },
+      /** Taken when a load starts reading storage. */
+      loadToken: () => written === edits ? edits : -1,
+      /** Storage read with this token is current: nothing was unwritten at the start, nothing changed since. */
+      trusts: (token) => token !== -1 && token === edits
+    };
+  };
 
   // src/panel/api.ts
   var ApiError = class extends Error {
@@ -2941,8 +2966,8 @@ ${GUEST_UI_LOOK_CSS}`;
     const cards = /* @__PURE__ */ new Map();
     for (const task of tasks) {
       if (hideSubtasks && task.parentId !== null) continue;
-      const isArchived = task.state === "done" && archive.ids.has(task.id);
-      if (isArchived && !archive.show) continue;
+      const archived2 = isArchived(task, archive.ids);
+      if (archived2 && !archive.show) continue;
       const session = sessionForTask(task.id, sessions, links, detached2.get(task.id));
       const kids = children.get(task.id) ?? [];
       const led = task.state !== "done" && parentRunning(task.parentId);
@@ -2961,7 +2986,7 @@ ${GUEST_UI_LOOK_CSS}`;
           queued: queued.has(task.id) && !starting.has(task.id) && task.state !== "done",
           queueError: queued.has(task.id) && !starting.has(task.id) && task.state !== "done" ? queueErrors.get(task.id) ?? null : null,
           ledByOrchestrator: led,
-          archived: isArchived
+          archived: archived2
         }
       });
     }
@@ -12525,8 +12550,8 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
   var detached = () => state.detachedFor === state.projectId ? state.detached : /* @__PURE__ */ new Map();
   var archived = () => state.archivedFor === state.projectId ? state.archived : /* @__PURE__ */ new Set();
   var archivedTasks = () => state.archivedTasksFor === state.projectId ? state.archivedTasks : /* @__PURE__ */ new Map();
-  var archiveEdits = 0;
-  var archiveWritten = 0;
+  var archiveSync = createArchiveSync();
+  var unarchivedAt = /* @__PURE__ */ new Map();
   var saver = createLatestSaver(
     (_key, run) => run(),
     (e) => fail(`Could not save settings: ${e instanceof Error ? e.message : String(e)}`)
@@ -12790,7 +12815,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
         showWizard(api, remote);
         return;
       }
-      const edits = archiveWritten === archiveEdits ? archiveEdits : -1;
+      const token = archiveSync.loadToken();
       const [tasks, marks, gone, shelved] = await Promise.all([
         api.list(),
         store.loadDetached(p.id).catch(() => null),
@@ -12809,11 +12834,12 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
         state.archived = /* @__PURE__ */ new Set([...archived(), ...gone]);
         state.archivedFor = p.id;
       }
-      const base2 = shelved !== null && edits === archiveEdits ? shelved : archivedTasks();
+      const own = state.archivedTasksFor === p.id;
+      const base2 = shelved === null ? archivedTasks() : !own || archiveSync.trusts(token) ? shelved : mergeArchived(archivedTasks(), shelved, unarchivedAt);
       const fixed = reconcileArchived(base2, tasks);
       state.archivedTasks = fixed.marks;
       state.archivedTasksFor = p.id;
-      if (fixed.changed) saveArchivedTasks(p.id, fixed.marks);
+      if (fixed.changed) writeArchivedTasks(p.id);
       state.config = result.config;
       state.tasks = tasks;
       state.view = "board";
@@ -12848,6 +12874,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     state.archivedTasks = /* @__PURE__ */ new Map();
     state.archivedTasksFor = null;
     state.showArchived = false;
+    unarchivedAt = /* @__PURE__ */ new Map();
     audited.clear();
     starter.reset();
     state.config = null;
@@ -12947,18 +12974,31 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     saver.save(STORAGE_KEYS.detached(id), () => store.saveDetached(id, saved));
     info("Moved; the agent session keeps running \u2014 open it from the session list");
   };
-  var saveArchivedTasks = (projectId, marks) => saver.save(STORAGE_KEYS.archivedTasks(projectId), () => store.saveArchivedTasks(projectId, marks));
-  var setArchivedTasks = (projectId, marks) => {
-    const n = ++archiveEdits;
-    state.archivedTasks = marks;
-    state.archivedTasksFor = projectId;
+  var writeArchivedTasks = (projectId) => {
+    const n = archiveSync.edit();
     saver.save(STORAGE_KEYS.archivedTasks(projectId), async () => {
-      try {
-        await store.saveArchivedTasks(projectId, marks);
-      } finally {
-        if (n > archiveWritten) archiveWritten = n;
+      const stored = await store.loadArchivedTasks(projectId).catch(() => null);
+      if (state.archivedTasksFor !== projectId) {
+        archiveSync.written(n);
+        return;
+      }
+      const memory = state.archivedTasks;
+      const merged = stored === null ? memory : mergeArchived(memory, stored, unarchivedAt);
+      const next = state.tasks === null ? merged : reconcileArchived(merged, state.tasks).marks;
+      await store.saveArchivedTasks(projectId, next);
+      archiveSync.written(n);
+      if (state.archivedTasksFor === projectId && state.archivedTasks === memory && !sameMarks(memory, next)) {
+        state.archivedTasks = next;
+        draw();
+        editor.refresh();
       }
     });
+  };
+  var sameMarks = (a, b) => a.size === b.size && [...a].every(([id, at]) => b.get(id) === at);
+  var setArchivedTasks = (projectId, marks) => {
+    state.archivedTasks = marks;
+    state.archivedTasksFor = projectId;
+    writeArchivedTasks(projectId);
     draw();
     editor.refresh();
   };
@@ -12981,6 +13021,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
   var unarchive = (taskId) => {
     const id = state.projectId;
     if (id === null || !archivedTasks().has(taskId)) return;
+    unarchivedAt = new Map(unarchivedAt).set(taskId, Date.now());
     setArchivedTasks(id, unarchiveTask(archivedTasks(), taskId));
   };
   var checkSessions = async (sessionIds) => {
@@ -13069,7 +13110,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
         open: (id) => void host.openSession(id).catch((e) => fail(`Could not open the session: ${errorText4(e)}`))
       },
       sections: { get: () => sections, save: saveSections },
-      archive: { has: (task) => task.state === "done" && archivedTasks().has(task.id), unarchive },
+      archive: { has: (task) => isArchived(task, archivedTasks()), unarchive },
       baseTypes: () => settings().types,
       start: {
         context: startContext,

@@ -10,7 +10,7 @@ import { connectHost } from '@openchamber/sdk';
 import type { GuestProject, GuestSessionRecord, HostReadyContext } from '@openchamber/sdk';
 import { applyHostReady } from '@openchamber/sdk/ui';
 import type { Task } from '../core/types.ts';
-import { archivableIds, archivedShown, archiveTasks, reconcileArchived, unarchiveTask } from './archive.ts';
+import { archivableIds, archivedShown, archiveTasks, createArchiveSync, isArchived, mergeArchived, reconcileArchived, unarchiveTask } from './archive.ts';
 import { ApiError, createApi, type Api, type ConfigResult, type ProjectConfig } from './api.ts';
 import { groupTasks, pruneArchived, resolveSession, sessionForTask, sessionTarget, type Column, type SessionLookup } from './columns.ts';
 import { createEditor, type Editor } from './edit.ts';
@@ -116,12 +116,10 @@ const detached = (): Map<string, number> => (state.detachedFor === state.project
 const archived = (): Set<string> => (state.archivedFor === state.projectId ? state.archived : new Set());
 /** The shown project's archived done tasks (empty while another project's are loaded). */
 const archivedTasks = (): Map<string, number> => (state.archivedTasksFor === state.projectId ? state.archivedTasks : new Map());
-/**
- * Bumped on every local archive change (`archiveWritten`: the newest whose write has ended). A load
- * trusts what it read from storage only when no change was unwritten at its start or made during it.
- */
-let archiveEdits = 0;
-let archiveWritten = 0;
+/** Whether a load may take the stored archive marks over memory (archive.ts createArchiveSync). */
+const archiveSync = createArchiveSync();
+/** Task id -> when this frame unarchived it: a merge with storage does not bring those marks back. */
+let unarchivedAt = new Map<string, number>();
 // Every field reports each keystroke; only the newest value per key is written.
 const saver = createLatestSaver<() => Promise<void>>(
   (_key, run) => run(),
@@ -426,7 +424,7 @@ const load = async (): Promise<void> => {
       return;
     }
     // Links and the start queue come from the service's own files (starter.ts).
-    const edits = archiveWritten === archiveEdits ? archiveEdits : -1;
+    const token = archiveSync.loadToken();
     const [tasks, marks, gone, shelved] = await Promise.all([
       api.list(),
       store.loadDetached(p.id).catch(() => null),
@@ -446,13 +444,16 @@ const load = async (): Promise<void> => {
       state.archived = new Set([...archived(), ...gone]);
       state.archivedFor = p.id;
     }
-    // Stored archive marks (also the other frame's) win, unless this frame changed its own meanwhile.
-    // Then: ids the tracker no longer lists are pruned, and reopened tasks are unarchived.
-    const base = shelved !== null && edits === archiveEdits ? shelved : archivedTasks();
+    // Stored archive marks (also the other frame's) win when every change of this frame is written
+    // (or it holds none for this project); otherwise both join, newest per id. Then ids the tracker
+    // no longer lists are pruned and reopened tasks unarchived, and that is written back.
+    const own = state.archivedTasksFor === p.id;
+    const base =
+      shelved === null ? archivedTasks() : !own || archiveSync.trusts(token) ? shelved : mergeArchived(archivedTasks(), shelved, unarchivedAt);
     const fixed = reconcileArchived(base, tasks);
     state.archivedTasks = fixed.marks;
     state.archivedTasksFor = p.id;
-    if (fixed.changed) saveArchivedTasks(p.id, fixed.marks);
+    if (fixed.changed) writeArchivedTasks(p.id);
     state.config = result.config;
     state.tasks = tasks;
     state.view = 'board';
@@ -490,6 +491,7 @@ const selectProject = async (id: string | null): Promise<void> => {
   state.archivedTasks = new Map();
   state.archivedTasksFor = null;
   state.showArchived = false;
+  unarchivedAt = new Map();
   audited.clear();
   starter.reset();
   state.config = null;
@@ -623,21 +625,42 @@ const detach = async (task: Task, from: Column): Promise<void> => {
 
 // --- "Archive done" (archive.ts): panel storage only, the repo and GitHub stay as they are ---
 
-const saveArchivedTasks = (projectId: string, marks: ReadonlyMap<string, number>): void =>
-  saver.save(STORAGE_KEYS.archivedTasks(projectId), () => store.saveArchivedTasks(projectId, marks));
+/**
+ * The one write path of the archive marks (user changes and a load's reconcile). Writes collapse
+ * (createLatestSaver), so the job reads memory when it runs: a replaced job's change is in it. It
+ * joins what storage holds now (the other frame's marks, newest per id, minus this frame's
+ * unarchives), reconciles with the tasks and writes; only a write that succeeded counts as written.
+ */
+const writeArchivedTasks = (projectId: string): void => {
+  const n = archiveSync.edit();
+  saver.save(STORAGE_KEYS.archivedTasks(projectId), async () => {
+    const stored = await store.loadArchivedTasks(projectId).catch(() => null);
+    if (state.archivedTasksFor !== projectId) {
+      archiveSync.written(n); // switched project: nothing of it is held to write any more
+      return;
+    }
+    const memory = state.archivedTasks;
+    const merged = stored === null ? memory : mergeArchived(memory, stored, unarchivedAt);
+    const next = state.tasks === null ? merged : reconcileArchived(merged, state.tasks).marks;
+    await store.saveArchivedTasks(projectId, next);
+    archiveSync.written(n);
+    // The other frame's marks came in: show them, unless memory changed during the write.
+    if (state.archivedTasksFor === projectId && state.archivedTasks === memory && !sameMarks(memory, next)) {
+      state.archivedTasks = next;
+      draw();
+      editor.refresh();
+    }
+  });
+};
+
+const sameMarks = (a: ReadonlyMap<string, number>, b: ReadonlyMap<string, number>): boolean =>
+  a.size === b.size && [...a].every(([id, at]) => b.get(id) === at);
 
 /** A user change of the shown project's archive marks: stored, then the board and an open modal redraw. */
 const setArchivedTasks = (projectId: string, marks: Map<string, number>): void => {
-  const n = ++archiveEdits;
   state.archivedTasks = marks;
   state.archivedTasksFor = projectId;
-  saver.save(STORAGE_KEYS.archivedTasks(projectId), async () => {
-    try {
-      await store.saveArchivedTasks(projectId, marks);
-    } finally {
-      if (n > archiveWritten) archiveWritten = n;
-    }
-  });
+  writeArchivedTasks(projectId);
   draw();
   editor.refresh();
 };
@@ -663,6 +686,7 @@ const archiveDone = async (): Promise<void> => {
 const unarchive = (taskId: string): void => {
   const id = state.projectId;
   if (id === null || !archivedTasks().has(taskId)) return;
+  unarchivedAt = new Map(unarchivedAt).set(taskId, Date.now());
   setArchivedTasks(id, unarchiveTask(archivedTasks(), taskId));
 };
 
@@ -774,7 +798,7 @@ const start = (ctx: HostReadyContext): void => {
       open: (id) => void host.openSession(id).catch((e: unknown) => fail(`Could not open the session: ${errorText(e)}`)),
     },
     sections: { get: () => sections, save: saveSections },
-    archive: { has: (task) => task.state === 'done' && archivedTasks().has(task.id), unarchive },
+    archive: { has: (task) => isArchived(task, archivedTasks()), unarchive },
     baseTypes: () => settings().types,
     start: {
       context: startContext,

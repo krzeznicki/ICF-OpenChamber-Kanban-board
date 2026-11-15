@@ -93,7 +93,7 @@ Types: `bug` and `enhancement` (a feature), plus your own (`chore` and `research
 **Archive done** in the Done column's header clears the column: after an in-panel confirm with the count, every done task (sub-tasks hidden by **Hide sub-tasks** too) leaves the board. Nothing changes in the repository or on GitHub — done tasks are already resolved or closed; the board only remembers the archived ids per project in the extension's storage (`archivedTasks:<projectId>`, `{ id, archivedAt }[]`, the newest 400 kept).
 
 - **Show archived (N)** in the Done header draws them again, muted and marked `archived` (until the panel reloads). Their modal has **Unarchive**, which puts the task back in Done.
-- A task that leaves Done (reopened by hand, by the CLI or on GitHub) is unarchived on its own; ids the tracker no longer lists (e.g. issues closed more than 30 days ago) are dropped on the next load.
+- A task that leaves Done (reopened by hand, by the CLI or on GitHub) is unarchived on its own; ids the tracker no longer lists (e.g. issues closed more than 30 days ago) are dropped on the next load. Such a task loses its archive mark: if the tracker lists it again and it is still done, it shows in Done again.
 - A parent's progress (`3/5 sub-tasks done`) still counts its archived done sub-tasks.
 
 ## Adding tasks
