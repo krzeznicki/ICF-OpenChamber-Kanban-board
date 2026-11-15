@@ -24,7 +24,7 @@ Not taken yet: the extension has to be running in OpenChamber. To do, saved in [
 
 The repository is private for now.
 
-**From a local folder.** Clone the repository, then in OpenChamber open **Settings → Extensions** and install from that folder, or open this link with the folder's absolute path:
+**From a local folder.** Clone the repository, then in OpenChamber open **Settings → Extensions** and install from that folder. A link with the folder's absolute path also works, but only inside an OpenChamber chat, where it is drawn as an install button:
 
 ```
 openchamber://extensions/install?path=/absolute/path/to/ICF-OpenChamber-Kanban-board
@@ -32,7 +32,11 @@ openchamber://extensions/install?path=/absolute/path/to/ICF-OpenChamber-Kanban-b
 
 Install from a separate clone, not from the folder of a project you use the board on. A folder install runs from the folder itself, and any write inside the package reloads the extension.
 
-**From the git URL** (once the repository is published): in **Settings → Extensions**, install from `https://github.com/krzeznicki/ICF-OpenChamber-Kanban-board`. OpenChamber copies it into its own extensions folder.
+**From the git URL** (once the repository is published): in **Settings → Extensions**, install from `https://github.com/krzeznicki/ICF-OpenChamber-Kanban-board`. OpenChamber copies it into its own extensions folder. This link works from anywhere (OpenChamber asks before it installs):
+
+```
+openchamber://extensions/install?url=https://github.com/krzeznicki/ICF-OpenChamber-Kanban-board
+```
 
 Nothing is built on install: the built files (`panel/main.js`, `service/main.js`, `build/cli/task-board.mjs`) are committed.
 
@@ -91,8 +95,8 @@ Dragging a parent to In Progress starts one orchestrator session with the **Brea
 
 A card starts with its **preset**, **model**, **agent** and **location** (a new worktree, the default, or the project folder). There are two ways the start happens:
 
-- **Path A** (a card with no model and no agent set): the board calls OpenChamber's own start. OpenChamber makes the worktree, the session is linked to the card, and it runs on the model and agent currently selected in your composer.
-- **Path B** (a card with a model or agent set, and every queued card the service starts): the service creates the worktree itself with `git worktree add -b icf/<slug> <parent>/<repo>-worktrees/<slug>`, starts the session with that model and agent, and records the link in `~/.icf-kanban/links.json`.
+- **Path A** (a card with no model and no agent set): the board calls OpenChamber's own start. OpenChamber makes the worktree (when the location is a new worktree), the session is linked to the card, and it runs on the model and agent currently selected in your composer.
+- **Path B** (a card with a model or agent set, and every queued card the service starts; also a task whose id is longer than 128 characters, too long to link to the session the path A way): when the location is a new worktree, the service creates it itself with `git worktree add -b icf/<slug> <parent>/<repo>-worktrees/<slug>` (with the project folder it makes none); it then starts the session with that model and agent, and records the link in `~/.icf-kanban/links.json`.
 
 With **Start at once** off, dropping a card on In Progress opens a small form to adjust the options before it starts.
 
@@ -194,7 +198,7 @@ Ids are paths locally (`.scratch/login/issues/01-empty-password.md`, `.scratch/l
 Found while building it (see [the session-start findings](docs/superpowers/specs/2026-11-15-session-start-findings.md)):
 
 - **Path A uses your current model.** OpenChamber's own start has no model or agent field: a card without a model or agent runs on whatever your composer has selected when it starts.
-- **Path B makes its own worktree.** A card with a model or agent set (and every card the service starts from the queue) gets a worktree made with `git` under `<parent>/<repo>-worktrees/`, on a branch `icf/<slug>`, not by OpenChamber's Quick worktree. Such sessions may look different in the sidebar.
+- **Path B makes its own worktree.** A card with a model or agent set (and every card the service starts from the queue) whose location is a new worktree gets a worktree made with `git` under `<parent>/<repo>-worktrees/`, on a branch `icf/<slug>`, not by OpenChamber's Quick worktree. Such sessions may look different in the sidebar.
 - **With the board closed, the queue drains only by path B.** Queued cards then run with the model and agent stored on the card, or the session default when none is set.
 - Worktrees are never merged or removed for you.
 - The open live checks below have not been done yet.
