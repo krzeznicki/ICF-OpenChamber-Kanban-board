@@ -83,13 +83,13 @@ export const mergeArchived = (mine: ArchivedTasks, stored: ArchivedTasks, remove
 };
 
 /**
- * Whether a load may take the stored marks over this frame's memory. Every write of the marks
- * (a user change or a load's reconcile) takes a number from `edit()` and reports `written(n)` only
+ * Whether a load may take a stored value (the archive marks, the card order) over this frame's
+ * memory. Every write of it (a user change or a load's reconcile) takes a number from `edit()` and reports `written(n)` only
  * once the store accepted it. Writes are collapsed (createLatestSaver): a waiting job may be replaced
  * by a newer one and never run, which is fine because numbers grow, so the newest write covers it.
  * A failed write leaves memory in charge until a later one succeeds.
  */
-export const createArchiveSync = () => {
+export const createStorageSync = () => {
   let edits = 0;
   let written = 0;
   return {

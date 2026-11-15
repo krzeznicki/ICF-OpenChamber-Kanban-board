@@ -58,6 +58,8 @@ export type EditorDeps = {
     reorder: (taskId: string, column: Column, before: string | null) => void;
     /** A task got a new id (a local link moved it): it keeps its place. */
     rename: (from: string, to: string) => void;
+    /** Tasks were deleted: their places go. */
+    forget: (taskIds: readonly string[]) => void;
   };
   /** "Archive done" (archive.ts): whether a task is archived, and the modal's "Unarchive". */
   archive: { has: (task: Task) => boolean; unarchive: (taskId: string) => void };
@@ -421,7 +423,7 @@ export const createEditor = (deps: EditorDeps) => {
     );
   };
 
-  /** The modal's Delete: confirm, delete, then drop the stored start options of every deleted task. */
+  /** The modal's Delete: confirm, delete, then drop the place in the card order and the stored start options of every deleted task. */
   const deleteTask = async (id: string): Promise<void> => {
     const task = find(id);
     const api = deps.api();
@@ -435,6 +437,7 @@ export const createEditor = (deps: EditorDeps) => {
     });
     if (deleted.length === 0) return; // failed: run showed the error
     info(deleted.length === 1 ? `Deleted ${deleted[0]}` : `Deleted ${deleted.length} tasks`);
+    deps.order.forget(deleted);
     const ctx = deps.start.context();
     if (ctx !== null) {
       for (const d of deleted) await deps.start.forget(ctx.projectId, d).catch((e: unknown) => fail(`Could not drop the start options of ${d}: ${errorText(e)}`));
