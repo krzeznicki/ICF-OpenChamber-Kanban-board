@@ -389,7 +389,7 @@ var createGithubTracker = (root, exec, labels) => {
     async claim(id) {
       const { task, issue } = await load(parseNumber(id));
       if (task.kind === "parent") throw new TrackerError("INVALID", `Only a sub-task can be claimed, not a parent issue: ${task.id}`);
-      if (task.state === "done") throw new TrackerError("INVALID", `A closed issue cannot be claimed; reopen it first: ${task.id}`);
+      if (task.state !== "ready-for-agent") throw new TrackerError("INVALID", `Only a ready-for-agent task can be claimed: ${task.id}`);
       await run(["issue", "edit", String(issue.number), "--add-assignee", "@me"]);
       return get(task.id);
     },
@@ -808,7 +808,7 @@ var createLocalTracker = (root) => {
     },
     async claim(id) {
       if (parseId(id).kind !== "ticket") throw new TrackerError("INVALID", `Only a ticket can be claimed, not a feature: ${id}`);
-      if ((await get(id)).state === "done") throw new TrackerError("INVALID", `A done task cannot be claimed; reopen it first: ${id}`);
+      if ((await get(id)).state !== "ready-for-agent") throw new TrackerError("INVALID", `Only a ready-for-agent task can be claimed: ${id}`);
       return patch(id, "Status", "claimed");
     },
     async close(id, opts) {
@@ -843,7 +843,7 @@ Commands:
          [--blocked-by <id>[,<id>...]]...   blockers: repeat the option or separate ids with commas
   state <id> <state>                    set the state ('done' closes)
   claim <id>                            take a sub-task before working on it (orchestrator)
-  next                                  first unclaimed ready-for-agent ticket with no open blocker
+  next                                  first ready-for-agent ticket with no open blocker
   close <id> [--with-children]          close a task (and a feature's tickets)
   init <local|github>                   write docs/agents/issue-tracker.md
 
@@ -891,7 +891,7 @@ var byId = (a, b) => a.id.localeCompare(b.id, "en", { numeric: true });
 var readyTickets = (tasks) => {
   const state = new Map(tasks.map((t) => [t.id, t.state]));
   const open = (id) => state.has(id) && state.get(id) !== "done";
-  return tasks.filter((t) => t.kind === "ticket" && t.state === "ready-for-agent" && !t.claimed && !t.blockedBy.some(open)).sort(byId);
+  return tasks.filter((t) => t.kind === "ticket" && t.state === "ready-for-agent" && !t.blockedBy.some(open)).sort(byId);
 };
 var line = (t) => `${t.id}  [${t.state}${t.claimed ? ", claimed" : ""}]  ${t.title}
 `;
@@ -1004,7 +1004,7 @@ ${task.body.replace(/\s*$/, "\n")}`);
       case "next": {
         const [task] = readyTickets(await (await openTracker(root, exec)).list());
         if (task === void 0) {
-          io.stderr("task-board: no ready ticket (unclaimed, ready-for-agent, no open blocker)\n");
+          io.stderr("task-board: no ready ticket (ready-for-agent with no open blocker)\n");
           return 3;
         }
         print(task, `${task.id}  ${task.title}

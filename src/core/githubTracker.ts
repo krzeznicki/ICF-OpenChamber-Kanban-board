@@ -363,7 +363,7 @@ export const createGithubTracker = (root: string, exec: Exec, labels: ProjectCon
     async claim(id) {
       const { task, issue } = await load(parseNumber(id));
       if (task.kind === 'parent') throw new TrackerError('INVALID', `Only a sub-task can be claimed, not a parent issue: ${task.id}`);
-      if (task.state === 'done') throw new TrackerError('INVALID', `A closed issue cannot be claimed; reopen it first: ${task.id}`);
+      if (task.state !== 'ready-for-agent') throw new TrackerError('INVALID', `Only a ready-for-agent task can be claimed: ${task.id}`);
       // The state label is left as it is; an assignee stays on later state changes too.
       await run(['issue', 'edit', String(issue.number), '--add-assignee', '@me']);
       return get(task.id);

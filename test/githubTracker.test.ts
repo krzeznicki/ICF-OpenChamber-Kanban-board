@@ -238,3 +238,18 @@ test('claim of a parent issue is INVALID and runs no edit', async () => {
   await rejectsWith(tracker.claim('#1'), 'INVALID');
   assert.deepEqual(gh.commands(), []);
 });
+
+test('claim is only allowed for a ready-for-agent issue; others are INVALID with no edit', async () => {
+  const { tracker, gh } = setup([
+    { number: 1, title: 'Feature' },
+    { number: 2, title: 'Triage', parent: 1 },
+    { number: 3, title: 'Info', labels: ['needs-info'], parent: 1 },
+    { number: 4, title: 'Human', labels: ['ready-for-human'], parent: 1 },
+    { number: 5, title: 'Wontfix', labels: ['wontfix'], parent: 1 },
+    { number: 6, title: 'Closed', labels: ['ready-for-agent'], parent: 1, state: 'CLOSED', closedAt: ago(1) },
+  ]);
+  for (const id of ['#2', '#3', '#4', '#5', '#6']) {
+    await rejectsWith(tracker.claim(id), 'INVALID', /Only a ready-for-agent task can be claimed/);
+  }
+  assert.deepEqual(gh.commands(), []);
+});

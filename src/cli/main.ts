@@ -28,7 +28,7 @@ Commands:
          [--blocked-by <id>[,<id>...]]...   blockers: repeat the option or separate ids with commas
   state <id> <state>                    set the state ('done' closes)
   claim <id>                            take a sub-task before working on it (orchestrator)
-  next                                  first unclaimed ready-for-agent ticket with no open blocker
+  next                                  first ready-for-agent ticket with no open blocker
   close <id> [--with-children]          close a task (and a feature's tickets)
   init <local|github>                   write docs/agents/issue-tracker.md
 
@@ -92,12 +92,12 @@ const toState = (value: string, what: string): TaskState =>
 /** Natural order, so "02-x" < "10-x" and "#7" < "#42". */
 const byId = (a: Task, b: Task): number => a.id.localeCompare(b.id, 'en', { numeric: true });
 
-/** A ticket is ready when it is ready-for-agent, not claimed, and every blocker in the list is done. */
+/** A ticket is ready when it is ready-for-agent and every blocker in the list is done. */
 const readyTickets = (tasks: Task[]): Task[] => {
   const state = new Map(tasks.map((t) => [t.id, t.state]));
   const open = (id: string): boolean => state.has(id) && state.get(id) !== 'done';
   return tasks
-    .filter((t) => t.kind === 'ticket' && t.state === 'ready-for-agent' && !t.claimed && !t.blockedBy.some(open))
+    .filter((t) => t.kind === 'ticket' && t.state === 'ready-for-agent' && !t.blockedBy.some(open))
     .sort(byId);
 };
 
@@ -212,7 +212,7 @@ export const main = async (argv: string[], io: CliIO): Promise<number> => {
       case 'next': {
         const [task] = readyTickets(await (await openTracker(root, exec)).list());
         if (task === undefined) {
-          io.stderr('task-board: no ready ticket (unclaimed, ready-for-agent, no open blocker)\n');
+          io.stderr('task-board: no ready ticket (ready-for-agent with no open blocker)\n');
           return 3;
         }
         print(task, `${task.id}  ${task.title}\n`);

@@ -225,14 +225,16 @@ test('ids escaping .scratch/ reject INVALID; missing ones NOT_FOUND', async (t) 
 test('claim writes Status: claimed; the task stays ready-for-agent and is claimed until setState', async (t) => {
   const root = await repo(t);
   const tracker = createLocalTracker(root);
-  const before = await tracker.get(T2);
+  const before = await tracker.setState(T2, 'ready-for-agent');
   assert.equal(before.claimed, false);
   const claimed = await tracker.claim(T2);
   assert.equal(claimed.claimed, true);
   assert.equal(claimed.state, 'ready-for-agent');
   const text = await readFile(join(root, T2), 'utf8');
   assert.match(text, /\*\*Status:\*\* claimed\n/);
-  assert.doesNotMatch(text, /needs-info/);
+  assert.doesNotMatch(text, /ready-for-agent/);
+  // Claiming again is allowed: a claimed ticket is still ready-for-agent.
+  assert.equal((await tracker.claim(T2)).claimed, true);
   assert.equal((await tracker.list()).find((x) => x.id === T2)?.claimed, true);
   const done = await tracker.setState(T2, 'done');
   assert.equal(done.claimed, false);
@@ -246,4 +248,14 @@ test('claim of a parent or a missing ticket fails', async (t) => {
   await rejectsWith(tracker.claim(SPEC), 'INVALID');
   await tracker.setState(T1, 'done');
   await rejectsWith(tracker.claim(T1), 'INVALID');
+});
+
+test('claim is only allowed for a ready-for-agent ticket', async (t) => {
+  const root = await repo(t);
+  const tracker = createLocalTracker(root);
+  for (const state of ['needs-triage', 'needs-info', 'ready-for-human', 'wontfix', 'done'] as const) {
+    await tracker.setState(T2, state);
+    await assert.rejects(tracker.claim(T2), (e: unknown) => e instanceof TrackerError && e.code === 'INVALID' && /Only a ready-for-agent task can be claimed/.test(e.message), state);
+    assert.equal((await tracker.get(T2)).claimed, false);
+  }
 });

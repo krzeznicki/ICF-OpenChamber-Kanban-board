@@ -295,6 +295,9 @@ test('claim marks a ticket claimed (Status: claimed); state moves it on', async 
   assert.match(human.out, /\[ready-for-agent, claimed\]/);
   const done = await run(['state', ids[2]!, 'done', '--json'], root);
   assert.equal(json<Task>(done).claimed, false);
+  const notReady = await run(['claim', ids[0]!], root);
+  assert.equal(notReady.code, 4);
+  assert.match(notReady.err, /INVALID: Only a ready-for-agent task can be claimed/);
   const missing = await run(['claim', '.scratch/feature/issues/99-x.md'], root);
   assert.equal(missing.code, 4);
   assert.match(missing.err, /NOT_FOUND/);
@@ -303,11 +306,4 @@ test('claim marks a ticket claimed (Status: claimed); state moves it on', async 
 test('usage lists claim', async (t) => {
   const r = await run(['--help'], await tmp(t));
   assert.match(r.out, /claim <id>/);
-});
-
-test('next and list --ready skip a claimed ticket', async (t) => {
-  const { root, ids } = await project(t);
-  assert.equal((await run(['claim', ids[2]!], root)).code, 0);
-  assert.deepEqual(json<Task[]>(await run(['list', '--ready', '--json'], root)), []);
-  assert.equal((await run(['next'], root)).code, 3);
 });
