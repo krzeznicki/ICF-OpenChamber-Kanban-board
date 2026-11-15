@@ -334,7 +334,11 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
         }),
         disabled: m.busy,
         onChange: (id) => {
-          if (id !== task.state) callbacks.onState(id as TaskState);
+          if (id === task.state) return;
+          // The change may be cancelled or skipped (Close …? dialog, beforeMove): the next update
+          // must redraw so the select snaps back to the task's real state.
+          quickKey = null;
+          callbacks.onState(id as TaskState);
         },
       }).dispose,
     );
@@ -347,7 +351,9 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
         options: types.map((t) => ({ id: t, label: t })),
         disabled: m.busy,
         onChange: (id) => {
-          if (id !== task.type) callbacks.onType(id);
+          if (id === task.type) return;
+          quickKey = null; // as for State: a skipped or failed change must snap back on the next update
+          callbacks.onType(id);
         },
       }).dispose,
     );
@@ -369,6 +375,7 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
   const drawSettings = (m: DetailModel): void => {
     const { task } = m;
     // Left with nothing (a local task without start options, e.g. done), the section hides.
+    // `start` is null for a done task or while no project settings are loaded (edit.ts detailModel).
     settingsSec.box.hidden = task.url === null && m.start === null;
     const url = task.url;
     if (url !== null) {

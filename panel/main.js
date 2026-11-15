@@ -10902,7 +10902,9 @@ ${ref}`,
           }),
           disabled: m.busy,
           onChange: (id) => {
-            if (id !== task.state) callbacks.onState(id);
+            if (id === task.state) return;
+            quickKey = null;
+            callbacks.onState(id);
           }
         }).dispose
       );
@@ -10915,7 +10917,9 @@ ${ref}`,
           options: types.map((t) => ({ id: t, label: t })),
           disabled: m.busy,
           onChange: (id) => {
-            if (id !== task.type) callbacks.onType(id);
+            if (id === task.type) return;
+            quickKey = null;
+            callbacks.onType(id);
           }
         }).dispose
       );
