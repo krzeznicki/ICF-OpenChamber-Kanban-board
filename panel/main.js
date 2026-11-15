@@ -3962,17 +3962,24 @@ ${ref}`,
     return out;
   };
   var pickedModel = (id) => id === STATUS_ID ? null : { value: id === DEFAULT_MODEL_ID ? null : id };
-  var createModelLoader = (fetchModels) => {
-    let kept = null;
+  var createModelLoader = (fetchModels, directory = () => "") => {
+    const kept = /* @__PURE__ */ new Map();
     return () => {
-      kept ??= fetchModels().then((r) => {
-        if (r.error !== void 0) throw new Error(r.error);
-        return r.models;
-      });
-      kept.catch(() => {
-        kept = null;
-      });
-      return kept;
+      const dir = directory();
+      if (dir === null) return Promise.reject(new Error("Open a project to list the models"));
+      let p = kept.get(dir);
+      if (p === void 0) {
+        const fresh = fetchModels(dir).then((r) => {
+          if (r.error !== void 0) throw new Error(r.error);
+          return r.models;
+        });
+        fresh.catch(() => {
+          if (kept.get(dir) === fresh) kept.delete(dir);
+        });
+        kept.set(dir, fresh);
+        p = fresh;
+      }
+      return p;
     };
   };
 
@@ -12627,11 +12634,10 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
   var unsubscribeSessions = null;
   var generation = 0;
   var project = () => state.projects.find((p) => p.id === state.projectId) ?? null;
-  var loadModels = createModelLoader(async () => {
-    const p = project();
-    if (p === null) throw new Error("Open a project to list the models");
-    return createApi(host, p.directory).listModels();
-  });
+  var loadModels = createModelLoader(
+    (directory) => createApi(host, directory).listModels(),
+    () => project()?.directory ?? null
+  );
   var settings = () => {
     const loaded = state.settingsFor !== null && state.settingsFor === state.projectId;
     return resolveSettings(state.globalSettings, loaded ? state.projectSettings : {}, loaded ? state.skills?.found ?? [] : []);

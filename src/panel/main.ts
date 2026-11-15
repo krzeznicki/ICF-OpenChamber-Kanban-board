@@ -164,12 +164,11 @@ let generation = 0;
 
 const project = (): GuestProject | null => state.projects.find((p) => p.id === state.projectId) ?? null;
 
-/** `opencode models` through the service, fetched the first time a model picker opens, then kept for this panel session. */
-const loadModels = createModelLoader(async () => {
-  const p = project();
-  if (p === null) throw new Error('Open a project to list the models');
-  return createApi(host, p.directory).listModels();
-});
+/** `opencode models` through the service, fetched the first time a model picker opens in a project, then kept per project directory. */
+const loadModels = createModelLoader(
+  (directory) => createApi(host, directory).listModels(),
+  () => project()?.directory ?? null,
+);
 
 /** The settings in force for the shown project (global only until its layer has loaded). */
 const settings = (): Settings => {

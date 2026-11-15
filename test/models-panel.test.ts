@@ -93,3 +93,23 @@ test('the loader does not keep a failure: an error answer or a throw is tried ag
   assert.deepEqual(await load(), ['a/one']);
   assert.equal(calls, 3);
 });
+
+test('the loader keeps one list per project directory: another project fetches its own', async () => {
+  let dir: string | null = '/a';
+  const asked: string[] = [];
+  const load = createModelLoader(
+    async (d) => {
+      asked.push(d);
+      return { models: [`${d}/model`] };
+    },
+    () => dir,
+  );
+  assert.deepEqual(await load(), ['/a/model']);
+  dir = '/b';
+  assert.deepEqual(await load(), ['/b/model']);
+  dir = '/a';
+  assert.deepEqual(await load(), ['/a/model']);
+  assert.deepEqual(asked, ['/a', '/b']);
+  dir = null;
+  await assert.rejects(load(), /Open a project/);
+});

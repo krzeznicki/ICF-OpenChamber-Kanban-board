@@ -1,4 +1,4 @@
-// The model picker's logic, free of DOM: the options it shows and the session-wide list loader.
+// The model picker's logic, free of DOM: the options it shows and the per-project list loader.
 // A picked model is `provider/model`; null means "the default" (what the card or layer inherits,
 // finally the model selected in OpenChamber).
 
@@ -53,19 +53,30 @@ export const pickedModel = (id: string): { value: string | null } | null =>
 export type ModelsAnswer = { models: string[]; error?: string };
 
 /**
- * Loads the list once per panel session: concurrent callers share one request, a success is kept,
- * a failure (an `error` answer or a throw) rejects and is tried again on the next call.
+ * Loads the list once per project directory (`directory()`; the service also caches per
+ * directory): concurrent callers share one request, a success is kept, a failure (an `error`
+ * answer or a throw) rejects and is tried again on the next call. No project (null) rejects.
  */
-export const createModelLoader = (fetchModels: () => Promise<ModelsAnswer>): (() => Promise<string[]>) => {
-  let kept: Promise<string[]> | null = null;
+export const createModelLoader = (
+  fetchModels: (directory: string) => Promise<ModelsAnswer>,
+  directory: () => string | null = () => '',
+): (() => Promise<string[]>) => {
+  const kept = new Map<string, Promise<string[]>>();
   return () => {
-    kept ??= fetchModels().then((r) => {
-      if (r.error !== undefined) throw new Error(r.error);
-      return r.models;
-    });
-    kept.catch(() => {
-      kept = null;
-    });
-    return kept;
+    const dir = directory();
+    if (dir === null) return Promise.reject(new Error('Open a project to list the models'));
+    let p = kept.get(dir);
+    if (p === undefined) {
+      const fresh = fetchModels(dir).then((r) => {
+        if (r.error !== undefined) throw new Error(r.error);
+        return r.models;
+      });
+      fresh.catch(() => {
+        if (kept.get(dir) === fresh) kept.delete(dir);
+      });
+      kept.set(dir, fresh);
+      p = fresh;
+    }
+    return p;
   };
 };
