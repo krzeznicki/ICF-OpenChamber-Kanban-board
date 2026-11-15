@@ -32,3 +32,20 @@ export const parentTargets = (tracker: TrackerKind, child: Task, tasks: readonly
 /** Existing tasks that may be linked under `parent` as its sub-tasks, in board order. */
 export const childCandidates = (tracker: TrackerKind, parent: Task, tasks: readonly Task[]): Task[] =>
   tasks.filter((c) => canLinkUnder(tracker, c, parent, tasks));
+
+export type LinkChoice = { id: string; label: string; hint: string };
+
+const linkChoice = (t: Task): LinkChoice => ({ id: t.id, label: t.title, hint: t.id });
+
+/**
+ * The task detail's two pickers: `parents` for "Parent" (move this task under one) and `children`
+ * for "Link existing task" (make one a sub-task of this task). Empty hides the picker.
+ */
+export const linkChoices = (
+  tracker: TrackerKind,
+  task: Task,
+  tasks: readonly Task[],
+): { parents: LinkChoice[]; children: LinkChoice[] } => ({
+  parents: parentTargets(tracker, task, tasks).map(linkChoice),
+  children: childCandidates(tracker, task, tasks).map(linkChoice),
+});

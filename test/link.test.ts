@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Task } from '../src/core/types.ts';
-import { canLinkUnder, childCandidates, parentTargets } from '../src/panel/link.ts';
+import { canLinkUnder, childCandidates, linkChoices, parentTargets } from '../src/panel/link.ts';
 
 const task = (id: string, over: Partial<Task> = {}): Task => ({
   id,
@@ -64,4 +64,50 @@ test('github: any issue, but never under itself, its parent or its descendant', 
   assert.equal(canLinkUnder('github', p, g, tasks), false);
   assert.equal(canLinkUnder('github', p, o, tasks), true);
   assert.equal(canLinkUnder('github', g, p, tasks), true);
+});
+
+test('detail pickers: a local ticket picks another feature; a feature picks tasks to link under it', () => {
+  const fa = task(A, { kind: 'parent', title: 'Feature A' });
+  const fb = task(B, { kind: 'parent', title: 'Feature B' });
+  const fc = task(C, { kind: 'parent', title: 'Feature C' });
+  const t1 = task('.scratch/a/issues/01-x.md', { parentId: A, title: 'X' });
+  const tasks = [fa, fb, fc, t1];
+  assert.deepEqual(linkChoices('local', t1, tasks), {
+    parents: [
+      { id: B, label: 'Feature B', hint: B },
+      { id: C, label: 'Feature C', hint: C },
+    ],
+    children: [],
+  });
+  // A feature with tickets cannot become a sub-task.
+  assert.deepEqual(linkChoices('local', fa, tasks).parents, []);
+  // An empty feature may become a ticket of another; it takes the empty feature C and A's ticket.
+  assert.deepEqual(linkChoices('local', fb, tasks), {
+    parents: [
+      { id: A, label: 'Feature A', hint: A },
+      { id: C, label: 'Feature C', hint: C },
+    ],
+    children: [
+      { id: C, label: 'Feature C', hint: C },
+      { id: t1.id, label: 'X', hint: t1.id },
+    ],
+  });
+});
+
+test('detail pickers: github never offers the task itself, its parent, or its own descendants as parents', () => {
+  const p = task('#1', { kind: 'parent', title: 'P' });
+  const c = task('#2', { parentId: '#1', title: 'C' });
+  const g = task('#3', { parentId: '#2', title: 'G' });
+  const d = task('#4', { state: 'done', title: 'D' });
+  const o = task('#5', { title: 'O' });
+  const { parents, children } = linkChoices('github', c, [p, c, g, d, o]);
+  assert.deepEqual(parents.map((x) => x.id), ['#5']);
+  // Its own parent under it would be a cycle; its child is linked already.
+  assert.deepEqual(children.map((x) => x.id), ['#5']);
+});
+
+test('detail pickers: a done task offers nothing', () => {
+  const fb = task(B, { kind: 'parent', state: 'done' });
+  const t1 = task('.scratch/a/issues/01-x.md');
+  assert.deepEqual(linkChoices('local', fb, [fb, t1]), { parents: [], children: [] });
 });

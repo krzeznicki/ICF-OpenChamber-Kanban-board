@@ -4294,6 +4294,30 @@ ${ref}`,
     };
   };
 
+  // src/panel/link.ts
+  var canLinkUnder = (tracker, child, parent, tasks) => {
+    if (child.id === parent.id || child.state === "done" || parent.state === "done") return false;
+    if (child.parentId === parent.id) return false;
+    if (tracker === "local") {
+      if (parent.kind !== "parent") return false;
+      return child.kind === "ticket" || !tasks.some((t) => t.parentId === child.id);
+    }
+    const seen = /* @__PURE__ */ new Set();
+    for (let up = parent.parentId; up !== null && !seen.has(up); ) {
+      if (up === child.id) return false;
+      seen.add(up);
+      up = tasks.find((t) => t.id === up)?.parentId ?? null;
+    }
+    return true;
+  };
+  var parentTargets = (tracker, child, tasks) => tasks.filter((p) => canLinkUnder(tracker, child, p, tasks));
+  var childCandidates = (tracker, parent, tasks) => tasks.filter((c) => canLinkUnder(tracker, c, parent, tasks));
+  var linkChoice = (t) => ({ id: t.id, label: t.title, hint: t.id });
+  var linkChoices = (tracker, task, tasks) => ({
+    parents: parentTargets(tracker, task, tasks).map(linkChoice),
+    children: childCandidates(tracker, task, tasks).map(linkChoice)
+  });
+
   // src/panel/moves.ts
   var planMove = (task, from, to, openChildren2) => {
     if (from === to) return { kind: "none", reason: "The task is already in this column" };
@@ -11432,6 +11456,7 @@ ${ref}`,
 
   // src/panel/ui/detail.ts
   var NO_TYPE = "";
+  var FILTER_OVER2 = 8;
   var STATES = ["needs-triage", "needs-info", "ready-for-agent", "ready-for-human", "wontfix", "done"];
   var stateTone = (state2) => state2 === "done" ? "success" : state2 === "ready-for-agent" ? "primary" : state2 === "wontfix" ? "neutral" : state2 === "ready-for-human" ? "info" : "warning";
   var el5 = (tag, className, text3) => {
@@ -11468,7 +11493,8 @@ ${ref}`,
     settingsSec.content.append(settingsTop, startBox);
     const subList = el5("div", "kb-sheet-part");
     const addBox = el5("div", "kb-sheet-part kb-add-sub");
-    subSec.content.append(subList, addBox);
+    const linkBox = el5("div", "kb-sheet-part kb-add-sub");
+    subSec.content.append(subList, addBox, linkBox);
     modal.append(head, quick, summarySec.box, taskSec.box, subSec.box, settingsSec.box);
     let disposers = [];
     const clear = () => {
@@ -11586,8 +11612,9 @@ ${ref}`,
       else box.append(renderMarkdown(task.body, callbacks.onOpenUrl));
     };
     const drawChildren = (m) => {
-      subSec.box.hidden = m.children.length === 0 && !m.addSubtask;
+      subSec.box.hidden = m.children.length === 0 && !m.addSubtask && m.links.children.length === 0;
       drawAddSubtask(m);
+      drawLinkChild(m);
       if (m.children.length === 0) {
         subSec.label.textContent = "Sub-tasks";
         return;
@@ -11603,6 +11630,7 @@ ${ref}`,
       );
     };
     let quickKey = null;
+    let parentError = null;
     let quickDisposers = [];
     const clearQuick = () => {
       for (const d of quickDisposers) d();
@@ -11611,7 +11639,8 @@ ${ref}`,
     };
     const drawQuick = (m) => {
       const { task } = m;
-      const key = JSON.stringify([task.id, task.state, task.type, m.types, m.labels, m.moves, m.busy]);
+      if (parentError !== null && parentError.taskId !== task.id) parentError = null;
+      const key = JSON.stringify([task.id, task.state, task.type, m.types, m.labels, m.moves, m.busy, m.links.parent, m.links.parents, parentError]);
       if (key === quickKey) return;
       quickKey = key;
       clearQuick();
@@ -11621,6 +11650,39 @@ ${ref}`,
       const typeSlot = el5("div", "kb-field");
       fields.append(stateSlot, typeSlot);
       quick.append(fields);
+      const { parent, parents } = m.links;
+      if (parents.length > 0) {
+        const parentSlot = el5("div", "kb-field");
+        fields.append(parentSlot);
+        const options2 = parent !== null && !parents.some((p) => p.id === parent.id) ? [parent, ...parents] : parents;
+        disposers2.push(
+          mountSelect(parentSlot, {
+            label: "Parent",
+            value: parent?.id ?? null,
+            placeholder: "No parent",
+            options: options2,
+            searchable: options2.length > FILTER_OVER2,
+            disabled: m.busy,
+            onChange: (id) => {
+              if (id === task.parentId) return;
+              const taskId = task.id;
+              quickKey = null;
+              parentError = null;
+              void callbacks.onSetParent(id).then((error2) => {
+                if (disposed || error2 === null) return;
+                parentError = { taskId: current?.task.id ?? taskId, message: error2 };
+                quickKey = null;
+                if (current !== null) drawQuick(current);
+              });
+            }
+          }).dispose
+        );
+      }
+      if (parentError !== null) {
+        const errorSlot = el5("div", "kb-add-error");
+        quick.append(errorSlot);
+        disposers2.push(mountBanner(errorSlot, { tone: "error", title: "Could not change the parent", body: parentError.message }).dispose);
+      }
       disposers2.push(
         mountSelect(stateSlot, {
           label: "State",
@@ -11698,7 +11760,57 @@ ${ref}`,
       if (key === null) return;
       addHandle = mountAddSubtask(addBox, m.types, callbacks.onAddSubtask);
     };
+    let linkKey = null;
+    let linkError = null;
+    let linkDisposers = [];
+    const clearLink = () => {
+      for (const d of linkDisposers) d();
+      linkDisposers = [];
+      linkBox.replaceChildren();
+    };
+    const drawLinkChild = (m) => {
+      const { task } = m;
+      if (linkError !== null && linkError.taskId !== task.id) linkError = null;
+      const offered = m.links.children;
+      const key = JSON.stringify([task.id, offered, m.busy, linkError]);
+      if (key === linkKey) return;
+      linkKey = key;
+      clearLink();
+      linkBox.hidden = offered.length === 0;
+      if (offered.length === 0) return;
+      linkBox.append(el5("h3", "kb-settings-heading", "Link existing task"));
+      const slot = el5("div", "kb-field");
+      const errorSlot = el5("div", "kb-add-error");
+      linkBox.append(slot, errorSlot);
+      linkDisposers.push(
+        mountSelect(slot, {
+          label: "Make a sub-task of this one",
+          value: null,
+          placeholder: "Choose a task",
+          options: offered,
+          searchable: offered.length > FILTER_OVER2,
+          disabled: m.busy,
+          onChange: (id) => {
+            const taskId = task.id;
+            linkKey = null;
+            linkError = null;
+            void callbacks.onLinkChild(id).then((error2) => {
+              if (disposed || error2 === null) return;
+              linkError = { taskId, message: error2 };
+              linkKey = null;
+              if (current !== null) drawLinkChild(current);
+            });
+          }
+        }).dispose
+      );
+      if (linkError !== null) {
+        linkDisposers.push(mountBanner(errorSlot, { tone: "error", title: "Could not link the task", body: linkError.message }).dispose);
+      }
+    };
+    let current = null;
+    let disposed = false;
     const draw2 = (m) => {
+      current = m;
       clear();
       modal.setAttribute("aria-label", m.task.title);
       modal.setAttribute("aria-busy", String(m.busy));
@@ -11714,9 +11826,11 @@ ${ref}`,
     return {
       update: draw2,
       dispose: () => {
+        disposed = true;
         clear();
         clearStart();
         clearQuick();
+        clearLink();
         addHandle?.dispose();
         shell.dispose();
       }
@@ -12063,7 +12177,15 @@ ${ref}`,
         session: sessionView(task),
         children: tasks.filter((t) => t.parentId === task.id).map((t) => ({ id: t.id, title: t.title, state: t.state })),
         addSubtask: canAddSubtask(task, deps.tracker()),
-        archived: deps.archive.has(task)
+        archived: deps.archive.has(task),
+        links: (() => {
+          const parent = task.parentId === null ? null : find(task.parentId);
+          const offered = linkChoices(deps.tracker(), task, tasks);
+          return {
+            parent: task.parentId === null ? null : { id: task.parentId, label: parent?.title ?? task.parentId, hint: task.parentId },
+            ...offered
+          };
+        })()
       };
     };
     const loadCard = (taskId) => {
@@ -12081,9 +12203,11 @@ ${ref}`,
         refreshDetail();
       }).catch((e) => fail2(`Could not read the card's start options: ${errorText2(e)}`));
     };
+    let followed = null;
     const refreshDetail = () => {
       if (detail === null) return;
       const task = find(detail.id);
+      if (task === null && detail.id === followed) return;
       if (task === null) closeDetail();
       else detail.handle.update(detailModel(task));
     };
@@ -12101,6 +12225,37 @@ ${ref}`,
         moving.delete(id);
         await deps.reload();
         refreshDetail();
+      }
+    };
+    const link2 = async (childId, parentId) => {
+      const api = deps.api();
+      if (api === null) return "No project is open.";
+      if (moving.has(childId)) return null;
+      moving.add(childId);
+      deps.redraw();
+      refreshDetail();
+      try {
+        const moved = await api.setParent(childId, parentId);
+        if (moved.id !== childId) follow(childId, moved.id);
+        info2(moved.id !== childId ? `Linked ${childId} under ${parentId}; it is now ${moved.id}` : `Linked ${childId} under ${parentId}`);
+        return null;
+      } catch (e) {
+        return errorText2(e);
+      } finally {
+        moving.delete(childId);
+        await deps.reload();
+        followed = null;
+        refreshDetail();
+      }
+    };
+    const follow = (from, to) => {
+      if (detail === null || detail.id !== from) return;
+      detail.id = to;
+      followed = to;
+      detail.onFollow(to);
+      if (card !== null && card.taskId === from) {
+        if (Object.values(card.options).some((v2) => v2 !== void 0)) deps.start.save(card.projectId, to, card.options);
+        card.taskId = to;
       }
     };
     const close = async (task, askChildren) => {
@@ -12155,7 +12310,8 @@ ${ref}`,
       lookup = null;
       d?.handle.dispose();
     };
-    const showDetail = (id) => {
+    const showDetail = (openId) => {
+      let id = openId;
       const task = find(id);
       if (task === null) return;
       closeDetail();
@@ -12177,6 +12333,8 @@ ${ref}`,
           refreshDetail();
           return null;
         },
+        onSetParent: (parentId) => link2(id, parentId),
+        onLinkChild: (childId) => link2(childId, id),
         onSections: deps.sections.save,
         onUnarchive: () => {
           deps.archive.unarchive(id);
@@ -12209,7 +12367,7 @@ ${ref}`,
         onOpenUrl: (url) => void deps.host.openUrl(url).catch((e) => fail2(errorText2(e))),
         onDismiss: closeDetail
       }, { sections: deps.sections.get() });
-      detail = { id, handle };
+      detail = { id, handle, onFollow: (next) => id = next };
     };
     const closeAdd = () => {
       const m = addModal;

@@ -10,6 +10,7 @@ import type { StartLists } from './models.ts';
 import { resolveStart, type CardOptions, type Sections, type Settings } from './settings.ts';
 import { askedOf, type Suggester } from './suggest.ts';
 import { COLUMNS, type Column, type SessionLookup, type SessionTarget } from './columns.ts';
+import { linkChoices } from './link.ts';
 import { openChildren, planMove, taskTypes, type Move } from './moves.ts';
 import { openAddModal, type AddModalStart, type AddResult } from './ui/addModal.ts';
 import type { Board } from './ui/board.ts';
@@ -96,7 +97,8 @@ const NEW_TASK: Task = {
 
 export const createEditor = (deps: EditorDeps) => {
   const moving = new Set<string>();
-  let detail: { id: string; handle: DetailHandle } | null = null;
+  /** `onFollow`: the open task got a new id (a local link moved it); its handlers use that one. */
+  let detail: { id: string; handle: DetailHandle; onFollow: (id: string) => void } | null = null;
   let addModal: { setStart: (start: AddModalStart | null) => void; dispose: () => void } | null = null;
   /** What the open Add task form offers: the types, and whether "Let the model pick" is there. */
   let addOffer: { types: string[]; suggest: boolean } = { types: [], suggest: false };
@@ -192,6 +194,14 @@ export const createEditor = (deps: EditorDeps) => {
       children: tasks.filter((t) => t.parentId === task.id).map((t) => ({ id: t.id, title: t.title, state: t.state })),
       addSubtask: canAddSubtask(task, deps.tracker()),
       archived: deps.archive.has(task),
+      links: (() => {
+        const parent = task.parentId === null ? null : find(task.parentId);
+        const offered = linkChoices(deps.tracker(), task, tasks);
+        return {
+          parent: task.parentId === null ? null : { id: task.parentId, label: parent?.title ?? task.parentId, hint: task.parentId },
+          ...offered,
+        };
+      })(),
     };
   };
 
@@ -214,10 +224,14 @@ export const createEditor = (deps: EditorDeps) => {
       .catch((e: unknown) => fail(`Could not read the card's start options: ${errorText(e)}`));
   };
 
+  /** The open task's new id after a link moved it, until the reload lists it under that id. */
+  let followed: string | null = null;
+
   /** After a reload: show the fresh task, or close the modal when it left the list. */
   const refreshDetail = (): void => {
     if (detail === null) return;
     const task = find(detail.id);
+    if (task === null && detail.id === followed) return; // moved; the reload in flight lists it
     if (task === null) closeDetail();
     else detail.handle.update(detailModel(task));
   };
@@ -236,6 +250,46 @@ export const createEditor = (deps: EditorDeps) => {
       moving.delete(id);
       await deps.reload();
       refreshDetail();
+    }
+  };
+
+  /**
+   * Links `childId` under `parentId` (api.setParent). A local link moves the file, so the task
+   * comes back with a new id: the open modal and its start options follow it (the service re-keys
+   * the session links and queue entry). Resolves to null, or the service's error for the modal.
+   */
+  const link = async (childId: string, parentId: string): Promise<string | null> => {
+    const api = deps.api();
+    if (api === null) return 'No project is open.';
+    if (moving.has(childId)) return null;
+    moving.add(childId);
+    deps.redraw();
+    refreshDetail();
+    try {
+      const moved = await api.setParent(childId, parentId);
+      if (moved.id !== childId) follow(childId, moved.id);
+      info(moved.id !== childId ? `Linked ${childId} under ${parentId}; it is now ${moved.id}` : `Linked ${childId} under ${parentId}`);
+      return null;
+    } catch (e) {
+      return errorText(e);
+    } finally {
+      moving.delete(childId);
+      await deps.reload();
+      followed = null;
+      refreshDetail();
+    }
+  };
+
+  /** The open modal shows `from`, which now is `to`. */
+  const follow = (from: string, to: string): void => {
+    if (detail === null || detail.id !== from) return;
+    detail.id = to;
+    followed = to;
+    detail.onFollow(to);
+    if (card !== null && card.taskId === from) {
+      // The panel's own start options for the card: saved under the new id too.
+      if (Object.values(card.options).some((v) => v !== undefined)) deps.start.save(card.projectId, to, card.options);
+      card.taskId = to;
     }
   };
 
@@ -296,7 +350,8 @@ export const createEditor = (deps: EditorDeps) => {
     d?.handle.dispose();
   };
 
-  const showDetail = (id: string): void => {
+  const showDetail = (openId: string): void => {
+    let id = openId;
     const task = find(id);
     if (task === null) return;
     closeDetail();
@@ -318,6 +373,8 @@ export const createEditor = (deps: EditorDeps) => {
         refreshDetail();
         return null;
       },
+      onSetParent: (parentId) => link(id, parentId),
+      onLinkChild: (childId) => link(childId, id),
       onSections: deps.sections.save,
       onUnarchive: () => {
         deps.archive.unarchive(id);
@@ -350,7 +407,7 @@ export const createEditor = (deps: EditorDeps) => {
       onOpenUrl: (url) => void deps.host.openUrl(url).catch((e: unknown) => fail(errorText(e))),
       onDismiss: closeDetail,
     }, { sections: deps.sections.get() });
-    detail = { id, handle };
+    detail = { id, handle, onFollow: (next) => (id = next) };
   };
 
   const closeAdd = (): void => {
