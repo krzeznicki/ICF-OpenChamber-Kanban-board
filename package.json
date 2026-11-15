@@ -1,7 +1,7 @@
 {
   "name": "icf-kanban",
-  "version": "0.1.0",
-  "description": "ICF-kanban: an OpenChamber extension with a Kanban board over local .scratch/ files or GitHub Issues",
+  "version": "0.2.0",
+  "description": "Kanban Board: an OpenChamber extension with a Kanban board over local .scratch/ files or GitHub Issues",
   "license": "MIT",
   "private": true,
   "type": "module",
@@ -12,9 +12,11 @@
     "check": "npm run typecheck && npm test && npm run build"
   },
   "dependencies": {
-    "@openchamber/sdk": "2.7.1"
+    "@openchamber/sdk": "2.7.1",
+    "markdown-it": "14.3.3"
   },
   "devDependencies": {
+    "@types/markdown-it": "^14.2.0",
     "@types/node": "^26.6.6",
     "esbuild": "^0.28.2",
     "typescript": "^7.0.2"
@@ -27,13 +29,13 @@
     "contributes": {
       "panel": {
         "id": "icf-kanban",
-        "name": "ICF-kanban",
-        "icon": "kanban-view",
+        "name": "Kanban Board",
+        "icon": "assets/kanban.svg",
         "entry": "panel/index.html"
       },
       "page": {
         "entry": "panel/page.html",
-        "title": "Board"
+        "title": "Kanban Board"
       },
       "capabilities": [
         "sessions",
@@ -46,7 +48,8 @@
         "permissions": {
           "exec": [
             "git",
-            "gh"
+            "gh",
+            "opencode"
           ]
         }
       },

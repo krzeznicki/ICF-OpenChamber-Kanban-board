@@ -9,7 +9,7 @@ export const realExec: Exec = (cmd, args, opts) =>
     execFile(
       cmd,
       args,
-      { cwd: opts.cwd, encoding: 'utf8', maxBuffer: MAX_BUFFER, windowsHide: true },
+      { cwd: opts.cwd, encoding: 'utf8', maxBuffer: MAX_BUFFER, windowsHide: true, timeout: opts.timeoutMs ?? 0 },
       (error, stdout, stderr) => {
         if (error === null) {
           resolve({ code: 0, stdout, stderr });

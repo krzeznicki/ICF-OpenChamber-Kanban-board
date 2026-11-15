@@ -1,4 +1,4 @@
-# ICF-kanban
+# Kanban Board (ICF-kanban)
 
 A Kanban board for [OpenChamber](https://github.com/openchamber/openchamber) over your project's own task files. It reads and writes the format used by Matt Pocock's agent skills: local Markdown files in `.scratch/`, or GitHub Issues. You and your agents work on the same tasks.
 
@@ -15,8 +15,9 @@ Requires OpenChamber 2.7.1 or later. Licence: MIT.
 
 Not taken yet: the extension has to be running in OpenChamber. To do, saved in [`docs/screenshots/`](docs/screenshots/):
 
+- [ ] `rail-icon.png`: the **Kanban Board** icon in the side rail
 - [ ] `board.png`: the board with cards in every column
-- [ ] `card-detail.png`: a card's detail sheet with its summary
+- [ ] `card-detail.png`: the task modal: summary, the task as formatted markdown, Settings collapsed, **Open session** at the top
 - [ ] `settings.png`: the Settings sheet
 - [ ] `wizard.png`: the setup wizard (Local or GitHub)
 
@@ -40,23 +41,23 @@ openchamber://extensions/install?url=https://github.com/krzeznicki/ICF-OpenChamb
 
 Nothing is built on install: the built files (`panel/main.js`, `service/main.js`, `build/cli/task-board.mjs`) are committed.
 
-OpenChamber asks you to approve the permissions below. The board opens from the **ICF-kanban** icon in the side rail, or full screen as **Board** from the sidebar's Extension pages menu.
+OpenChamber asks you to approve the permissions below. The board opens from the **Kanban Board** icon in the side rail, or full screen as **Kanban Board** from the sidebar's Extension pages menu.
 
 ## Permissions
 
-| Permission | What ICF-kanban uses it for |
+| Permission | What Kanban Board uses it for |
 |---|---|
-| `sessions` | Reads the session list to place cards in In Progress and Review, and opens a card's session. |
+| `sessions` | Reads the session lists to place cards in In Progress and Review, and opens a task's session from its modal. |
 | `prompt` | Starts an agent session from a card (path A, see [Starting agents](#starting-agents)). |
 | `model` | Writes the card summaries with your model (`generate`). |
 | Service (`service/main.js`, runs on your machine) | Reads and writes the project's tracker files: `docs/agents/issue-tracker.md` and `.scratch/**`. Keeps its own files in `~/.icf-kanban/`: `links.json` (which session works on which card) and `queue.json` (the start queue). |
-| Service programs: `git`, `gh` | `git remote -v` to suggest GitHub in the wizard (and to refuse GitHub setup without a github.com remote); `git worktree add` for path B starts, which creates a `<parent>/<repo>-worktrees/` folder next to the project and `icf/*` branches in the repository (a start that fails removes its worktree and branch again with `git worktree remove` and `git branch -D`). `gh` for everything on GitHub Issues: issues, labels, sub-issues, dependencies. |
+| Service programs: `git`, `gh`, `opencode` | `git remote -v` to suggest GitHub in the wizard (and to refuse GitHub setup without a github.com remote); `git worktree add` for path B starts, which creates a `<parent>/<repo>-worktrees/` folder next to the project and `icf/*` branches in the repository (a start that fails removes its worktree and branch again with `git worktree remove` and `git branch -D`). `gh` for everything on GitHub Issues: issues, labels, sub-issues, dependencies. `opencode models` (read only) to list the models the model pickers offer. |
 | Session control (`sessionControl`) | The service starts sessions itself (path B) and reads their status, also while the board is closed. |
 | Session events (`turn-finished`, `turn-failed`) | When a session finishes or fails a turn, the service starts the next queued card. |
 | Instructions | One paragraph added to every agent session: where the `task-board` CLI is and its main commands. |
 | Skills | Four agent skills: `icf-kanban-create`, `icf-kanban-status`, `icf-kanban-next`, `icf-kanban-start`. |
 
-Settings, presets, per-card options and summaries are kept in the extension's storage in OpenChamber, per user, never in the repository. ICF-kanban never reads or writes OpenChamber's own files.
+Settings, presets, per-card options and summaries are kept in the extension's storage in OpenChamber, per user, never in the repository. Kanban Board never reads or writes OpenChamber's own files.
 
 ## Tracker setup
 
@@ -65,7 +66,7 @@ When you open a project that has no `docs/agents/issue-tracker.md`, the board sh
 - **Local** writes `docs/agents/issue-tracker.md` for local Markdown. Tasks live in `.scratch/<feature>/spec.md` (the feature, a parent) and `.scratch/<feature>/issues/NN-slug.md` (its tickets), with `**Status:**`, `**Blocked by:**` and an optional `**Type:**` line.
 - **GitHub** first checks that the folder has a github.com remote, and that `gh` is installed, version 2.94 or later, and logged in; if not, nothing is written and the board says what to fix. Then it writes `docs/agents/issue-tracker.md` for GitHub and creates the triage labels and the `bug` / `enhancement` labels the repository does not have yet. Parents are issues with sub-issues; blockers are GitHub issue dependencies.
 
-An existing `issue-tracker.md` is never overwritten. If the project already uses Matt Pocock's `setup-matt-pocock-skills`, the board reads its files as they are, including the label names in `docs/agents/triage-labels.md`. ICF-kanban does not write `triage-labels.md`.
+An existing `issue-tracker.md` is never overwritten. If the project already uses Matt Pocock's `setup-matt-pocock-skills`, the board reads its files as they are, including the label names in `docs/agents/triage-labels.md`. Kanban Board does not write `triage-labels.md`.
 
 Types: `bug` and `enhancement` (a feature), plus your own (`chore` and `research` by default). Locally a type is the `**Type:**` line; on GitHub it is the `bug` / `enhancement` label or a `type:<name>` label.
 
@@ -83,14 +84,51 @@ Types: `bug` and `enhancement` (a feature), plus your own (`chore` and `research
 - `ready-for-human` and `wontfix` show as badges on the card in Backlog.
 - A claimed ticket (`Status: claimed` locally, an assignee on GitHub) stays `ready-for-agent`.
 - To start a Done card, move it back to Backlog or Ready first.
+- To close a task, drag it to Done or use **Move to → Done** in its modal's Settings (the × at the top right only closes the modal, as does Escape).
 - A drop on Backlog or Ready changes one line of the task file (local) or swaps the state label (GitHub). The rest of the file is left as it is.
 - Dragging a card out of In Progress or Review to Backlog or Ready detaches it from its session: the card follows its state again, and the session keeps running (open it from the session list). Starting the card again later links it to the new session.
+
+### Archiving done tasks
+
+**Archive done** in the Done column's header clears the column: after an in-panel confirm with the count, every done task (sub-tasks hidden by **Hide sub-tasks** too) leaves the board. Nothing changes in the repository or on GitHub — done tasks are already resolved or closed; the board only remembers the archived ids per project in the extension's storage (`archivedTasks:<projectId>`, `{ id, archivedAt }[]`, the newest 400 kept).
+
+- **Show archived (N)** in the Done header draws them again, muted and marked `archived` (until the panel reloads). Their modal has **Unarchive**, which puts the task back in Done.
+- A task that leaves Done (reopened by hand, by the CLI or on GitHub) is unarchived on its own; ids the tracker no longer lists (e.g. issues closed more than 30 days ago) are dropped on the next load. Such a task loses its archive mark: if the tracker lists it again and it is still done, it shows in Done again.
+- A parent's progress (`3/5 sub-tasks done`) still counts its archived done sub-tasks.
+
+## Adding tasks
+
+**Add task** in the toolbar opens a modal with everything a task can carry:
+
+- **Title** (required), **Type**, **State** (`needs-triage` by default; the open states only) and **Parent** (none, or an open parent). Locally, no parent creates a feature (`.scratch/<feature>/spec.md`); a parent creates a ticket under it.
+- **Blocked by**: tick the tasks it waits for. Locally only open tickets of the chosen feature are offered (the format resolves blockers within a feature), so a new feature takes none; on GitHub any open issue except the chosen parent. A filter appears when the list is long.
+- **Description**: markdown.
+- **Start options**: preset, model, agent, location and summary language for this card, each showing what it would inherit. They are stored with the card (`card:<projectId>:<taskId>`) as soon as the task exists, as if set in its modal. They appear once the project's settings have loaded.
+- **Sub-tasks**: rows of titles (Enter adds the next row), created in order under the new task right after it: tickets of the new feature locally, sub-issues on GitHub. Locally the list is hidden when a parent is chosen, because a ticket cannot have sub-tasks.
+
+The service's error shows inside the modal and nothing is lost. If the task was created but some sub-tasks were not, the modal names the ones that failed (with the reason) and offers only Close; add them later from the task's **Sub-tasks** section. The board reloads once at the end.
+
+Closing a form you have filled in (Escape, a click beside it, × or Cancel) first asks **Discard this task?**; an untouched form closes at once.
+
+## The task modal
+
+A click on any card (or Enter on a focused card) opens the task in a modal, in every column; a click never jumps to a session. Reading comes first:
+
+- **Header**: title, id, state and type badges and the × close. **Open session** opens the task's agent session (running, waiting or finished) when it has one that is not archived; **Session archived** says that its only session was archived; **Session not listed in OpenChamber** that the board knows a session for it that no project lists (it is never opened). While the board is open, the rest of the page is inactive: Tab stays in the modal.
+- **Summary**: the personal summary (see [Summaries](#summaries)), or a **Summarise** button.
+- **Task**: the full body as formatted markdown: headings, lists, task-list checkboxes (read-only), code, quotes, tables, links. Raw HTML in a body is shown as text; only `http` and `https` links are links, opened in your browser; images are not loaded but shown as links.
+- **Sub-tasks**: the children with their states (a click opens that task), and **Add sub-task** (a title and an optional type; Enter adds). Locally it is offered on open features (`spec.md`), since a ticket cannot have tickets; on GitHub on any open issue, which then becomes a parent.
+- **Settings**, collapsed by default: state and type, **Move to**, **Open on GitHub**, and the card's start options.
+
+Sections fold open and shut; which ones are open is remembered for every task in the extension's storage (key `detail-sections`, the default instance storage kept on the connected OpenChamber server, so every browser connected to it shares it).
+
+The session behind **Open session** is checked before it opens. A session the board knows only from `~/.icf-kanban/links.json` (path B) is looked up in every project's session list first and opens only when it is there and not archived. (In 0.1 a click on a Review or Done card whose session had been archived opened an unrelated session of another project: the link's live status reads `idle` for an archived session too, and OpenChamber was asked to open an id it no longer listed.) The board also looks up such finished link-only sessions on its own (once per panel session): one found archived no longer places its card, which leaves Review for the column of its tracker state. Those ids are remembered per project in the extension's storage (`archivedSessions:<projectId>`, only while a link still names them).
 
 ## Parents and orchestration
 
 A parent (a feature with sub-tasks) is a card too, with its progress (`2/5 sub-tasks done`). Sub-tasks are drawn indented under their parent when both sit in the same column; **Hide sub-tasks** in the toolbar hides them.
 
-Dragging a parent to In Progress starts one orchestrator session with the **Break down and orchestrate** preset (unless the card picks another). The orchestrator creates sub-tasks if there are none, claims them through the CLI and hands them to subagents. While it runs, its sub-tasks show **led by orchestrator**, a claimed one sits in In Progress, and dropping one of them on In Progress starts nothing. Closing a parent with open sub-tasks asks whether to close them too.
+Dragging a parent to In Progress starts one orchestrator session with the **Break down and orchestrate** preset (unless the card picks another). The orchestrator creates sub-tasks if there are none, claims them through the CLI and hands them to subagents. While it runs, its sub-tasks show **led by orchestrator**, a claimed one sits in In Progress, and dropping one of them on In Progress starts nothing. Moving a parent with open sub-tasks to Done asks whether to close them too.
 
 ## Starting agents
 
@@ -107,17 +145,27 @@ With **Start at once** off, dropping a card on In Progress opens a small form to
 
 A preset is a block of instructions added to the agent's first message. Built in:
 
-| Preset | Use |
-|---|---|
-| Plan | Plan first; write no code until you approve the plan. |
-| Prototype | A quick, throwaway prototype that answers the task's question. |
-| Implement | Implement with tests; ask when a decision is unclear. The default. |
-| Implement without questions | The same, choosing the simplest option instead of asking, listing every assumption. |
-| Break down and orchestrate | Split into tickets, hand them to subagents, work until all are done. The default for parents. |
+| Preset | Use | With Matt Pocock's skills |
+|---|---|---|
+| Plan | Plan first; write no code until you approve the plan. | `/grill-with-docs` to sharpen the task; for a multi-session build `/to-spec` and `/to-tickets` drafts, published with `task-board create` as a feature with sub-tasks; the feature id is noted on the task, which is set done if the feature replaces it. |
+| Prototype | A quick, throwaway prototype that answers the task's question. | `/prototype` on a `prototype/<name>` branch made in the session's worktree; the answer is noted on the task. |
+| Implement | Implement with tests; ask when a decision is unclear. The default. | `/implement`, which drives `/tdd` and closes with `/code-review`. |
+| Implement without questions | The same, choosing the simplest option instead of asking, listing every assumption. | `/implement`, deciding the skills' questions itself and listing every assumption. |
+| Break down and orchestrate | Split into tickets, hand them to subagents, work until all are done. The default for parents. | `/to-tickets` drafts published with `task-board create --parent` if there are no sub-tasks, then `/implement-spec` over them as a task graph (`/tdd` per ticket, one `/code-review`); `claim` and `state … done` through the CLI. |
+| Diagnose | Reproduce the bug, find the cause, fix it with a regression test. | `/diagnosing-bugs`, then the fix through `/implement` (`/tdd`, `/code-review`); no correct seam for the test is reported as the finding; debug logs and throwaway code removed. The default for bugs when its skills are installed. |
+| Triage | Evaluate a raw task: reproduce, decide its state, write a brief or questions. No code. | `/triage`, the brief or notes on the task, then `task-board state` (wontfix too); no direct relabel or close. |
 
-In **Settings → Presets** you can edit the built-in texts (**Reset** brings the original back) and add, rename and delete your own. A card whose preset was deleted falls back to Implement.
+**Matt Pocock's skills.** When [Matt Pocock's skills](https://github.com/mattpocock/skills) are installed, a built-in tells the agent to run them instead of its plain instructions, but only if **every** skill it names is installed, plus the ones those load themselves (Implement needs `implement`, `tdd` and `code-review`; Plan and Triage also need `grilling` and `domain-modeling`). The service looks for `<name>/SKILL.md` in `~/.config/opencode/skills`, `~/.claude/skills`, `~/.agents/skills` and the project's `.opencode/skills` and `.claude/skills` (read only, the first folder in that order wins, cached 5 minutes per project; it never reads `~/.config/openchamber`). The prompt lists the SKILL.md of each skill the preset uses, for a harness that cannot load a skill by name.
 
-Which preset a card gets: the card's own choice, else Break down and orchestrate for a parent, else the preset for its type (`enhancement` → Implement, `bug` → Implement, `research` → Plan), else the default preset.
+The agent usually runs in a fresh worktree, where `docs/agents/` and `.scratch/` are missing or a copy the board never reads. So the skills text tells it that the tracker lives at the project root (`<root>/docs/agents/issue-tracker.md`), never to run `/setup-matt-pocock-skills`, and that the skills and the `task-board` CLI write the same format: every tracker write goes through the CLI with `--dir` (`create` for new issues, `state`, `claim`), and a note on the task goes to the root's issue file (local) or `gh issue comment` (GitHub), so the board follows.
+
+Turn it off with **Settings → Global → Use Matt Pocock's skills when installed** (on by default); that section and Settings → Presets list which skills were found, and each built-in says which text it runs with. The board checks when a project opens.
+
+A preset text (built-in or your own) may use `{cli}` (the `task-board` command with `--dir`), `{root}` (the project root), `{tracker}` (the root's `docs/agents/issue-tracker.md`), `{id}` (the task) and `{note}` (how to add a note to the task); they are filled in when the session starts, each path and id quoted for the shell when it holds a space or a quote.
+
+In **Settings → Presets** you can edit the built-in texts (**Reset** brings the shipped text back) and add, rename and delete your own. An edited built-in keeps your text whether or not the skills are installed. A card whose preset was deleted falls back to Implement.
+
+Which preset a card gets: the card's own choice, else Break down and orchestrate for a parent, else the preset for its type (`enhancement` → Implement, `bug` → Diagnose when Matt's skills are on and Diagnose's skills are installed, else Implement, `research` → Plan), else the default preset. A preset you set for `bug` yourself always wins.
 
 ## Settings
 
@@ -125,9 +173,11 @@ Three layers, each overriding the one before, field by field:
 
 1. **Global** (Settings → Global): your defaults for every project.
 2. **This project** (Settings → This project): overrides for the open project; a field left at **Use global** inherits.
-3. **The card** (its detail sheet, Start options): preset, location, model, agent and summary language for that card.
+3. **The card** (its modal, Settings → Start options): preset, location, model, agent and summary language for that card.
 
 All of them are per user and stored in the extension's storage.
+
+**Model** is picked from a list, not typed: the models `opencode models` reports for the project (fetched the first time a picker opens in that project, then kept for the panel session, one list per project; the service caches it for 10 minutes). Type to filter, arrows and Enter to pick. The first entry, **Default (…)**, means "not set here" and names what it falls back to; at the end that is your current selection in OpenChamber. A stored model that is no longer listed still shows, marked "not in the list". If the list cannot be loaded, the picker says why and tries again the next time it opens.
 
 | Setting | Default |
 |---|---|
@@ -136,7 +186,8 @@ All of them are per user and stored in the extension's storage.
 | Default preset | Implement |
 | Location | New worktree |
 | Model / Agent | your current model / agent |
-| Preset per type | `enhancement` and `bug` → Implement, `research` → Plan |
+| Preset per type | `enhancement` → Implement, `bug` → Diagnose with Matt's skills (else Implement), `research` → Plan |
+| Use Matt Pocock's skills when installed (Global only) | on |
 | Hide sub-tasks | off |
 | Types | `enhancement`, `bug`, `chore`, `research` |
 | Summarise automatically | on |
@@ -151,7 +202,7 @@ The queue lives in `~/.icf-kanban/queue.json`. While the board is open it drains
 
 ## Summaries
 
-Each card can show a few plain sentences at the top, written by your model through OpenChamber (`model` permission). They are personal: stored in the extension's storage per user, never in the repository, and agents never see them. A summary is regenerated when the task's body, the language or the prompt changes. With **Summarise automatically** off, use the **Summarise** button in the card's detail sheet. The language can be set per card.
+Each card can show a few plain sentences at the top, written by your model through OpenChamber (`model` permission). They are personal: stored in the extension's storage per user, never in the repository, and agents never see them. A summary is regenerated when the task's body, the language or the prompt changes. With **Summarise automatically** off, use the **Summarise** button in the task modal. The language can be set per card.
 
 ## Agent skills and the `task-board` CLI
 
@@ -219,6 +270,8 @@ Not done yet; each needs the extension installed in OpenChamber:
 7. Deleting a linked session still lets the queue drain.
 8. Summaries: generated automatically, regenerated after a body edit, the Summarise button, per-card language.
 9. Agent skills: an agent finds the CLI from the instructions and creates, claims and closes a task with the skills.
+10. The task modal: a Review card whose path B session was archived shows **Session archived** and opens nothing; **Open session** on a live path B session in a worktree opens that session.
+11. Archive done: the confirm counts the done tasks; after it Done is empty in both the rail panel and the full-screen page; **Show archived** and **Unarchive** work; reopening an archived task (CLI or GitHub) brings it back without a click.
 
 ## Development
 

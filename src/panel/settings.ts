@@ -2,7 +2,8 @@
 // All of it lives in the extension's instance storage, never in the repo. The resolvers are pure
 // so they run under node:test; createSettingsStore is the only part that touches storage.
 import type { Task } from '../core/types.ts';
-import { BUILTIN_PRESETS, isPristine, parseStoredPresets, type Preset, type StoredPresets } from './presets.ts';
+import { parseArchivedTasks, serializeArchived, type ArchivedTasks } from './archive.ts';
+import { BUILTIN_PRESETS, isPristine, parseStoredPresets, usesMattSkills, type Preset, type SkillUse, type StoredPresets } from './presets.ts';
 import { DEFAULT_SUMMARY_PROMPT } from './summaries.ts';
 
 export type { Preset } from './presets.ts';
@@ -20,6 +21,8 @@ export type Settings = {
   summary: SummarySettings;
   hideChildren: boolean;
   types: string[];
+  /** "Use Matt Pocock's skills when installed": global only (a project layer's value is ignored). */
+  useMattSkills: boolean;
 };
 
 /**
@@ -39,6 +42,8 @@ export const MAX_PARALLEL_MAX = 10;
 export const FALLBACK_PRESET_ID = 'implement';
 /** A parent (feature) starts one orchestrator session with this preset unless its card says otherwise. */
 export const ORCHESTRATE_PRESET_ID = 'orchestrate';
+/** With Matt Pocock's skills in use, a bug defaults to this preset (unless the user set the bug type). */
+export const DIAGNOSE_PRESET_ID = 'diagnose';
 export const LOCATIONS: readonly Location[] = ['worktree', 'project'];
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -49,6 +54,7 @@ export const DEFAULT_SETTINGS: Settings = {
   summary: { auto: true, language: 'Polish', prompt: DEFAULT_SUMMARY_PROMPT },
   hideChildren: false,
   types: ['enhancement', 'bug', 'chore', 'research'],
+  useMattSkills: true,
 };
 
 const record = (v: unknown): Record<string, unknown> | null =>
@@ -89,6 +95,7 @@ export const parseSettings = (raw: unknown): SettingsLayer => {
   if (typeof r.autoStart === 'boolean') out.autoStart = r.autoStart;
   if (typeof r.maxParallel === 'number' && Number.isFinite(r.maxParallel)) out.maxParallel = clampParallel(r.maxParallel);
   if (typeof r.hideChildren === 'boolean') out.hideChildren = r.hideChildren;
+  if (typeof r.useMattSkills === 'boolean') out.useMattSkills = r.useMattSkills;
   if (Array.isArray(r.types)) {
     const types = [...new Set(r.types.map(text).filter((t): t is string => t !== undefined))];
     if (types.length > 0) out.types = types;
@@ -117,20 +124,33 @@ export const parseSettings = (raw: unknown): SettingsLayer => {
   return out;
 };
 
-/** Global, then project, over the defaults, field by field. Layers go through parseSettings first. */
-export const resolveSettings = (global: SettingsLayer, project: SettingsLayer): Settings => {
+const diagnose = BUILTIN_PRESETS.find((p) => p.id === DIAGNOSE_PRESET_ID) as Preset;
+
+/** The skills a session may use under these settings, given what the service found installed. */
+export const skillUse = (s: Settings, found: readonly string[]): SkillUse => ({ use: s.useMattSkills, found });
+
+/**
+ * Global, then project, over the defaults, field by field. Layers go through parseSettings first.
+ * `found` is the Matt Pocock skills installed for the project (POST /skills/detect): when they are
+ * in use and cover Diagnose, the built-in default for `bug` is Diagnose instead of Implement. A
+ * preset the user set for `bug` in either layer still wins.
+ */
+export const resolveSettings = (global: SettingsLayer, project: SettingsLayer, found: readonly string[] = []): Settings => {
   const g = parseSettings(global);
   const p = parseSettings(project);
   const d = DEFAULT_SETTINGS;
   const maxParallel = p.maxParallel ?? g.maxParallel ?? d.maxParallel;
+  const useMattSkills = g.useMattSkills ?? d.useMattSkills;
+  const byType = usesMattSkills(diagnose, { use: useMattSkills, found }) ? { ...d.presetByType, bug: DIAGNOSE_PRESET_ID } : d.presetByType;
   return {
     autoStart: p.autoStart ?? g.autoStart ?? d.autoStart,
     maxParallel: clampParallel(maxParallel),
     defaults: { ...d.defaults, ...g.defaults, ...p.defaults },
-    presetByType: { ...d.presetByType, ...g.presetByType, ...p.presetByType },
+    presetByType: { ...byType, ...g.presetByType, ...p.presetByType },
     summary: { ...d.summary, ...g.summary, ...p.summary },
     hideChildren: p.hideChildren ?? g.hideChildren ?? d.hideChildren,
     types: [...(p.types ?? g.types ?? d.types)],
+    useMattSkills,
   };
 };
 
@@ -182,7 +202,34 @@ export const STORAGE_KEYS = {
   card: (projectId: string, taskId: string): string => fit(`card:${projectId}:${taskId}`),
   /** Per project: task id -> when the user dragged the card away from its session (columns.ts Detached). */
   detached: (projectId: string): string => fit(`detached:${projectId}`),
+  /** Per project: session ids a host lookup found archived (columns.ts markArchived). */
+  archivedSessions: (projectId: string): string => fit(`archivedSessions:${projectId}`),
+  /** Per project: done tasks the user archived ("Archive done", archive.ts), `{ id, archivedAt }[]`. */
+  archivedTasks: (projectId: string): string => fit(`archivedTasks:${projectId}`),
+  /** Which sections of the task modal are open (one entry for every task and project). */
+  detailSections: 'detail-sections',
 } as const;
+
+/** Archived-session marks kept per project. */
+export const ARCHIVED_MAX = 500;
+
+/** The stored archived-session ids, read defensively: non-empty strings, no duplicates. */
+export const parseArchivedSessions = (raw: unknown): Set<string> =>
+  new Set(Array.isArray(raw) ? raw.filter((id): id is string => typeof id === 'string' && id !== '').slice(-ARCHIVED_MAX) : []);
+
+/** The task modal's collapsible sections: open (true) or collapsed. */
+export type Sections = { summary: boolean; task: boolean; subtasks: boolean; settings: boolean };
+
+/** Reading first: Summary, Task and Sub-tasks open, Settings collapsed. */
+export const DEFAULT_SECTIONS: Sections = Object.freeze({ summary: true, task: true, subtasks: true, settings: false });
+
+/** The stored section state, read defensively: unknown keys and non-booleans fall back to the defaults. */
+export const parseSections = (raw: unknown): Sections => {
+  const r = record(raw);
+  const out: Sections = { ...DEFAULT_SECTIONS };
+  if (r !== null) for (const k of Object.keys(out) as (keyof Sections)[]) if (typeof r[k] === 'boolean') out[k] = r[k] as boolean;
+  return out;
+};
 
 /** Detach marks kept per project; the oldest go first. */
 export const DETACHED_MAX = 200;
@@ -241,6 +288,19 @@ export const createSettingsStore = (storage: SettingsStorage) => {
     loadDetached: async (projectId: string): Promise<Map<string, number>> => parseDetached(await storage.get(STORAGE_KEYS.detached(projectId))),
     saveDetached: (projectId: string, marks: ReadonlyMap<string, number>): Promise<void> =>
       put(STORAGE_KEYS.detached(projectId), Object.fromEntries(marks), marks.size === 0),
+    loadArchived: async (projectId: string): Promise<Set<string>> => parseArchivedSessions(await storage.get(STORAGE_KEYS.archivedSessions(projectId))),
+    saveArchived: (projectId: string, ids: ReadonlySet<string>): Promise<void> =>
+      ids.size === 0 ? storage.delete(STORAGE_KEYS.archivedSessions(projectId)) : storage.set(STORAGE_KEYS.archivedSessions(projectId), [...ids].slice(-ARCHIVED_MAX) as never),
+    loadArchivedTasks: async (projectId: string): Promise<Map<string, number>> =>
+      parseArchivedTasks(await storage.get(STORAGE_KEYS.archivedTasks(projectId))),
+    saveArchivedTasks: (projectId: string, marks: ArchivedTasks): Promise<void> =>
+      put(STORAGE_KEYS.archivedTasks(projectId), serializeArchived(marks), marks.size === 0),
+    loadSections: async (): Promise<Sections> => parseSections(await storage.get(STORAGE_KEYS.detailSections)),
+    saveSections: (sections: Sections): Promise<void> => {
+      const clean = parseSections(sections);
+      const pristine = (Object.keys(clean) as (keyof Sections)[]).every((k) => clean[k] === DEFAULT_SECTIONS[k]);
+      return put(STORAGE_KEYS.detailSections, clean, pristine);
+    },
   };
 };
 

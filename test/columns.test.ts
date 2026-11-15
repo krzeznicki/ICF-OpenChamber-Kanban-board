@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { GuestSessionRecord } from '@openchamber/sdk';
-import { columnFor, groupTasks, ledByOrchestrator, sessionForTask, type SessionInfo } from '../src/panel/columns.ts';
+import { columnFor, groupTasks, ledByOrchestrator, markArchived, pruneArchived, resolveSession, sessionForTask, sessionTarget, type SessionInfo } from '../src/panel/columns.ts';
 import type { Task, TaskState } from '../src/core/types.ts';
 
 const task = (state: TaskState, id = '.scratch/f/issues/01-a.md'): Task => ({
@@ -311,4 +311,81 @@ test('ledByOrchestrator / groupTasks: a detached parent session no longer leads 
   assert.equal(ledByOrchestrator(kid, sessions, [], new Map([['p', 20]])), false);
   const g = groupTasks([parent, kid], sessions, new Set(), false, [], new Set(), new Map(), new Map([['p', 20]]));
   assert.deepEqual(g.ready.map((c) => c.task.id), ['p', 'k']);
+});
+
+// The archived-session jump (0.2): a session known only from links.json answers `idle` to
+// sessions.status even when archived (status knows activity, not archiving), so the card read as a
+// finished session and a click handed host.openSession an id missing from the project's snapshot.
+test('sessionTarget: a non-archived snapshot session can be opened directly', () => {
+  const s = record('s1', ['t1'], { activity: 'idle', outcome: 'completed' });
+  assert.deepEqual(sessionTarget('t1', [s]), { kind: 'open', id: 's1' });
+  const linked = record('svc', [], { activity: 'running' });
+  assert.deepEqual(sessionTarget('t1', [linked], [{ taskId: 't1', sessionId: 'svc' }]), { kind: 'open', id: 'svc' });
+});
+
+test('sessionTarget: an id known only from a link must be looked up first, never opened directly', () => {
+  const links = [{ taskId: 't1', sessionId: 'ses_gone', status: 'idle' as const, createdAt: 1 }];
+  assert.deepEqual(sessionTarget('t1', [], links), { kind: 'check', id: 'ses_gone' });
+});
+
+test('sessionTarget: only archived sessions -> archived; nothing at all -> none', () => {
+  const archived = record('s1', ['t1'], { archivedAt: 5, activity: 'idle', outcome: 'completed' });
+  assert.deepEqual(sessionTarget('t1', [archived]), { kind: 'archived' });
+  const archivedLink = record('svc', [], { archivedAt: 5 });
+  assert.deepEqual(sessionTarget('t1', [archivedLink], [{ taskId: 't1', sessionId: 'svc', status: 'idle' }]), { kind: 'archived' });
+  assert.deepEqual(sessionTarget('t1', []), { kind: 'none' });
+  // A link whose session the host does not know (deleted): nothing to open.
+  assert.deepEqual(sessionTarget('t1', [], [{ taskId: 't1', sessionId: 'x', status: 'unknown' }]), { kind: 'none' });
+});
+
+test('sessionTarget: a live session wins over an archived one; a detach hides both', () => {
+  const old = record('old', ['t1'], { createdAt: 1, archivedAt: 9 });
+  const live = record('live', ['t1'], { createdAt: 2 });
+  assert.deepEqual(sessionTarget('t1', [old, live]), { kind: 'open', id: 'live' });
+  assert.deepEqual(sessionTarget('t1', [old, live], [], 10), { kind: 'none' });
+});
+
+test('resolveSession: found and not archived -> open; archived -> archived; in no snapshot -> missing', () => {
+  const a = { state: 'ready' as const, sessions: [record('x', []), record('arch', [], { archivedAt: 3 })] };
+  const b = { state: 'ready' as const, sessions: [record('y', [], { projectId: 'p2' })] };
+  assert.equal(resolveSession('y', [a, b]), 'open');
+  assert.equal(resolveSession('arch', [a, b]), 'archived');
+  assert.equal(resolveSession('ses_gone', [a, b]), 'missing');
+  assert.equal(resolveSession('ses_gone', []), 'missing');
+});
+
+test('resolveSession: not found while a snapshot still loads -> pending (found wins, even while loading)', () => {
+  const loading = { state: 'loading' as const, sessions: [record('y', [])] };
+  const ready = { state: 'ready' as const, sessions: [record('x', [])] };
+  assert.equal(resolveSession('ses_gone', [ready, loading]), 'pending');
+  assert.equal(resolveSession('y', [ready, loading]), 'open');
+  assert.equal(resolveSession('ses_gone', [ready, { state: 'error' as const, sessions: [] }]), 'missing');
+});
+
+test('markArchived: a link whose session was found archived no longer places its card; the modal says archived', () => {
+  const tasks = [t('a', 'ready-for-agent'), t('b', 'needs-triage')];
+  const raw = [
+    { taskId: 'a', sessionId: 'sa', status: 'idle' as const, createdAt: 1 },
+    { taskId: 'b', sessionId: 'sb', status: 'idle' as const, createdAt: 1 },
+  ];
+  assert.deepEqual(ids(groupTasks(tasks, [], new Set(), false, raw).review), ['a', 'b']);
+  const links = markArchived(raw, new Set(['sa', 'sb']));
+  assert.equal(links[0]?.status, 'archived');
+  const board = groupTasks(tasks, [], new Set(), false, links);
+  assert.deepEqual(ids(board.review), []);
+  assert.deepEqual(ids(board.ready), ['a']);
+  assert.deepEqual(ids(board.backlog), ['b']);
+  assert.equal(sessionForTask('a', [], links), null);
+  assert.deepEqual(sessionTarget('a', [], links), { kind: 'archived' });
+  // A newer live link wins over the archived one.
+  const again = [...links, { taskId: 'a', sessionId: 'sa2', status: 'busy' as const, createdAt: 2 }];
+  assert.deepEqual(sessionTarget('a', [], again), { kind: 'check', id: 'sa2' });
+  // Unmarked ids are left alone; the input is not changed.
+  assert.equal(markArchived(raw, new Set(['other']))[0]?.status, 'idle');
+  assert.equal(raw[0]?.status, 'idle');
+});
+
+test('pruneArchived: keeps only ids still named by a link', () => {
+  const links = [{ taskId: 'a', sessionId: 'sa' }];
+  assert.deepEqual([...pruneArchived(new Set(['sa', 'gone']), links)], ['sa']);
 });

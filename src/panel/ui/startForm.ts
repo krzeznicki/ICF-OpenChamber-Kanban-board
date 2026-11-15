@@ -5,6 +5,7 @@
 import { mountButton, mountSelect, mountTextField } from '@openchamber/sdk/ui';
 import type { Preset } from '../presets.ts';
 import type { Location, StartOptions } from '../settings.ts';
+import { mountModelPicker } from './modelPicker.ts';
 import { LOCATION_LABELS } from './settingsView.ts';
 
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, className: string, text?: string): HTMLElementTagNameMap[K] => {
@@ -14,7 +15,12 @@ const el = <K extends keyof HTMLElementTagNameMap>(tag: K, className: string, te
   return node;
 };
 
-export const askStart = (title: string, initial: StartOptions, presets: readonly Preset[]): Promise<StartOptions | null> =>
+export const askStart = (
+  title: string,
+  initial: StartOptions,
+  presets: readonly Preset[],
+  loadModels: () => Promise<string[]>,
+): Promise<StartOptions | null> =>
   new Promise((resolve) => {
     const options: StartOptions = { ...initial };
     const backdrop = el('div', 'kb-backdrop kb-confirm-backdrop');
@@ -22,7 +28,7 @@ export const askStart = (title: string, initial: StartOptions, presets: readonly
     box.setAttribute('role', 'dialog');
     box.setAttribute('aria-modal', 'true');
     box.append(el('h2', 'kb-confirm-title', `Start an agent on “${title}”`));
-    box.append(el('p', 'kb-confirm-body', 'Empty model or agent uses your current selection in OpenChamber.'));
+    box.append(el('p', 'kb-confirm-body', 'A default model or an empty agent uses your current selection in OpenChamber.'));
     const row1 = el('div', 'kb-fields');
     const row2 = el('div', 'kb-fields');
     const cells = [0, 1, 2, 3].map(() => el('div', 'kb-field'));
@@ -51,7 +57,7 @@ export const askStart = (title: string, initial: StartOptions, presets: readonly
         location.update({ value: id });
       },
     });
-    const text = (slot: HTMLElement, label: string, key: 'model' | 'agent', placeholder: string): void => {
+    const text = (slot: HTMLElement, label: string, key: 'agent', placeholder: string): void => {
       const field = mountTextField(slot, {
         label,
         value: options[key] ?? '',
@@ -64,7 +70,16 @@ export const askStart = (title: string, initial: StartOptions, presets: readonly
       });
       disposers.push(field.dispose);
     };
-    text(cells[2]!, 'Model', 'model', 'Your current model');
+    disposers.push(
+      mountModelPicker(cells[2]!, {
+        label: 'Model',
+        value: options.model,
+        loadModels,
+        onChange: (v) => {
+          options.model = v;
+        },
+      }),
+    );
     text(cells[3]!, 'Agent', 'agent', 'Your current agent');
     disposers.push(preset.dispose, location.dispose);
 

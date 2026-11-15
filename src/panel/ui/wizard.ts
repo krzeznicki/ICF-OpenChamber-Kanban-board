@@ -28,7 +28,7 @@ export const mountWizard = (root: HTMLElement, props: WizardProps): WizardHandle
   const body = element(
     'p',
     'kb-wizard-body',
-    'Choose where the tasks live. ICF-kanban writes docs/agents/issue-tracker.md in the format the agent skills read.',
+    'Choose where the tasks live. Kanban Board writes docs/agents/issue-tracker.md in the format the agent skills read.',
   );
   const listSlot = element('div', 'kb-wizard-choices');
   const actions = element('div', 'kb-wizard-actions');

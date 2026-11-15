@@ -2,6 +2,7 @@
 // In Progress and Review come only from OpenChamber sessions and are never written to the repo.
 import type { GuestSessionActivity, GuestSessionRecord } from '@openchamber/sdk';
 import type { Task } from '../core/types.ts';
+import { isArchived } from './archive.ts';
 
 export type Column = 'backlog' | 'ready' | 'in_progress' | 'review' | 'done';
 
@@ -45,7 +46,20 @@ export const columnFor = (task: Task, session: SessionInfo | null, queued: boole
  * A session the service knows works on a task: started by the service (path B, no items) or
  * recorded by the panel (path A). `status` is its live state from the service, when known.
  */
-export type SessionLink = { taskId: string; sessionId: string; createdAt?: number; status?: 'idle' | 'busy' | 'waiting' | 'unknown' };
+export type SessionLink = { taskId: string; sessionId: string; createdAt?: number; status?: 'idle' | 'busy' | 'waiting' | 'unknown' | 'archived' };
+
+/**
+ * Links whose session a host lookup found archived (resolveSession) read `archived`: sessions.status
+ * still answers `idle` for them, which would keep their card in Review. Such a link places no card.
+ */
+export const markArchived = <L extends SessionLink>(links: readonly L[], archived: ReadonlySet<string>): L[] =>
+  archived.size === 0 ? [...links] : links.map((l) => (archived.has(l.sessionId) ? { ...l, status: 'archived' as const } : l));
+
+/** The archived marks still worth keeping: those of sessions some link still names. */
+export const pruneArchived = (archived: ReadonlySet<string>, links: readonly SessionLink[]): Set<string> => {
+  const named = new Set(links.map((l) => l.sessionId));
+  return new Set([...archived].filter((id) => named.has(id)));
+};
 
 /** A linked session missing from the snapshot (e.g. in a sibling worktree project), from its live status. */
 const fromLink = (link: SessionLink): SessionInfo | null => {
@@ -100,6 +114,48 @@ export const sessionForTask = (
 };
 
 /**
+ * What the task modal's "Open session" may do. Only a non-archived record of the project's own
+ * snapshot is `open`. A session known only from a link (`check`) must first be found, not archived,
+ * in a host snapshot (resolveSession): sessions.status answers `idle` for an archived session too,
+ * and host.openSession given an id it cannot open lands on some other session.
+ * `archived`: the task's sessions (after a detach) are all archived.
+ */
+export type SessionTarget = { kind: 'open'; id: string } | { kind: 'check'; id: string } | { kind: 'archived' } | { kind: 'none' };
+
+export const sessionTarget = (
+  taskId: string,
+  sessions: GuestSessionRecord[],
+  links: readonly SessionLink[] = [],
+  detachedAt = 0,
+): SessionTarget => {
+  const s = sessionForTask(taskId, sessions, links, detachedAt);
+  if (s !== null) return sessions.some((r) => r.id === s.id) ? { kind: 'open', id: s.id } : { kind: 'check', id: s.id };
+  const linked = new Set(links.filter((l) => l.taskId === taskId).map((l) => l.sessionId));
+  const archived =
+    sessions.some(
+      (r) => r.archivedAt !== null && r.createdAt >= detachedAt && (linked.has(r.id) || r.items.some((item) => item.id === taskId)),
+    ) || links.some((l) => l.taskId === taskId && l.status === 'archived' && (l.createdAt ?? 0) >= detachedAt);
+  return archived ? { kind: 'archived' } : { kind: 'none' };
+};
+
+export type SessionLookup = 'open' | 'archived' | 'missing' | 'pending';
+
+/**
+ * A session id looked up in host snapshots (every project's): only `open` may go to host.openSession.
+ * Not found while a snapshot is still `loading` is `pending` (it may yet appear), not `missing`.
+ */
+export const resolveSession = (
+  sessionId: string,
+  snapshots: readonly { state: 'loading' | 'ready' | 'error'; sessions: readonly GuestSessionRecord[] }[],
+): SessionLookup => {
+  for (const snap of snapshots) {
+    const r = snap.sessions.find((s) => s.id === sessionId);
+    if (r !== undefined) return r.archivedAt === null ? 'open' : 'archived';
+  }
+  return snapshots.some((snap) => snap.state === 'loading') ? 'pending' : 'missing';
+};
+
+/**
  * A not-done sub-task whose parent has a working orchestrator session: the orchestrator leads it,
  * so the board starts no session of its own for it.
  */
@@ -128,7 +184,14 @@ export type CardModel = {
   queueError: string | null;
   /** A sub-task whose parent's orchestrator session works now (see ledByOrchestrator). */
   ledByOrchestrator: boolean;
+  /** An archived done task, drawn (muted) only while "Show archived" is on (archive.ts). */
+  archived: boolean;
 };
+
+/** Done tasks the user archived (archive.ts) and whether they are shown. */
+export type ArchiveView = { ids: ReadonlySet<string>; show: boolean };
+
+const NO_ARCHIVE: ArchiveView = { ids: new Set(), show: false };
 
 export type BoardModel = Record<Column, CardModel[]>;
 
@@ -136,6 +199,7 @@ export type BoardModel = Record<Column, CardModel[]>;
  * Sort tasks into columns. Within a column the service's order is kept, except that a sub-task
  * whose parent sits in the same column follows it directly. `hideSubtasks` drops every task with a parent.
  * `starting` (starts in flight) and `queued` (the start queue) both put a card in In Progress.
+ * `archive`: archived done tasks are left out unless shown; a parent's progress still counts them.
  */
 export const groupTasks = (
   tasks: Task[],
@@ -146,6 +210,7 @@ export const groupTasks = (
   queued: ReadonlySet<string> = new Set(),
   queueErrors: ReadonlyMap<string, string> = new Map(),
   detached: Detached = NONE,
+  archive: ArchiveView = NO_ARCHIVE,
 ): BoardModel => {
   const byId = new Map(tasks.map((t) => [t.id, t]));
   const children = new Map<string, Task[]>();
@@ -170,6 +235,8 @@ export const groupTasks = (
   const cards = new Map<string, { column: Column; card: CardModel }>();
   for (const task of tasks) {
     if (hideSubtasks && task.parentId !== null) continue;
+    const archived = isArchived(task, archive.ids);
+    if (archived && !archive.show) continue;
     const session = sessionForTask(task.id, sessions, links, detached.get(task.id));
     const kids = children.get(task.id) ?? [];
     const led = task.state !== 'done' && parentRunning(task.parentId);
@@ -188,6 +255,7 @@ export const groupTasks = (
         queued: queued.has(task.id) && !starting.has(task.id) && task.state !== 'done',
         queueError: queued.has(task.id) && !starting.has(task.id) && task.state !== 'done' ? (queueErrors.get(task.id) ?? null) : null,
         ledByOrchestrator: led,
+        archived,
       },
     });
   }

@@ -10,7 +10,7 @@ import { clampStartSessionRequest, GUEST_ATTACH_ID_MAX } from '@openchamber/sdk'
 import type { GuestProject, GuestSessionRecord, HostClient } from '@openchamber/sdk';
 import type { Task } from '../core/types.ts';
 import { ApiError, createApi } from './api.ts';
-import { ledByOrchestrator, sessionForTask, type Detached, type SessionLink } from './columns.ts';
+import { ledByOrchestrator, markArchived, sessionForTask, type Detached, type SessionLink } from './columns.ts';
 import { createLauncher } from './launcher.ts';
 import type { Preset } from './presets.ts';
 import { buildPrompt } from './prompt.ts';
@@ -39,7 +39,11 @@ export type StarterDeps = {
   loadCard: (projectId: string, taskId: string) => Promise<Partial<StartOptions>>;
   /** Cards the user dragged away from their sessions (columns.ts Detached) in the shown project. */
   detached: () => Detached;
+  /** Session ids a host lookup found archived (columns.ts markArchived) in the shown project. */
+  archived: () => ReadonlySet<string>;
   draw: () => void;
+  /** The model picker's list (loaded once per panel session). */
+  loadModels: () => Promise<string[]>;
 };
 
 const errorText = (e: unknown): string => (e instanceof Error ? e.message : String(e));
@@ -58,7 +62,7 @@ export const createStarter = (deps: StarterDeps) => {
   const currentId = (): string | null => deps.project()?.id ?? null;
 
   const hasLiveSession = (taskId: string): boolean => {
-    const s = sessionForTask(taskId, deps.sessions(), links, deps.detached().get(taskId));
+    const s = sessionForTask(taskId, deps.sessions(), markArchived(links, deps.archived()), deps.detached().get(taskId));
     return s !== null && LIVE.has(s.activity);
   };
 
@@ -300,7 +304,7 @@ export const createStarter = (deps: StarterDeps) => {
   /** A drop on In Progress: resolve the start options, ask first when "Start automatically" is off, then launch or queue. */
   const onStart = async (task: Task): Promise<void> => {
     // A sub-task of a running orchestrator gets no session of its own.
-    if (ledByOrchestrator(task, deps.sessions(), links, deps.detached())) {
+    if (ledByOrchestrator(task, deps.sessions(), markArchived(links, deps.archived()), deps.detached())) {
       info('The orchestrator leads this task');
       return;
     }
@@ -326,7 +330,7 @@ export const createStarter = (deps: StarterDeps) => {
     }
     let opts = resolveStart(ctx.settings, task, card, ctx.presets);
     if (!ctx.settings.autoStart) {
-      const picked = await askStart(task.title, opts, ctx.presets);
+      const picked = await askStart(task.title, opts, ctx.presets, deps.loadModels);
       if (picked === null) return;
       opts = picked;
     }
@@ -390,7 +394,8 @@ export const createStarter = (deps: StarterDeps) => {
 
   return {
     isStarting: isStarting as ReadonlySet<string>,
-    links: (): SessionLink[] => (shown === currentId() ? links : []),
+    /** The shown project's links, those of sessions found archived marked `archived`. */
+    links: (): SessionLink[] => (shown === currentId() ? markArchived(links, deps.archived()) : []),
     queuedIds,
     queueErrors,
     hasLiveSession,

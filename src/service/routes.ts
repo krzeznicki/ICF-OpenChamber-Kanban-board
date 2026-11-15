@@ -10,6 +10,8 @@ import { openTracker } from '../core/openTracker.ts';
 import type { Exec, NewTask, TaskState, Tracker } from '../core/types.ts';
 import { TrackerError } from '../core/types.ts';
 import type { QueueEntry } from '../core/queue.ts';
+import { createModelList, type ModelList } from './models.ts';
+import { createSkillDetector, type SkillDetector } from './skills.ts';
 import {
   addToQueue,
   clampMax,
@@ -48,6 +50,10 @@ export type Deps = {
   suffix?: () => string;
   /** Where background failures (a queued start after a session event) are reported. */
   log?: (message: string) => void;
+  /** `opencode models`, cached; defaults to one cache per `exec` (one per running service). */
+  models?: ModelList;
+  /** Which of Matt Pocock's skills are installed, cached; defaults to one detector over the user's home. */
+  skills?: SkillDetector;
 };
 /** `after` runs once the answer is sent (session events: answer first, then work). */
 export type Reply = { status: number; json: unknown; after?: () => Promise<void> };
@@ -214,6 +220,20 @@ export const onSessionEvent = async (req: GuestSessionEventRequest, deps: Deps):
   }
 };
 
+const modelLists = new WeakMap<Exec, ModelList>();
+const modelList = (deps: Deps): ModelList => {
+  if (deps.models !== undefined) return deps.models;
+  let list = modelLists.get(deps.exec);
+  if (list === undefined) {
+    list = createModelList(deps.exec);
+    modelLists.set(deps.exec, list);
+  }
+  return list;
+};
+
+let defaultSkills: SkillDetector | null = null;
+const skillDetector = (deps: Deps): SkillDetector => deps.skills ?? (defaultSkills ??= createSkillDetector());
+
 const tracker = (dir: string, deps: Deps): Promise<Tracker> => openTracker(dir, deps.exec);
 
 /** The config already in `dir`, or null when it has none (an unsupported one throws). */
@@ -338,6 +358,10 @@ const POST: Record<string, Route> = {
     release(queueFile(deps), dir, taskId);
     return {};
   },
+  /** `{ models: ['provider/model', …] }`; a failure is `{ models: [], error }`, never an error status. */
+  '/models/list': async (_body, dir, deps) => modelList(deps)(dir),
+  /** `{ found: [...], paths: {name: SKILL.md} }`: which of Matt Pocock's skills are installed for this project (core/skills.ts). */
+  '/skills/detect': async (_body, dir, deps) => skillDetector(deps)(dir),
   '/queue/list': async (_body, dir, deps) => ({ queue: await listQueue(queueFile(deps), dir) }),
   '/queue/add': async (body, dir, deps) => ({ queue: await addToQueue(queueFile(deps), dir, queueEntry(body.entry), maxParallelOf(body)) }),
   '/queue/remove': async (body, dir, deps) => ({ queue: await removeFromQueue(queueFile(deps), dir, str(body, 'taskId')) }),

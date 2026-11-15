@@ -86,6 +86,10 @@ export const createApi = (host: HostClient, directory: string) => {
     /** Records a session the panel started (path A), so the queue counts it while it runs. */
     addLink: (taskId: string, sessionId: string, sessionDirectory: string | null) =>
       call<Record<string, never>>('POST', '/links/add', { taskId, sessionId, sessionDirectory }).then(() => undefined),
+    /** `opencode models` (cached by the service); a failure comes back as `{ models: [], error }`. */
+    listModels: () => call<{ models: string[]; error?: string }>('POST', '/models/list'),
+    /** Which of Matt Pocock's skills are installed for this project, and each one's SKILL.md (cached by the service). */
+    detectSkills: () => call<{ found: string[]; paths: Record<string, string> }>('POST', '/skills/detect'),
     listQueue: () => call<{ queue: QueueEntry[] }>('POST', '/queue/list').then((r) => r.queue),
     /** Idempotent per task; `maxParallel` is stored so the service drains with the same limit. */
     addToQueue: (entry: QueueEntry, maxParallel: number) =>

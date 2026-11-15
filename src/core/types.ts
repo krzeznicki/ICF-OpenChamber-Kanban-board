@@ -59,7 +59,8 @@ export interface Tracker {
 export type Exec = (
   cmd: string,
   args: string[],
-  opts: { cwd: string },
+  /** `timeoutMs`: stop the program after this long and report a failed run (default: no limit). */
+  opts: { cwd: string; timeoutMs?: number },
 ) => Promise<{ code: number; stdout: string; stderr: string }>;
 
 export type TrackerErrorCode =

@@ -1,31 +1,38 @@
 // Entry for both the rail panel (panel/index.html) and the full-screen page (panel/page.html).
 // The layout follows ctx.surface through the data-oc-surface attribute applyHostReady sets.
 // Data: projects and sessions from the host, tasks from our service via host.serviceRequest.
-// Writes (drag and drop, detail, Add task) live in edit.ts; a drop on In Progress goes to starter.ts:
+// Writes (drag and drop, the task modal, Add task) live in edit.ts; a drop on In Progress goes to starter.ts:
 // it starts an agent session (or queues it over the limit) and the card then follows that session. Settings (global, per project, presets, per card) come from the
 // extension's storage through settings.ts and are edited in the Settings sheet. Personal summaries
-// (summaries.ts) are read or generated for the shown cards after each load.
+// (summaries.ts) are read or generated for the shown cards after each load. "Archive done"
+// (archive.ts) hides done tasks from the board through the extension's storage only.
 import { connectHost } from '@openchamber/sdk';
 import type { GuestProject, GuestSessionRecord, HostReadyContext } from '@openchamber/sdk';
 import { applyHostReady } from '@openchamber/sdk/ui';
 import type { Task } from '../core/types.ts';
+import { archivableIds, archivedShown, archiveTasks, archiveWriteJob, createArchiveSync, createPendingMarks, isArchived, mergeArchived, reconcileArchived, unarchiveTask } from './archive.ts';
 import { ApiError, createApi, type Api, type ConfigResult, type ProjectConfig } from './api.ts';
-import { groupTasks, sessionForTask, type Column } from './columns.ts';
+import { groupTasks, pruneArchived, resolveSession, sessionForTask, sessionTarget, type Column, type SessionLookup } from './columns.ts';
 import { createEditor, type Editor } from './edit.ts';
 import { listPresets, parseStoredPresets, type Preset, type StoredPresets } from './presets.ts';
 import {
   createLatestSaver,
   createSettingsStore,
+  DEFAULT_SECTIONS,
   resolveSettings,
+  skillUse,
+  type Sections,
   type Settings,
   type SettingsLayer,
   STORAGE_KEYS,
   withDetach,
 } from './settings.ts';
 import { defaultChoice, loadNotice, setupOutcome, type ApiFailure, type NoticeModel, type TrackerChoice } from './setup.ts';
+import { createModelLoader } from './models.ts';
 import { createStarter } from './starter.ts';
 import { createSummaries } from './summaries.ts';
 import { createBoard, type Board } from './ui/board.ts';
+import { askChoice } from './ui/confirm.ts';
 import { mountNotice } from './ui/notice.ts';
 import { openSettings } from './ui/settingsView.ts';
 import { injectStyles } from './ui/styles.ts';
@@ -58,9 +65,19 @@ type State = {
   projectSettings: SettingsLayer;
   settingsFor: string | null;
   presets: StoredPresets;
+  /** Matt Pocock's skills installed for `settingsFor` and their SKILL.md (POST /skills/detect); null when the check failed. */
+  skills: { found: string[]; paths: Record<string, string> } | null;
   /** Cards the user dragged away from their sessions (columns.ts Detached); `detachedFor` is their project. */
   detached: Map<string, number>;
   detachedFor: string | null;
+  /** Session ids of links a host lookup found archived (columns.ts markArchived); `archivedFor` is their project. */
+  archived: Set<string>;
+  archivedFor: string | null;
+  /** Done tasks the user archived (archive.ts), task id -> when; `archivedTasksFor` is their project. */
+  archivedTasks: Map<string, number>;
+  archivedTasksFor: string | null;
+  /** The Done header's "Show archived" switch (this panel session only). */
+  showArchived: boolean;
 };
 
 const state: State = {
@@ -79,8 +96,14 @@ const state: State = {
   projectSettings: {},
   settingsFor: null,
   presets: parseStoredPresets(undefined),
+  skills: null,
   detached: new Map(),
   detachedFor: null,
+  archived: new Set(),
+  archivedFor: null,
+  archivedTasks: new Map(),
+  archivedTasksFor: null,
+  showArchived: false,
 };
 
 const store = createSettingsStore(host.storage);
@@ -89,6 +112,20 @@ const info = (message: string): void => void host.toast({ kind: 'info', message 
 
 /** The shown project's detach marks (empty while another project's are loaded). */
 const detached = (): Map<string, number> => (state.detachedFor === state.projectId ? state.detached : new Map());
+/** The shown project's sessions found archived (empty while another project's are loaded). */
+const archived = (): Set<string> => (state.archivedFor === state.projectId ? state.archived : new Set());
+/** The shown project's archived done tasks (empty while another project's are loaded). */
+const archivedTasks = (): Map<string, number> => (state.archivedTasksFor === state.projectId ? state.archivedTasks : new Map());
+/** Whether a load may take the stored archive marks over memory (archive.ts createArchiveSync). */
+const archiveSync = createArchiveSync();
+/**
+ * Per project, task id -> when this frame unarchived it: a merge with storage does not bring those
+ * marks back. Kept across project switches (a write of the old project may still be queued).
+ */
+const unarchivedAt = new Map<string, Map<string, number>>();
+const removedFor = (projectId: string): ReadonlyMap<string, number> => unarchivedAt.get(projectId) ?? new Map();
+/** Per project, the marks queued for writing and not yet written (archive.ts createPendingMarks). */
+const pendingMarks = createPendingMarks();
 // Every field reports each keystroke; only the newest value per key is written.
 const saver = createLatestSaver<() => Promise<void>>(
   (_key, run) => run(),
@@ -127,9 +164,23 @@ let generation = 0;
 
 const project = (): GuestProject | null => state.projects.find((p) => p.id === state.projectId) ?? null;
 
+/** `opencode models` through the service, fetched the first time a model picker opens in a project, then kept per project directory. */
+const loadModels = createModelLoader(
+  (directory) => createApi(host, directory).listModels(),
+  () => project()?.directory ?? null,
+);
+
 /** The settings in force for the shown project (global only until its layer has loaded). */
-const settings = (): Settings =>
-  resolveSettings(state.globalSettings, state.settingsFor !== null && state.settingsFor === state.projectId ? state.projectSettings : {});
+const settings = (): Settings => {
+  const loaded = state.settingsFor !== null && state.settingsFor === state.projectId;
+  return resolveSettings(state.globalSettings, loaded ? state.projectSettings : {}, loaded ? (state.skills?.found ?? []) : []);
+};
+
+/** The presets a start uses: built-ins switch to their skills text when the settings and the installed skills allow it. */
+const presets = (): Preset[] => {
+  const skills = state.settingsFor === state.projectId ? state.skills : null;
+  return listPresets(state.presets, { ...skillUse(settings(), skills?.found ?? []), paths: skills?.paths ?? {} });
+};
 
 /** After any settings change: the hide switch follows, the board and an open detail redraw. */
 const applySettings = (): void => {
@@ -146,15 +197,32 @@ const applySettings = (): void => {
   summarySettingsChanged();
 };
 
+/** Matt Pocock's skills for the project, or null when the service could not tell. */
+const detectSkills = async (id: string): Promise<State['skills']> => {
+  const p = state.projects.find((x) => x.id === id);
+  if (p === undefined) return null;
+  try {
+    return await createApi(host, p.directory).detectSkills();
+  } catch {
+    return null;
+  }
+};
+
+/** The project's layer and its installed skills load together: a start waits for both (startContext). */
 const loadProjectSettings = async (id: string): Promise<void> => {
+  const skills = detectSkills(id);
   try {
     const layer = await store.loadProject(id);
+    const found = await skills;
     if (state.projectId !== id) return;
     state.projectSettings = layer;
+    state.skills = found;
     state.settingsFor = id;
   } catch (e) {
+    const found = await skills;
     if (state.projectId !== id) return;
     state.projectSettings = {};
+    state.skills = found;
     state.settingsFor = id;
     fail(`Could not read the project settings: ${e instanceof Error ? e.message : String(e)}`);
   }
@@ -190,6 +258,7 @@ const showSettings = (): void => {
       global: state.globalSettings,
       project: p !== null && id !== null ? { name: p.name, layer: state.projectSettings } : null,
       presets: state.presets,
+      skills: id !== null ? (state.skills?.found ?? null) : null,
     },
     {
       onGlobal: (layer) => {
@@ -208,6 +277,7 @@ const showSettings = (): void => {
         editor.refresh();
       },
       onDismiss: closeSettings,
+      loadModels,
     },
   );
 };
@@ -231,11 +301,29 @@ const draw = (): void => {
     board.render(null);
     return;
   }
-  const model = groupTasks(state.tasks, state.sessions, starter.isStarting, state.hideSubtasks, starter.links(), starter.queuedIds(), starter.queueErrors(), detached());
+  const marks = archivedTasks();
+  const archivedCount = archivedShown(state.tasks, marks);
+  if (archivedCount === 0) state.showArchived = false;
+  const model = groupTasks(
+    state.tasks,
+    state.sessions,
+    starter.isStarting,
+    state.hideSubtasks,
+    starter.links(),
+    starter.queuedIds(),
+    starter.queueErrors(),
+    detached(),
+    { ids: new Set(marks.keys()), show: state.showArchived },
+  );
   for (const [column, cards] of Object.entries(model)) for (const c of cards) state.columns.set(c.task.id, column as Column);
   // The attention mark: sessions that finished or wait for the user.
   setBadge(model.review.length || null);
-  board.render(model, editor.busy, (task) => summaries.get(task));
+  board.render(model, editor.busy, (task) => summaries.get(task), {
+    archivable: archivableIds(state.tasks, marks).length,
+    archived: archivedCount,
+    showArchived: state.showArchived,
+  });
+  auditLinks();
   if (state.tasks.length === 0) {
     board.setStatus({
       kind: 'empty',
@@ -341,9 +429,12 @@ const load = async (): Promise<void> => {
       return;
     }
     // Links and the start queue come from the service's own files (starter.ts).
-    const [tasks, marks] = await Promise.all([
+    const token = archiveSync.loadToken();
+    const [tasks, marks, gone, shelved] = await Promise.all([
       api.list(),
       store.loadDetached(p.id).catch(() => null),
+      store.loadArchived(p.id).catch(() => null),
+      store.loadArchivedTasks(p.id).catch(() => null),
       starter.refresh(p.id, p.directory),
     ]);
     if (mine !== generation) return;
@@ -354,6 +445,20 @@ const load = async (): Promise<void> => {
       state.detached = merged;
       state.detachedFor = p.id;
     }
+    if (gone !== null) {
+      state.archived = new Set([...archived(), ...gone]);
+      state.archivedFor = p.id;
+    }
+    // Stored archive marks (also the other frame's) win when every change of this frame is written;
+    // otherwise memory (empty after a switch) and storage join, newest per id, minus this frame's
+    // unarchives. Then ids the tracker no longer lists are pruned and reopened tasks unarchived, and
+    // that is written back.
+    const base =
+      shelved === null ? archivedTasks() : archiveSync.trusts(token) ? shelved : mergeArchived(archivedTasks(), shelved, removedFor(p.id));
+    const fixed = reconcileArchived(base, tasks);
+    state.archivedTasks = fixed.marks;
+    state.archivedTasksFor = p.id;
+    if (fixed.changed) writeArchivedTasks(p.id, fixed.marks, tasks);
     state.config = result.config;
     state.tasks = tasks;
     state.view = 'board';
@@ -380,11 +485,18 @@ const selectProject = async (id: string | null): Promise<void> => {
   editor.reset();
   closeSettings();
   state.settingsFor = null;
+  state.skills = null;
   state.projectSettings = {};
   if (id !== null) void loadProjectSettings(id);
   state.sessions = [];
   state.detached = new Map();
   state.detachedFor = null;
+  state.archived = new Set();
+  state.archivedFor = null;
+  state.archivedTasks = new Map();
+  state.archivedTasksFor = null;
+  state.showArchived = false;
+  audited.clear();
   starter.reset();
   state.config = null;
   state.tasks = null;
@@ -447,7 +559,7 @@ const summaries = createSummaries({
         kind: 'info',
         message:
           code === 'NOT_GRANTED'
-            ? 'Summaries need the “model” permission for ICF-kanban (Settings → Extensions). Automatic summaries are off for now.'
+            ? 'Summaries need the “model” permission for Kanban Board (Settings → Extensions). Automatic summaries are off for now.'
             : 'No small model is set, so automatic summaries are off for now. Choose a Small Model in OpenChamber settings, then press Summarise in a task.',
       })
       .catch(() => {}),
@@ -483,7 +595,7 @@ const errorText = (e: unknown): string => (e instanceof Error ? e.message : Stri
 /** What a start needs from the settings; null while the shown project's settings are loading. */
 const startContext = (): { projectId: string; settings: Settings; presets: Preset[] } | null => {
   const id = state.projectId;
-  return id === null || !globalLoaded || state.settingsFor !== id ? null : { projectId: id, settings: settings(), presets: listPresets(state.presets) };
+  return id === null || !globalLoaded || state.settingsFor !== id ? null : { projectId: id, settings: settings(), presets: presets() };
 };
 
 const starter = createStarter({
@@ -494,7 +606,9 @@ const starter = createStarter({
   context: startContext,
   loadCard: (projectId, taskId) => store.loadCard(projectId, taskId),
   detached,
+  archived,
   draw: () => draw(),
+  loadModels,
 });
 
 /**
@@ -513,16 +627,137 @@ const detach = async (task: Task, from: Column): Promise<void> => {
   info('Moved; the agent session keeps running — open it from the session list');
 };
 
-/** A click on a card with a session opens the session; the detail stays on its Details button. */
-const openCard = (taskId: string): boolean => {
-  const s = sessionForTask(taskId, state.sessions, starter.links(), detached().get(taskId));
-  if (s === null) return false;
-  void host.openSession(s.id).catch((e: unknown) => fail(`Could not open the session: ${errorText(e)}`));
-  return true;
+// --- "Archive done" (archive.ts): panel storage only, the repo and GitHub stay as they are ---
+
+/**
+ * The one write path of the archive marks (user changes and a load's reconcile). The marks, tasks and
+ * this frame's unarchives are snapshotted now, when the job is queued (archive.ts archiveWriteJob): a
+ * project switch before it runs, or a wait behind a running write, loses nothing, and the newest
+ * queued job holds any change of one the saver replaced. Only a write that succeeded counts as written.
+ */
+const writeArchivedTasks = (projectId: string, marks: ReadonlyMap<string, number>, tasks: readonly Task[] | null): void => {
+  const n = archiveSync.edit();
+  const removed = new Map(removedFor(projectId));
+  // Joined with marks still queued: a job this one replaces may hold some memory no longer has.
+  const snapshot = pendingMarks.queue(projectId, marks, removed, n);
+  const job = archiveWriteJob(
+    { marks: snapshot, removed, tasks },
+    { load: () => store.loadArchivedTasks(projectId), save: (next) => store.saveArchivedTasks(projectId, next) },
+    (next) => {
+      archiveSync.written(n);
+      pendingMarks.written(projectId, n);
+      // The other frame's marks (or, after a switch back, this job's own) join what the board shows.
+      if (state.archivedTasksFor !== projectId || state.tasks === null) return;
+      const current = state.archivedTasks;
+      const shown = reconcileArchived(mergeArchived(current, next, removedFor(projectId)), state.tasks).marks;
+      if (sameMarks(current, shown)) return;
+      state.archivedTasks = shown;
+      draw();
+      editor.refresh();
+    },
+  );
+  saver.save(STORAGE_KEYS.archivedTasks(projectId), job);
+};
+
+const sameMarks = (a: ReadonlyMap<string, number>, b: ReadonlyMap<string, number>): boolean =>
+  a.size === b.size && [...a].every(([id, at]) => b.get(id) === at);
+
+/** A user change of the shown project's archive marks: stored, then the board and an open modal redraw. */
+const setArchivedTasks = (projectId: string, marks: Map<string, number>): void => {
+  state.archivedTasks = marks;
+  state.archivedTasksFor = projectId;
+  writeArchivedTasks(projectId, marks, state.tasks);
+  draw();
+  editor.refresh();
+};
+
+const archiveDone = async (): Promise<void> => {
+  const id = state.projectId;
+  if (id === null || state.tasks === null) return;
+  const n = archivableIds(state.tasks, archivedTasks()).length;
+  if (n === 0) return;
+  const answer = await askChoice(
+    `Archive ${n} done task${n === 1 ? '' : 's'}?`,
+    'They leave the board. Nothing changes in the repository or on GitHub; “Show archived” brings them back, and a reopened task returns on its own.',
+    [{ id: 'archive', label: 'Archive' }],
+  );
+  // The board may have reloaded or switched project while the question was open.
+  if (answer === null || state.projectId !== id || state.tasks === null) return;
+  const ids = archivableIds(state.tasks, archivedTasks());
+  if (ids.length === 0) return;
+  setArchivedTasks(id, archiveTasks(archivedTasks(), ids, Date.now()));
+  info(`Archived ${ids.length} done task${ids.length === 1 ? '' : 's'}`);
+};
+
+const unarchive = (taskId: string): void => {
+  const id = state.projectId;
+  if (id === null || !archivedTasks().has(taskId)) return;
+  unarchivedAt.set(id, new Map(removedFor(id)).set(taskId, Date.now()));
+  setArchivedTasks(id, unarchiveTask(archivedTasks(), taskId));
+};
+
+/**
+ * A session known only from a link: looked up in every project's snapshot, so that
+ * host.openSession only ever gets an id the host lists, not archived (columns.ts SessionTarget).
+ */
+const checkSessions = async (sessionIds: readonly string[]): Promise<Map<string, SessionLookup>> => {
+  const projectId = state.projectId;
+  const lists = await Promise.allSettled(state.projects.map((p) => host.listSessions(p.id)));
+  const snapshots = lists.flatMap((r) => (r.status === 'fulfilled' ? [r.value] : []));
+  const out = new Map(sessionIds.map((id) => [id, resolveSession(id, snapshots)] as const));
+  const gone = [...out].filter(([, r]) => r === 'archived').map(([id]) => id);
+  if (gone.length > 0 && projectId !== null && projectId === state.projectId) noteArchived(projectId, gone);
+  return out;
+};
+
+const checkSession = async (sessionId: string): Promise<SessionLookup> => (await checkSessions([sessionId])).get(sessionId) ?? 'missing';
+
+/** Sessions found archived: their links stop placing cards (Review -> the tracker state's column); kept per project. */
+const noteArchived = (projectId: string, ids: readonly string[]): void => {
+  const next = pruneArchived(new Set([...archived(), ...ids]), starter.links());
+  state.archived = next;
+  state.archivedFor = projectId;
+  saver.save(STORAGE_KEYS.archivedSessions(projectId), () => store.saveArchived(projectId, next));
+  draw();
+  editor.refresh();
+};
+
+/**
+ * Link-only sessions reading `idle` (finished, or archived: sessions.status cannot tell) are looked
+ * up once per panel session, so a card whose session was archived leaves Review without a click.
+ */
+const audited = new Set<string>();
+const auditLinks = (): void => {
+  const listed = new Set(state.sessions.map((s) => s.id));
+  const ids = starter
+    .links()
+    .filter((l) => l.status === 'idle' && !listed.has(l.sessionId) && !audited.has(l.sessionId))
+    .map((l) => l.sessionId);
+  if (ids.length === 0) return;
+  for (const id of ids) audited.add(id);
+  void checkSessions(ids).then((r) => {
+    // Still loading somewhere: try those again on a later draw.
+    for (const [id, result] of r) if (result === 'pending') audited.delete(id);
+  }, () => {
+    for (const id of ids) audited.delete(id);
+  });
+};
+
+/** Which task modal sections are open; read once at start, saved on every toggle. */
+let sections: Sections = { ...DEFAULT_SECTIONS };
+const saveSections = (next: Sections): void => {
+  sections = next;
+  saver.save(STORAGE_KEYS.detailSections, () => store.saveSections(next));
 };
 
 const start = (ctx: HostReadyContext): void => {
   injectStyles();
+  void store
+    .loadSections()
+    .then((s) => {
+      sections = s;
+    })
+    .catch(() => {});
   const root = document.getElementById('root') ?? document.body;
   state.hostDirectory = ctx.directory;
   board = createBoard(root, {
@@ -540,7 +775,11 @@ const start = (ctx: HostReadyContext): void => {
     onRefresh: () => void load(),
     onAdd: () => editor.showAdd(),
     onSettings: showSettings,
-    onDetails: (id) => editor.showDetail(id),
+    onArchiveDone: () => void archiveDone(),
+    onShowArchived: (show) => {
+      state.showArchived = show;
+      draw();
+    },
   });
   editor = createEditor({
     host,
@@ -556,9 +795,16 @@ const start = (ctx: HostReadyContext): void => {
     reload: load,
     redraw: draw,
     onStart: (task) => void starter.onStart(task),
+    loadModels,
     beforeMove: (task) => starter.leaveQueue(task.id),
     afterSetState: detach,
-    openCard,
+    session: {
+      target: (task) => sessionTarget(task.id, state.sessions, starter.links(), detached().get(task.id)),
+      check: checkSession,
+      open: (id) => void host.openSession(id).catch((e: unknown) => fail(`Could not open the session: ${errorText(e)}`)),
+    },
+    sections: { get: () => sections, save: saveSections },
+    archive: { has: (task) => isArchived(task, archivedTasks()), unarchive },
     baseTypes: () => settings().types,
     start: {
       context: startContext,
@@ -594,7 +840,7 @@ const start = (ctx: HostReadyContext): void => {
         kind: 'banner',
         tone: 'error',
         title: 'Projects are not available',
-        body: `${e instanceof Error ? e.message : String(e)}. Allow the “sessions” capability for ICF-kanban in Settings → Extensions.`,
+        body: `${e instanceof Error ? e.message : String(e)}. Allow the “sessions” capability for Kanban Board in Settings → Extensions.`,
       });
     });
 

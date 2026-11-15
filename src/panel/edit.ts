@@ -1,17 +1,18 @@
-// The board's write side, kept out of main.ts: drag and drop, the detail sheet, the Add task form
+// The board's write side, kept out of main.ts: drag and drop, the task modal, the Add task modal
 // and the in-panel confirms. Every write goes through `run`, which marks the card busy (further
 // drags of it are ignored), reports a failure in a toast and reloads the board afterwards.
 import type { HostClient } from '@openchamber/sdk';
 import type { NewTask, Task, TaskState } from '../core/types.ts';
+import { canAddSubtask, createWithSubtasks, parentChoices, partialMessage, subtasksToCreate, toNewTask, type AddDraft } from './addTask.ts';
 import type { Api } from './api.ts';
 import type { Preset } from './presets.ts';
-import { resolveStart, type CardOptions, type Settings } from './settings.ts';
-import { COLUMNS, type Column } from './columns.ts';
+import { resolveStart, type CardOptions, type Sections, type Settings } from './settings.ts';
+import { COLUMNS, type Column, type SessionLookup, type SessionTarget } from './columns.ts';
 import { openChildren, planMove, taskTypes, type Move } from './moves.ts';
-import { mountAddForm } from './ui/add.ts';
+import { openAddModal, type AddModalStart, type AddResult } from './ui/addModal.ts';
 import type { Board } from './ui/board.ts';
 import { askChoice } from './ui/confirm.ts';
-import { openDetail, type DetailHandle, type DetailModel, type SummaryModel } from './ui/detail.ts';
+import { openDetail, type DetailHandle, type DetailModel, type SessionView, type SummaryModel } from './ui/detail.ts';
 import { attachDrag } from './ui/dnd.ts';
 
 export type EditorDeps = {
@@ -30,22 +31,35 @@ export type EditorDeps = {
   redraw: () => void;
   /** Dropping on In Progress (also "Move to In Progress" in the detail): starts an agent. */
   onStart: (task: Task) => void;
+  /** The model picker's list (loaded once per panel session). */
+  loadModels: () => Promise<string[]>;
   /** Before a move that writes (Backlog, Ready, Done): e.g. leave the start queue. False cancels the move. */
   beforeMove?: (task: Task) => Promise<boolean>;
   /** A move to Backlog or Ready was written, before the reload (e.g. detach the card from its session). */
   afterSetState?: (task: Task, from: Column) => Promise<void>;
-  /** A click or Enter on a card; true when it was handled (a card with a session opens it), else the detail opens. */
-  openCard: (taskId: string) => boolean;
+  /** The task modal's "Open session" (a click or Enter on a card always opens the modal). */
+  session: {
+    /** What the task's session allows (columns.ts sessionTarget). */
+    target: (task: Task) => SessionTarget;
+    /** A session known only from a link, looked up in every project's snapshot (columns.ts resolveSession). */
+    check: (sessionId: string) => Promise<SessionLookup>;
+    /** Only ever called with an id that is `open` in a host snapshot. */
+    open: (sessionId: string) => void;
+  };
+  /** "Archive done" (archive.ts): whether a task is archived, and the modal's "Unarchive". */
+  archive: { has: (task: Task) => boolean; unarchive: (taskId: string) => void };
+  /** Which modal sections are open (device storage). */
+  sections: { get: () => Sections; save: (sections: Sections) => void };
   /** The base types offered in the type selects (settings' `types`). */
   baseTypes: () => string[];
-  /** The card start options in the detail sheet. */
+  /** The card start options in the task modal. */
   start: {
     /** Null while no project's settings are loaded. */
     context: () => { projectId: string; settings: Settings; presets: Preset[] } | null;
     load: (projectId: string, taskId: string) => Promise<CardOptions>;
     save: (projectId: string, taskId: string, card: CardOptions) => void;
   };
-  /** The personal summary in the detail sheet (summaries.ts). */
+  /** The personal summary in the task modal (summaries.ts). */
   summary: {
     model: (task: Task) => SummaryModel | null;
     summarise: (task: Task) => void;
@@ -56,16 +70,87 @@ export type EditorDeps = {
 
 const errorText = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
+/** The fields resolveStart reads for a task not created yet (type and kind are filled in). */
+const NEW_TASK: Task = {
+  id: '',
+  kind: 'ticket',
+  title: '',
+  body: '',
+  state: 'needs-triage',
+  type: null,
+  parentId: null,
+  blockedBy: [],
+  url: null,
+  updatedAt: 0,
+  claimed: false,
+};
+
 export const createEditor = (deps: EditorDeps) => {
   const moving = new Set<string>();
   let detail: { id: string; handle: DetailHandle } | null = null;
-  let addDispose: (() => void) | null = null;
-  /** The open sheet's stored start options; version bumps when they are (re)loaded. */
+  let addModal: { setStart: (start: AddModalStart | null) => void; dispose: () => void } | null = null;
+  /** The open modal's stored start options; version bumps when they are (re)loaded. */
   let card: { taskId: string; projectId: string; options: CardOptions; version: number } | null = null;
+  /** The open modal's lookup of a session known only from a link (SessionTarget `check`). */
+  let lookup: { id: string; result: SessionLookup; inflight: boolean } | null = null;
 
   const find = (id: string): Task | null => deps.tasks().find((t) => t.id === id) ?? null;
   const info = (message: string): void => void deps.host.toast({ kind: 'info', message }).catch(() => {});
   const fail = (message: string): void => void deps.host.toast({ kind: 'error', message }).catch(() => {});
+
+  const runLookup = (id: string): void => {
+    const mine: NonNullable<typeof lookup> = { id, result: 'pending', inflight: true };
+    lookup = mine;
+    deps.session
+      .check(id)
+      .catch(() => 'missing' as const)
+      .then((result) => {
+        if (lookup !== mine) return;
+        mine.inflight = false;
+        mine.result = result;
+        // Still pending (a snapshot was loading): keep the spinner; the next refresh asks again.
+        if (result !== 'pending') refreshDetail();
+      });
+  };
+
+  const sessionView = (task: Task): SessionView => {
+    const target = deps.session.target(task);
+    if (target.kind !== 'check') return target.kind;
+    if (lookup?.id !== target.id || (!lookup.inflight && lookup.result === 'pending')) runLookup(target.id);
+    const result = lookup?.result ?? 'pending';
+    return result === 'pending' ? 'checking' : result;
+  };
+
+  const openSession = (taskId: string): void => {
+    const task = find(taskId);
+    if (task === null) return;
+    const target = deps.session.target(task);
+    if (target.kind === 'open') {
+      deps.session.open(target.id);
+      return;
+    }
+    if (target.kind !== 'check') return;
+    // Looked up again on the click: it may have been archived since the modal opened.
+    const id = target.id;
+    void deps.session
+      .check(id)
+      .catch(() => 'missing' as const)
+      .then((result) => {
+        if (result === 'open') deps.session.open(id);
+        else
+          info(
+            result === 'archived'
+              ? 'That session was archived.'
+              : result === 'pending'
+                ? 'OpenChamber is still loading its sessions; try again in a moment.'
+                : 'That session is not listed in OpenChamber.',
+          );
+        if (lookup?.id === id && result !== 'pending') {
+          lookup.result = result;
+          refreshDetail();
+        }
+      });
+  };
 
   const detailModel = (task: Task): DetailModel => {
     const tasks = deps.tasks();
@@ -92,6 +177,10 @@ export const createEditor = (deps: EditorDeps) => {
               version: mine?.version ?? -1,
             },
       summary: deps.summary.model(task),
+      session: sessionView(task),
+      children: tasks.filter((t) => t.parentId === task.id).map((t) => ({ id: t.id, title: t.title, state: t.state })),
+      addSubtask: canAddSubtask(task, deps.tracker()),
+      archived: deps.archive.has(task),
     };
   };
 
@@ -114,7 +203,7 @@ export const createEditor = (deps: EditorDeps) => {
       .catch((e: unknown) => fail(`Could not read the card's start options: ${errorText(e)}`));
   };
 
-  /** After a reload: show the fresh task, or close the sheet when it left the list. */
+  /** After a reload: show the fresh task, or close the modal when it left the list. */
   const refreshDetail = (): void => {
     if (detail === null) return;
     const task = find(detail.id);
@@ -192,6 +281,7 @@ export const createEditor = (deps: EditorDeps) => {
     const d = detail;
     detail = null;
     card = null;
+    lookup = null;
     d?.handle.dispose();
   };
 
@@ -201,6 +291,28 @@ export const createEditor = (deps: EditorDeps) => {
     closeDetail();
     loadCard(id);
     const handle = openDetail(detailModel(task), {
+      onOpenSession: () => openSession(id),
+      onOpenTask: (child) => queueMicrotask(() => showDetail(child)),
+      onAddSubtask: async ({ title, type }) => {
+        const api = deps.api();
+        if (api === null) return 'No project is open.';
+        const input: NewTask = { title, state: 'needs-triage', parentId: id, ...(type !== null ? { type } : {}) };
+        try {
+          const created = await api.create(input);
+          info(`Created ${created.id}`);
+        } catch (e) {
+          return errorText(e);
+        }
+        await deps.reload();
+        refreshDetail();
+        return null;
+      },
+      onSections: deps.sections.save,
+      onUnarchive: () => {
+        deps.archive.unarchive(id);
+        refreshDetail();
+      },
+      loadModels: deps.loadModels,
       onStartOptions: (options) => {
         if (card === null || card.taskId !== id) return;
         const languageChanged = options.summaryLanguage !== card.options.summaryLanguage;
@@ -224,89 +336,121 @@ export const createEditor = (deps: EditorDeps) => {
         refreshDetail(); // the select snaps back until the reload shows the saved state
       },
       onType: (type) => void run(id, (api) => api.setType(id, type)),
-      onClose: (withChildren) => {
-        const t = find(id);
-        if (t === null) return;
-        if (!withChildren) {
-          void run(id, (api) => api.close(id, false));
-          return;
-        }
-        const n = openChildren(t, deps.tasks());
-        void askChoice(`Close “${t.title}” and its sub-tasks?`, `This closes the task and its ${n} open sub-task${n === 1 ? '' : 's'}.`, [
-          { id: 'all', label: 'Close with sub-tasks', variant: 'destructive' },
-        ]).then((answer) => {
-          if (answer === 'all') void run(id, (api) => api.close(id, true));
-        });
-      },
       onOpenUrl: (url) => void deps.host.openUrl(url).catch((e: unknown) => fail(errorText(e))),
       onDismiss: closeDetail,
-    });
+    }, { sections: deps.sections.get() });
     detail = { id, handle };
   };
 
   const closeAdd = (): void => {
-    addDispose?.();
-    addDispose = null;
-    deps.board.addForm.replaceChildren();
+    const m = addModal;
+    addModal = null;
+    m?.dispose();
+  };
+
+  /** Creates the task, saves its start options, then its sub-tasks one by one; reloads once at the end. */
+  const submitAdd = async (draft: AddDraft): Promise<AddResult> => {
+    const api = deps.api();
+    if (api === null) return { kind: 'error', message: 'No project is open.' };
+    const ctx = deps.start.context();
+    const tracker = deps.tracker();
+    const subtasks = subtasksToCreate(draft, tracker);
+    /** Never throws: the task exists by now, so a storage hiccup is a toast, not "could not create". */
+    const saveStart = (taskId: string): void => {
+      if (ctx === null || Object.keys(draft.start).length === 0) return;
+      try {
+        deps.start.save(ctx.projectId, taskId, draft.start);
+        if (draft.start.summaryLanguage !== undefined) deps.summary.onLanguage(ctx.projectId, taskId, draft.start.summaryLanguage);
+      } catch (e) {
+        fail(`Could not save the start options of ${taskId}: ${errorText(e)}`);
+      }
+    };
+    let first = true;
+    let result: Awaited<ReturnType<typeof createWithSubtasks>>;
+    try {
+      result = await createWithSubtasks(
+        async (input) => {
+          const task = await api.create(input);
+          // The first create is the task itself: its start options are stored once its id is known.
+          if (first) {
+            first = false;
+            saveStart(task.id);
+          }
+          return task;
+        },
+        toNewTask(draft, tracker),
+        subtasks,
+      );
+    } catch (e) {
+      return { kind: 'error', message: errorText(e) };
+    }
+    const { task, failed } = result;
+    if (failed.length === 0) {
+      closeAdd();
+      const n = subtasks.length;
+      void deps.host
+        .toast({ kind: 'success', message: n === 0 ? `Created ${task.id}` : `Created ${task.id} with ${n} sub-task${n === 1 ? '' : 's'}` })
+        .catch(() => {});
+    }
+    await deps.reload();
+    return failed.length === 0 ? null : { kind: 'partial', message: partialMessage(task.id, failed) };
+  };
+
+  /** The add modal's start options; null while the project's settings are loading. */
+  const addStart = (): AddModalStart | null => {
+    const ctx = deps.start.context();
+    return ctx === null
+      ? null
+      : {
+          projectId: ctx.projectId,
+          presets: ctx.presets,
+          inherited: (type, kind) => resolveStart(ctx.settings, { ...NEW_TASK, type, kind }, {}, ctx.presets),
+          summaryLanguage: ctx.settings.summary.language,
+        };
   };
 
   const showAdd = (): void => {
-    if (addDispose !== null) {
-      deps.board.addForm.querySelector<HTMLInputElement>('input')?.focus();
-      return;
-    }
+    if (addModal !== null) return;
     const tasks = deps.tasks();
-    addDispose = mountAddForm(
-      deps.board.addForm,
+    addModal = openAddModal(
       {
-        types: taskTypes(tasks, deps.baseTypes()),
-        parents: tasks.filter((t) => t.kind === 'parent' && t.state !== 'done').map((t) => ({ id: t.id, label: t.title, hint: t.id })),
         tracker: deps.tracker(),
+        types: taskTypes(tasks, deps.baseTypes()),
+        parents: parentChoices(tasks),
+        tasks,
+        labels: deps.labels(),
+        start: addStart(),
+        loadModels: deps.loadModels,
       },
-      {
-        onSubmit: async (input: NewTask) => {
-          const api = deps.api();
-          if (api === null) return 'No project is open.';
-          try {
-            const task = await api.create(input);
-            closeAdd();
-            void deps.host.toast({ kind: 'success', message: `Created ${task.id}` }).catch(() => {});
-            await deps.reload();
-            return null;
-          } catch (e) {
-            return errorText(e);
-          }
-        },
-        onCancel: closeAdd,
-      },
+      { onSubmit: submitAdd, onDismiss: closeAdd },
     );
   };
 
   const detachDrag = attachDrag(deps.board.columns, {
     canDrag: (id) => !moving.has(id),
     onDrop: move,
-    onOpen: (id) => {
-      if (!deps.openCard(id)) showDetail(id);
-    },
+    onOpen: showDetail,
   });
 
   return {
     /** Ids whose write is in flight; the board draws them busy. */
     busy: moving as ReadonlySet<string>,
     showAdd,
-    /** The detail sheet of a task (a card's Details button). */
+    /** The task modal (also what a click or Enter on a card opens). */
     showDetail,
-    /** Project switch or the board went away: drop the sheet and the form. */
+    /** Project switch or the board went away: drop the modal and the form. */
     reset: () => {
       closeDetail();
       closeAdd();
     },
-    /** After a reload from elsewhere (poll, Refresh, settings): keep the open sheet current. */
+    /** After a reload from elsewhere (poll, Refresh, settings): keep the open modal current. */
     refresh: () => {
       // Settings for another project arrived (switch): the stored card options are someone else's.
       const ctx = deps.start.context();
       if (detail !== null && (card === null || ctx === null || card.projectId !== ctx.projectId)) loadCard(detail.id);
       refreshDetail();
+      // The project's settings may have arrived (or changed) while Add task is open.
+      addModal?.setStart(addStart());
     },
     dispose: () => {
       detachDrag();
