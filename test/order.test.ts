@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Task, TaskState } from '../src/core/types.ts';
 import { groupTasks } from '../src/panel/columns.ts';
-import { applyOrder, ORDER_MAX, parseOrder, pruneOrder, renameInOrder, reorder } from '../src/panel/order.ts';
+import { applyOrder, forgetInOrder, ORDER_MAX, parseOrder, pruneOrder, renameInOrder, reorder } from '../src/panel/order.ts';
 
 const t = (id: string, state: TaskState = 'needs-triage', parentId: string | null = null): Task => ({
   id,
@@ -71,4 +71,9 @@ test('parseOrder: stored ids read defensively, without duplicates, at most ORDER
 
 test('pruneOrder: ids of tasks the tracker no longer lists are dropped', () => {
   assert.deepEqual(pruneOrder(['a', 'gone', 'b'], [t('b'), t('a')]), ['a', 'b']);
+});
+
+test('forgetInOrder: deleted tasks lose their places; the others keep their order', () => {
+  assert.deepEqual(forgetInOrder(['a', 'b', 'c', 'd'], ['c', 'a', 'x']), ['b', 'd']);
+  assert.deepEqual(forgetInOrder(['a'], []), ['a']);
 });

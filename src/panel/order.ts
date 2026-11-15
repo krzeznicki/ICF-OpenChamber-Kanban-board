@@ -44,3 +44,9 @@ export const pruneOrder = (order: readonly string[], tasks: readonly Task[]): st
   const listed = new Set(tasks.map((t) => t.id));
   return order.filter((id) => listed.has(id));
 };
+
+/** Deleted tasks lose their places (their ids could otherwise linger until the next reorder). */
+export const forgetInOrder = (order: readonly string[], ids: readonly string[]): string[] => {
+  const gone = new Set(ids);
+  return order.filter((id) => !gone.has(id));
+};

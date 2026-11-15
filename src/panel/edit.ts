@@ -3,7 +3,7 @@
 // drags of it are ignored), reports a failure in a toast and reloads the board afterwards.
 import type { HostClient } from '@openchamber/sdk';
 import type { NewTask, Task, TaskState } from '../core/types.ts';
-import { MODEL_PICK, canAddSubtask, createWithSubtasks, existingToLink, parentChoices, partialMessage, subtasksToCreate, toNewTask, type AddDraft } from './addTask.ts';
+import { MODEL_PICK, type TrackerKind, canAddSubtask, createWithSubtasks, existingToLink, parentChoices, partialMessage, subtasksToCreate, toNewTask, type AddDraft } from './addTask.ts';
 import type { Api } from './api.ts';
 import type { Preset } from './presets.ts';
 import type { StartLists } from './models.ts';
@@ -18,7 +18,7 @@ import { openDetail, type DetailHandle, type DetailModel, type SessionView, type
 import { attachDrag } from './ui/dnd.ts';
 import { canLinkUnder, followingMove, linkChoices, linkConfirm, unlinkConfirm } from './link.ts';
 import { deleteConfirm } from './taskDelete.ts';
-import { editChanges, editableText, type EditText } from './taskEdit.ts';
+import { editChanges, editConflict, editableText, type EditText } from './taskEdit.ts';
 
 export type EditorDeps = {
   host: HostClient;
@@ -26,7 +26,7 @@ export type EditorDeps = {
   /** Null when no board is shown (no project, wizard, notice). */
   api: () => Api | null;
   tasks: () => Task[];
-  tracker: () => 'local' | 'github';
+  tracker: () => TrackerKind;
   labels: () => Record<string, string>;
   /** Where a listed task is drawn now; null when hidden (e.g. "Hide sub-tasks"). */
   columnOf: (id: string) => Column | null;
@@ -58,6 +58,8 @@ export type EditorDeps = {
     reorder: (taskId: string, column: Column, before: string | null) => void;
     /** A task got a new id (a local link moved it): it keeps its place. */
     rename: (from: string, to: string) => void;
+    /** Tasks were deleted: their places go. */
+    forget: (taskIds: readonly string[]) => void;
   };
   /** "Archive done" (archive.ts): whether a task is archived, and the modal's "Unarchive". */
   archive: { has: (task: Task) => boolean; unarchive: (taskId: string) => void };
@@ -250,22 +252,37 @@ export const createEditor = (deps: EditorDeps) => {
     else detail.handle.update(detailModel(task));
   };
 
-  const run = async (id: string, action: (api: Api) => Promise<unknown>): Promise<void> => {
-    const api = deps.api();
-    if (api === null || moving.has(id)) return;
+  /**
+   * Every write of the panel: marks `id` busy (drawn so, further drags ignored) while `action` runs,
+   * then reloads the board; `after` runs once the reload is done. The caller checks `moving` first.
+   */
+  const busyWhile = async <T>(id: string, action: () => Promise<T>, after?: () => void): Promise<T> => {
     moving.add(id);
     deps.redraw();
     refreshDetail();
     try {
-      await action(api);
-    } catch (e) {
-      fail(errorText(e));
+      return await action();
     } finally {
       moving.delete(id);
       await deps.reload();
+      after?.();
       refreshDetail();
     }
   };
+
+  /** A write whose failure is a toast. */
+  const run = async (id: string, action: (api: Api) => Promise<unknown>): Promise<void> => {
+    const api = deps.api();
+    if (api === null || moving.has(id)) return;
+    await busyWhile(id, () => action(api).then(() => undefined, (e: unknown) => fail(errorText(e))));
+  };
+
+  /** A write whose failure comes back as text for the caller to show (null: done). */
+  const attempt = (action: () => Promise<unknown>): Promise<string | null> =>
+    action().then(
+      () => null,
+      (e: unknown) => errorText(e),
+    );
 
   /**
    * The api's setParent as every link of the panel uses it: a task that comes back with a new id
@@ -310,20 +327,9 @@ export const createEditor = (deps: EditorDeps) => {
     const api = deps.api();
     if (api === null) return 'No project is open.';
     if (moving.has(childId)) return null;
-    moving.add(childId);
-    deps.redraw();
-    refreshDetail();
-    try {
-      await action(api);
-      return null;
-    } catch (e) {
-      return errorText(e);
-    } finally {
-      moving.delete(childId);
-      await deps.reload();
+    return busyWhile(childId, () => attempt(() => action(api)), () => {
       followed = null;
-      refreshDetail();
-    }
+    });
   };
 
   /** The open modal shows `from`, which now is `to`: it follows (its card options too). */
@@ -395,30 +401,29 @@ export const createEditor = (deps: EditorDeps) => {
     if (error !== null) fail(error);
   };
 
-  /** The modal's Edit form: saves only what changed. Resolves to null, or the error for the form to show. */
+  /**
+   * The modal's Edit form: saves only what changed, and only when what it changes is still what the
+   * form opened with (taskEdit.ts editConflict), so an agent's edit meanwhile is not overwritten.
+   * Resolves to null (the form closes), or the error for the form to show (it stays open with the draft).
+   */
   const editTask = async (id: string, from: EditText, draft: EditText): Promise<string | null> => {
     const api = deps.api();
     if (api === null) return 'No project is open.';
     const result = editChanges(from, draft);
     if ('error' in result) return result.error;
-    if (result.changes === null || moving.has(id)) return null;
+    if (result.changes === null) return null;
+    if (moving.has(id)) return 'The task is being changed right now; save again in a moment.';
     const changes = result.changes;
-    moving.add(id);
-    deps.redraw();
-    refreshDetail();
-    try {
-      await api.edit(id, changes);
-      return null;
-    } catch (e) {
-      return errorText(e);
-    } finally {
-      moving.delete(id);
-      await deps.reload();
-      refreshDetail();
-    }
+    return busyWhile(id, () =>
+      attempt(async () => {
+        const conflict = editConflict(deps.tracker(), await api.get(id), from, changes);
+        if (conflict !== null) throw new Error(conflict);
+        await api.edit(id, changes);
+      }),
+    );
   };
 
-  /** The modal's Delete: confirm, delete, then drop the stored start options of every deleted task. */
+  /** The modal's Delete: confirm, delete, then drop the place in the card order and the stored start options of every deleted task. */
   const deleteTask = async (id: string): Promise<void> => {
     const task = find(id);
     const api = deps.api();
@@ -432,6 +437,7 @@ export const createEditor = (deps: EditorDeps) => {
     });
     if (deleted.length === 0) return; // failed: run showed the error
     info(deleted.length === 1 ? `Deleted ${deleted[0]}` : `Deleted ${deleted.length} tasks`);
+    deps.order.forget(deleted);
     const ctx = deps.start.context();
     if (ctx !== null) {
       for (const d of deleted) await deps.start.forget(ctx.projectId, d).catch((e: unknown) => fail(`Could not drop the start options of ${d}: ${errorText(e)}`));

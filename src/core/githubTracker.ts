@@ -303,6 +303,28 @@ export const createGithubTracker = (root: string, exec: Exec, labels: ProjectCon
     return get(idOf(issue.number));
   };
 
+  /**
+   * `n` and every issue under it, closed ones too (subIssues lists both), deepest first, so a
+   * delete never leaves a sub-issue whose parent is gone. Read before anything is deleted: an issue
+   * with more sub-issues than one page shows is refused rather than half deleted.
+   */
+  const subtree = async (n: number, rel: Relations): Promise<number[]> => {
+    const out: number[] = [];
+    const seen = new Set<number>([n]);
+    const walk = async (at: number, r: Relations): Promise<void> => {
+      if (r.childCount > r.children.length) {
+        throw new TrackerError('INVALID', `${idOf(at)} has ${r.childCount} sub-issues, more than can be deleted at once; delete some of them first`);
+      }
+      const fresh = r.children.map((c) => c.number).filter((c) => !seen.has(c));
+      for (const c of fresh) seen.add(c);
+      const found = fresh.length === 0 ? new Map<number, GraphIssue | null>() : await graph(fresh, false);
+      for (const c of fresh) await walk(c, relationsOf(found.get(c) ?? null));
+      out.push(at);
+    };
+    await walk(n, rel);
+    return out;
+  };
+
   return {
     preflight: ready,
     setupLabels: () => ensureLabels([...stateLabels, ...CATEGORIES]),
@@ -408,7 +430,7 @@ export const createGithubTracker = (root: string, exec: Exec, labels: ProjectCon
 
     async remove(id, opts) {
       const { issue, rel } = await load(parseNumber(id));
-      const numbers = [...(opts.withChildren ? rel.children.map((c) => c.number) : []), issue.number];
+      const numbers = opts.withChildren ? await subtree(issue.number, rel) : [issue.number];
       const deleted: string[] = [];
       for (const n of numbers) {
         const args = ['issue', 'delete', String(n), '--yes'];
@@ -429,6 +451,7 @@ export const createGithubTracker = (root: string, exec: Exec, labels: ProjectCon
 
     async removeParent(id) {
       const n = parseNumber(id);
+      // Only the relations are needed (like setParent): graph() without the issue fields, not load().
       const found = (await graph([n], false)).get(n) ?? null;
       if (found === null) throw new TrackerError('NOT_FOUND', `Issue not found: ${idOf(n)}`);
       if (relationsOf(found).parent === null) throw new TrackerError('INVALID', `${idOf(n)} has no parent issue to remove`);

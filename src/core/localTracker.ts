@@ -316,6 +316,11 @@ export const createLocalTracker = (root: string): Tracker => {
     }
   };
 
+  const unlinkIfThere = (path: string): Promise<void> =>
+    unlink(path).catch((e: unknown) => {
+      if (!isNotFound(e)) throw e;
+    });
+
   /**
    * Moves a ticket of another feature, or a feature with no tickets, into `parentId`'s feature as its
    * next ticket. Its blocker numbers pointed at its old feature's tickets, so they are dropped.
@@ -341,9 +346,7 @@ export const createLocalTracker = (root: string): Tracker => {
     // A synthesized parent (no spec.md) has no text yet.
     const text = task.body === '' ? `# ${task.title}\n` : task.body;
     const newId = await writeNextTicket(to.feature, task.title, patchLine(text, 'Blocked by', blockersValue([])));
-    await unlink(abs(task.id)).catch((e: unknown) => {
-      if (!isNotFound(e)) throw e;
-    });
+    await unlinkIfThere(abs(task.id));
     if (ref.kind === 'ticket') {
       await dropBlocker(ref.feature, fileNumber(ref.file!));
     } else {
@@ -352,11 +355,6 @@ export const createLocalTracker = (root: string): Tracker => {
     }
     return get(newId);
   };
-
-  const unlinkIfThere = (path: string): Promise<void> =>
-    unlink(path).catch((e: unknown) => {
-      if (!isNotFound(e)) throw e;
-    });
 
   /**
    * A ticket: its file goes and its feature's tickets that listed it lose that blocker. A feature:
@@ -404,11 +402,12 @@ export const createLocalTracker = (root: string): Tracker => {
     let text = specFromIssue(task.body, task.title);
     if (task.claimed) text = patchLine(text, 'Status', 'ready-for-agent');
     const feature = await newFeature(task.title);
+    // The new spec.md is written before the ticket goes: a failure in between leaves the task twice
+    // (one copy to delete), never lost. setParent moves files in the same order.
     await writeFile(abs(specId(feature)), text, { flag: 'wx' });
-    await unlink(abs(task.id)).catch((e: unknown) => {
-      if (!isNotFound(e)) throw e;
-    });
+    await unlinkIfThere(abs(task.id));
     await dropBlocker(ref.feature, fileNumber(ref.file!));
+    await removeIfEmpty(issuesDir(ref.feature));
     return get(specId(feature));
   };
 

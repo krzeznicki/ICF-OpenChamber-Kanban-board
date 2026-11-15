@@ -11,9 +11,9 @@ import { connectHost } from '@openchamber/sdk';
 import type { GuestProject, GuestSessionRecord, HostReadyContext } from '@openchamber/sdk';
 import { applyHostReady } from '@openchamber/sdk/ui';
 import type { Task } from '../core/types.ts';
-import { archivableIds, archivedShown, archiveTasks, archiveWriteJob, createArchiveSync, createPendingMarks, isArchived, mergeArchived, reconcileArchived, unarchiveTask } from './archive.ts';
+import { archivableIds, archivedShown, archiveTasks, archiveWriteJob, createStorageSync, createPendingMarks, isArchived, mergeArchived, reconcileArchived, unarchiveTask } from './archive.ts';
 import { ApiError, createApi, type Api, type ConfigResult, type ProjectConfig } from './api.ts';
-import { applyOrder, pruneOrder, renameInOrder, reorder } from './order.ts';
+import { applyOrder, forgetInOrder, pruneOrder, renameInOrder, reorder } from './order.ts';
 import { groupTasks, pruneArchived, resolveSession, sessionForTask, sessionTarget, type Column, type SessionLookup } from './columns.ts';
 import { createEditor, type Editor } from './edit.ts';
 import { EMPTY_SETS, listPresets, type Preset, type StoredSets } from './presets.ts';
@@ -127,12 +127,12 @@ const detached = (): Map<string, number> => (state.detachedFor === state.project
 const archived = (): Set<string> => (state.archivedFor === state.projectId ? state.archived : new Set());
 /** The shown project's archived done tasks (empty while another project's are loaded). */
 const archivedTasks = (): Map<string, number> => (state.archivedTasksFor === state.projectId ? state.archivedTasks : new Map());
-/** Whether a load may take the stored archive marks over memory (archive.ts createArchiveSync). */
-const archiveSync = createArchiveSync();
+/** Whether a load may take the stored archive marks over memory (archive.ts createStorageSync). */
+const archiveSync = createStorageSync();
 /** The shown project's manual card order (empty while another project's is loaded). */
 const order = (): string[] => (state.orderFor === state.projectId ? state.order : []);
 /** The same rule for the card order: a load takes storage only when every reorder of this frame is written. */
-const orderSync = createArchiveSync();
+const orderSync = createStorageSync();
 /**
  * Per project, task id -> when this frame unarchived it: a merge with storage does not bring those
  * marks back. Kept across project switches (a write of the old project may still be queued).
@@ -485,9 +485,14 @@ const load = async (): Promise<void> => {
     state.archivedTasksFor = p.id;
     if (fixed.changed) writeArchivedTasks(p.id, fixed.marks, tasks);
     // The stored order (the other frame may have reordered) unless this frame's own is still unwritten.
+    // Ids the tracker no longer lists (deleted elsewhere, long done) are pruned and that written back,
+    // but only when nothing changed the order since the load began: a task moved meanwhile (new id)
+    // may be missing from this list yet.
     if (ranked !== null && (orderSync.trusts(orderToken) || state.orderFor !== p.id)) {
-      state.order = ranked;
+      const pruned = pruneOrder(ranked, tasks);
+      state.order = pruned;
       state.orderFor = p.id;
+      if (pruned.length !== ranked.length && orderSync.trusts(orderToken)) setOrder(p.id, pruned);
     }
     state.config = result.config;
     state.tasks = tasks;
@@ -692,6 +697,12 @@ const reorderCard = (taskId: string, column: Column, before: string | null): voi
   draw();
 };
 
+/** Tasks were deleted: their places go. */
+const forgetOrdered = (ids: readonly string[]): void => {
+  const id = state.projectId;
+  if (id !== null && ids.some((d) => order().includes(d))) setOrder(id, forgetInOrder(order(), ids));
+};
+
 /** A local link moved a task's file: its place follows the new id. */
 const renameOrdered = (from: string, to: string): void => {
   const id = state.projectId;
@@ -876,7 +887,7 @@ const start = (ctx: HostReadyContext): void => {
     },
     sections: { get: () => sections, save: saveSections },
     archive: { has: (task) => isArchived(task, archivedTasks()), unarchive },
-    order: { reorder: reorderCard, rename: renameOrdered },
+    order: { reorder: reorderCard, rename: renameOrdered, forget: forgetOrdered },
     baseTypes: () => settings().types,
     start: {
       context: startContext,

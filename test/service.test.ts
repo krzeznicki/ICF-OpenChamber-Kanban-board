@@ -384,3 +384,22 @@ test('POST /tasks/delete deletes a feature with its tickets and drops their sess
   assert.deepEqual(queue.queue.map((e) => e.taskId), [keep.id]);
   assert.equal((await handle('POST', '/tasks/delete', { directory, id: keep.id, withChildren: 'yes' }, d)).status, 400);
 });
+
+test('POST /tasks/delete: a failing session-link cleanup is logged and the queue entry still goes', async (t) => {
+  const directory = await local(t);
+  const files = await tmp(t);
+  // A folder where the links file should be: reading it fails.
+  const linksFile = join(files, 'links.json');
+  await mkdir(linksFile);
+  const logged: string[] = [];
+  const d = { exec: noExec, linksFile, queueFile: join(files, 'queue.json'), log: (m: string) => logged.push(m) };
+  const task = ((await handle('POST', '/tasks/create', { directory, input: { title: 'Feature' } }, d)).json as { task: Task }).task;
+  const entry = { taskId: task.id, title: 't', prompt: 'p', location: 'project' };
+  assert.equal((await handle('POST', '/queue/add', { directory, entry }, d)).status, 200);
+  const r = await handle('POST', '/tasks/delete', { directory, id: task.id }, d);
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  const queue = (await handle('POST', '/queue/list', { directory }, d)).json as { queue: { taskId: string }[] };
+  assert.deepEqual(queue.queue, []);
+  assert.equal(logged.length, 1);
+  assert.match(logged[0]!, /session links/);
+});

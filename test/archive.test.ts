@@ -8,7 +8,7 @@ import {
   archivedShown,
   archiveWriteJob,
   createPendingMarks,
-  createArchiveSync,
+  createStorageSync,
   isArchived,
   mergeArchived,
   parseArchivedTasks,
@@ -148,7 +148,7 @@ test('mergeArchived: newest archivedAt per id; a local unarchive drops older sto
 });
 
 test('archive sync: storage is trusted only when every local change was written', () => {
-  const sync = createArchiveSync();
+  const sync = createStorageSync();
   assert.equal(sync.trusts(sync.loadToken()), true);
   const n = sync.edit();
   const token = sync.loadToken();
@@ -161,7 +161,7 @@ test('archive sync: storage is trusted only when every local change was written'
 });
 
 test('archive sync: a waiting write replaced by a newer one (createLatestSaver) still lets storage be trusted', async () => {
-  const sync = createArchiveSync();
+  const sync = createStorageSync();
   const writes: number[] = [];
   let release: () => void = () => {};
   const gate = new Promise<void>((r) => (release = r));
@@ -184,7 +184,7 @@ test('archive sync: a waiting write replaced by a newer one (createLatestSaver) 
 });
 
 test('archive sync: a failed write does not count as written (memory is kept)', async () => {
-  const sync = createArchiveSync();
+  const sync = createStorageSync();
   const saver = createLatestSaver<() => Promise<void>>((_k, run) => run(), () => {});
   const n = sync.edit();
   // As in main.ts: written only after the store's write resolved.
@@ -250,7 +250,7 @@ test("pending marks: a replacing snapshot that lacks a waiting job's marks still
   });
   const tasks = [task('a', 'done'), task('b', 'done'), task('u', 'done')];
   const io = { load: () => store.loadArchivedTasks('p1'), save: (m: ReadonlyMap<string, number>) => store.saveArchivedTasks('p1', m) };
-  const sync = createArchiveSync();
+  const sync = createStorageSync();
   const pending = createPendingMarks();
   const saver = createLatestSaver<() => Promise<void>>((_k, run) => run(), () => {});
   const queue = (marks: Map<string, number>, removed: Map<string, number>, wait?: Promise<void>) => {

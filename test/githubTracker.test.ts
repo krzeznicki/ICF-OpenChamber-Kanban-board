@@ -313,6 +313,20 @@ test('remove deletes with gh issue delete --yes; withChildren deletes the sub-is
   assert.deepEqual((await tracker.list()).map((t) => t.id), ['#5', '#6']);
 });
 
+test('remove withChildren deletes the whole subtree, closed sub-issues too, deepest first', async () => {
+  const { tracker, gh } = setup([
+    { number: 1, title: 'Epic' },
+    { number: 2, title: 'Feature', parent: 1 },
+    { number: 3, title: 'Grandchild', parent: 2 },
+    { number: 4, title: 'Closed grandchild', parent: 2, state: 'CLOSED', closedAt: ago(1) },
+    { number: 5, title: 'Closed child', parent: 1, state: 'CLOSED', closedAt: ago(1) },
+    { number: 6, title: 'Other' },
+  ]);
+  assert.deepEqual(await tracker.remove('#1', { withChildren: true }), ['#3', '#4', '#2', '#5', '#1']);
+  assert.deepEqual(gh.commands(), [3, 4, 2, 5, 1].map((n) => `gh issue delete ${n} --yes`));
+  assert.deepEqual((await tracker.list()).map((t) => t.id), ['#6']);
+});
+
 test('remove without withChildren keeps the sub-issues as top-level issues', async () => {
   const { tracker } = setup();
   assert.deepEqual(await tracker.remove('#1', { withChildren: false }), ['#1']);
