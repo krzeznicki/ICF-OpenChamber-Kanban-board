@@ -16,7 +16,7 @@ import type { Board } from './ui/board.ts';
 import { askChoice } from './ui/confirm.ts';
 import { openDetail, type DetailHandle, type DetailModel, type SessionView, type SummaryModel } from './ui/detail.ts';
 import { attachDrag } from './ui/dnd.ts';
-import { canLinkUnder, linkChoices, linkConfirm } from './link.ts';
+import { canLinkUnder, followingSetParent, linkChoices, linkConfirm } from './link.ts';
 
 export type EditorDeps = {
   host: HostClient;
@@ -62,6 +62,8 @@ export type EditorDeps = {
     context: () => { projectId: string; settings: Settings; presets: Preset[] } | null;
     load: (projectId: string, taskId: string) => Promise<CardOptions>;
     save: (projectId: string, taskId: string, card: CardOptions) => void;
+    /** A task got a new id (a local link moved it): its stored options go under that id, the old key is deleted. */
+    move: (projectId: string, from: string, to: string) => Promise<void>;
   };
   /** The personal summary in the task modal (summaries.ts). */
   summary: {
@@ -254,11 +256,26 @@ export const createEditor = (deps: EditorDeps) => {
   };
 
   /**
-   * Links `childId` under `parentId` (api.setParent). A local link moves the file, so the task
-   * comes back with a new id: the open modal and its start options follow it (the service re-keys
-   * the session links and queue entry). Resolves to null, or the service's error for the modal.
+   * The api's setParent as every link of the panel uses it: a task that comes back with a new id
+   * (local: its file moved) is followed by the open modal, and its stored start options move to
+   * that id (the service re-keys its session links and queue entry).
    */
-  const linkFromDetail = async (childId: string, parentId: string): Promise<string | null> => {
+  const setParentOf = (api: Api) =>
+    followingSetParent(
+      api.setParent,
+      async (from, to) => {
+        follow(from, to);
+        const ctx = deps.start.context();
+        if (ctx !== null) await deps.start.move(ctx.projectId, from, to);
+      },
+      (from, to, e) => fail(`${from} is now ${to}, but its start options could not follow: ${errorText(e)}`),
+    );
+
+  /**
+   * Links `childId` under `parentId`: the modal's Parent picker and "Link existing task", and a
+   * card dropped onto a card. Resolves to null, or the service's error for the caller to show.
+   */
+  const linkTask = async (childId: string, parentId: string): Promise<string | null> => {
     const api = deps.api();
     if (api === null) return 'No project is open.';
     if (moving.has(childId)) return null;
@@ -266,8 +283,7 @@ export const createEditor = (deps: EditorDeps) => {
     deps.redraw();
     refreshDetail();
     try {
-      const moved = await api.setParent(childId, parentId);
-      if (moved.id !== childId) follow(childId, moved.id);
+      const moved = await setParentOf(api)(childId, parentId);
       info(moved.id !== childId ? `Linked ${childId} under ${parentId}; it is now ${moved.id}` : `Linked ${childId} under ${parentId}`);
       return null;
     } catch (e) {
@@ -280,17 +296,13 @@ export const createEditor = (deps: EditorDeps) => {
     }
   };
 
-  /** The open modal shows `from`, which now is `to`. */
+  /** The open modal shows `from`, which now is `to`: it follows (its card options too). */
   const follow = (from: string, to: string): void => {
     if (detail === null || detail.id !== from) return;
     detail.id = to;
     followed = to;
     detail.onFollow(to);
-    if (card !== null && card.taskId === from) {
-      // The panel's own start options for the card: saved under the new id too.
-      if (Object.values(card.options).some((v) => v !== undefined)) deps.start.save(card.projectId, to, card.options);
-      card.taskId = to;
-    }
+    if (card !== null && card.taskId === from) card.taskId = to;
   };
 
   const close = async (task: Task, askChildren: boolean): Promise<void> => {
@@ -342,14 +354,15 @@ export const createEditor = (deps: EditorDeps) => {
     apply(task, from, planMove(task, from, to, openChildren(task, deps.tasks())));
   };
 
-  /** A card dropped onto an accepting card: confirm, then link it under that card (run reloads; a failure is a toast). */
+  /** A card dropped onto an accepting card: confirm, then link it under that card (a failure is a toast). */
   const link = async (id: string, parentId: string): Promise<void> => {
     const child = find(id);
     const parent = find(parentId);
     if (child === null || parent === null || moving.has(id)) return;
     const { title, body } = linkConfirm(deps.tracker(), child, parent);
     if ((await askChoice(title, body, [{ id: 'link', label: 'Make sub-task' }])) !== 'link') return;
-    await run(id, (api) => api.setParent(id, parentId));
+    const error = await linkTask(id, parentId);
+    if (error !== null) fail(error);
   };
 
   const closeDetail = (): void => {
@@ -383,8 +396,8 @@ export const createEditor = (deps: EditorDeps) => {
         refreshDetail();
         return null;
       },
-      onSetParent: (parentId) => linkFromDetail(id, parentId),
-      onLinkChild: (childId) => linkFromDetail(childId, id),
+      onSetParent: (parentId) => linkTask(id, parentId),
+      onLinkChild: (childId) => linkTask(childId, id),
       onSections: deps.sections.save,
       onUnarchive: () => {
         deps.archive.unarchive(id);
@@ -433,7 +446,7 @@ export const createEditor = (deps: EditorDeps) => {
     const ctx = deps.start.context();
     const tracker = deps.tracker();
     const subtasks = subtasksToCreate(draft, tracker);
-    const existing = existingToLink(draft, tracker).map((id) => ({ id, label: find(id)?.title ?? id }));
+    const existing = existingToLink(draft, tracker, deps.tasks()).map((id) => ({ id, label: find(id)?.title ?? id }));
     /** Never throws: the task exists by now, so a storage hiccup is a toast, not "could not create". */
     const saveStart = (taskId: string): void => {
       if (ctx === null || Object.keys(draft.start).length === 0) return;
@@ -459,7 +472,7 @@ export const createEditor = (deps: EditorDeps) => {
         },
         toNewTask(draft, tracker),
         subtasks,
-        { existing, setParent: api.setParent },
+        { existing, setParent: setParentOf(api) },
       );
     } catch (e) {
       return { kind: 'error', message: errorText(e) };

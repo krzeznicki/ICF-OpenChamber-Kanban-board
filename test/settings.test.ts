@@ -284,6 +284,18 @@ test('store round-trips layers; empty layers delete their key', async () => {
   assert.equal(data.has('settings:project:p1'), false);
 });
 
+test('moveCard: a task that got a new id keeps its start options under it; the old key is deleted', async () => {
+  const { data, storage } = fakeStorage();
+  const store = createSettingsStore(storage);
+  await store.saveCard('p1', '.scratch/a/issues/01-x.md', { presetId: 'plan' });
+  await store.moveCard('p1', '.scratch/a/issues/01-x.md', '.scratch/b/issues/03-x.md');
+  assert.equal(data.has('card:p1:.scratch/a/issues/01-x.md'), false);
+  assert.deepEqual(data.get('card:p1:.scratch/b/issues/03-x.md'), { presetId: 'plan' });
+  // Nothing stored: nothing written under the new id.
+  await store.moveCard('p1', '#1', '#2');
+  assert.equal(data.has('card:p1:#2'), false);
+});
+
 test('latest saver: one save per key at a time, the newest waiting value next', async () => {
   const saved: string[] = [];
   const errors: unknown[] = [];

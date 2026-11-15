@@ -836,6 +836,11 @@ const start = (ctx: HostReadyContext): void => {
       context: startContext,
       load: (projectId, taskId) => store.loadCard(projectId, taskId),
       save: (projectId, taskId, card) => saver.save(`card:${projectId}:${taskId}`, () => store.saveCard(projectId, taskId, card)),
+      // After any pending save of the old key, so the options moved are the newest.
+      move: async (projectId, from, to) => {
+        await saver.idle();
+        await store.moveCard(projectId, from, to);
+      },
     },
     summary: {
       model: (task) =>

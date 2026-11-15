@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Task } from '../src/core/types.ts';
-import { canLinkUnder, canLinkUnderNew, childCandidates, linkChoices, linkConfirm, newChildCandidates, parentTargets } from '../src/panel/link.ts';
+import { canLinkUnder, canLinkUnderNew, childCandidates, followingSetParent, linkChoices, linkConfirm, newChildCandidates, parentTargets } from '../src/panel/link.ts';
 
 const task = (id: string, over: Partial<Task> = {}): Task => ({
   id,
@@ -153,4 +153,39 @@ test('the link confirm names both tasks; locally it warns about the new id and d
   assert.doesNotMatch(gh.body, /new id|blockers/);
   assert.match(gh.body, /#2/);
   assert.match(gh.body, /#1/);
+});
+
+test('followingSetParent: a task that came back with a new id is reported once; a kept id is not', async () => {
+  const moved: string[][] = [];
+  const setParent = followingSetParent(
+    async (id, parentId) => task(id === 'old' ? 'new' : id, { parentId }),
+    async (from, to) => void moved.push([from, to]),
+    () => assert.fail('no error expected'),
+  );
+  assert.equal((await setParent('old', 'P')).id, 'new');
+  assert.equal((await setParent('#4', '#5')).id, '#4');
+  assert.deepEqual(moved, [['old', 'new']]);
+});
+
+test('followingSetParent: a failing follow-up is reported, the link still resolves; a failing link rejects without a follow-up', async () => {
+  const errors: string[] = [];
+  const ok = followingSetParent(
+    async (id) => task(`${id}-moved`),
+    async () => {
+      throw new Error('storage full');
+    },
+    (from, to, e) => void errors.push(`${from}->${to}: ${(e as Error).message}`),
+  );
+  assert.equal((await ok('a', 'P')).id, 'a-moved');
+  assert.deepEqual(errors, ['a->a-moved: storage full']);
+  let followed = false;
+  const bad = followingSetParent(
+    async () => {
+      throw new Error('INVALID');
+    },
+    async () => void (followed = true),
+    () => {},
+  );
+  await assert.rejects(bad('a', 'P'), /INVALID/);
+  assert.equal(followed, false);
 });

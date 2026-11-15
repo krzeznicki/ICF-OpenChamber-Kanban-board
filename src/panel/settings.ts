@@ -363,6 +363,13 @@ export const createSettingsStore = (storage: SettingsStorage) => {
       const clean = parseCardOptions(card);
       return put(STORAGE_KEYS.card(projectId, taskId), clean, Object.keys(clean).length === 0);
     },
+    /** The task got a new id (a local link moved its file): its start options go under that id, the old key is deleted. */
+    moveCard: async (projectId: string, from: string, to: string): Promise<void> => {
+      const clean = parseCardOptions(await storage.get(STORAGE_KEYS.card(projectId, from)));
+      if (Object.keys(clean).length === 0) return;
+      await storage.set(STORAGE_KEYS.card(projectId, to), clean as never);
+      await storage.delete(STORAGE_KEYS.card(projectId, from));
+    },
     loadDetached: async (projectId: string): Promise<Map<string, number>> => parseDetached(await storage.get(STORAGE_KEYS.detached(projectId))),
     saveDetached: (projectId: string, marks: ReadonlyMap<string, number>): Promise<void> =>
       put(STORAGE_KEYS.detached(projectId), Object.fromEntries(marks), marks.size === 0),
