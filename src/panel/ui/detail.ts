@@ -10,7 +10,7 @@
 // It sits on the shell it shares with Add task (ui/modal.ts). Which sections are open is
 // remembered (settings.ts Sections). It draws what it is given and reports choices; the editor
 // (edit.ts) runs them and asks to confirm. The compact row also has a "Parent" picker when the task
-// may move under another parent (link.ts linkChoices).
+// has a parent or may move under one (link.ts linkChoices).
 import { mountBadge, mountBanner, mountButton, mountList, mountSelect, mountSpinner, mountTextField } from '@openchamber/sdk/ui';
 import type { Tone } from '@openchamber/sdk/ui';
 import type { Task, TaskState } from '../../core/types.ts';
@@ -22,12 +22,10 @@ import type { CardOptions, Sections, StartOptions } from '../settings.ts';
 import type { SummaryStatus } from '../summaries.ts';
 import { mountCloseButton } from './closeButton.ts';
 import { renderMarkdown } from './markdownView.ts';
-import { openModalShell } from './modal.ts';
+import { FILTER_OVER, openModalShell } from './modal.ts';
 import { mountStartOptions } from './startOptions.ts';
 
 const NO_TYPE = '';
-/** More choices than this get a search box (as in Add task). */
-const FILTER_OVER = 8;
 
 export const STATES: readonly TaskState[] = ['needs-triage', 'needs-info', 'ready-for-agent', 'ready-for-human', 'wontfix', 'done'];
 
@@ -346,7 +344,8 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
     fields.append(stateSlot, typeSlot);
     quick.append(fields);
     const { parent, parents } = m.links;
-    if (parents.length > 0) {
+    // A set parent is shown even when there is nowhere else to move the task.
+    if (parents.length > 0 || parent !== null) {
       const parentSlot = el('div', 'kb-field');
       fields.append(parentSlot);
       const options = parent !== null && !parents.some((p) => p.id === parent.id) ? [parent, ...parents] : parents;
@@ -357,7 +356,7 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
           placeholder: 'No parent',
           options,
           searchable: options.length > FILTER_OVER,
-          disabled: m.busy,
+          disabled: m.busy || parents.length === 0, // only the current parent: shown, nothing to pick
           onChange: (id) => {
             if (id === task.parentId) return;
             const taskId = task.id;

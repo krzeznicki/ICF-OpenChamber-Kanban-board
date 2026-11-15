@@ -2,6 +2,9 @@
 // role, Escape and a backdrop click to dismiss, and focus kept inside. What was on the page before
 // it (the board) is inert while it is open; layers opened on top later (a confirm) are appended
 // after it and stay usable. Disposing restores the board and the focus it had.
+/** A select or checkbox list with more choices than this gets a search box (task modal and Add task). */
+export const FILTER_OVER = 8;
+
 export type ModalShell = {
   backdrop: HTMLDivElement;
   modal: HTMLDivElement;

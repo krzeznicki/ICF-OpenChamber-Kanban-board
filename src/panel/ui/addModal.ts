@@ -1,10 +1,11 @@
 // "Add task": a modal on the task modal's shell (ui/modal.ts) with every per-task option: title
-// (required), type, parent, state, blocked by, description (markdown), the card's start options and
-// a list of sub-tasks to create under the new task, plus existing tasks to link under it. What may be offered for the chosen tracker and
-// parent comes from addTask.ts; the editor (edit.ts) runs the creates. The service's error shows
-// inside the modal; when the task was created but some sub-tasks were not, the modal says which
-// and offers only Close. With suggestions on, Type and State start on "Let the model pick"
-// (suggest.ts fills those in after the create).
+// (required), type, parent, state, blocked by, description (markdown), the card's start options,
+// a list of sub-tasks to create under the new task and existing tasks to link under it. What may
+// be offered for the chosen tracker and parent comes from addTask.ts; the editor (edit.ts) runs
+// the creates and the links. The service's error shows inside the modal; when the task was created
+// but some sub-tasks were not created or linked, the modal says which and offers only Close. With
+// suggestions on, Type and State start on "Let the model pick" (suggest.ts fills those in after
+// the create).
 import { filterSelectOptions, mountBanner, mountButton, mountCheckbox, mountSearchField, mountSelect, mountTextField } from '@openchamber/sdk/ui';
 import type { Task, TaskKind, TaskState } from '../../core/types.ts';
 import {
@@ -28,7 +29,7 @@ import type { StartLists } from '../models.ts';
 import type { StartOptions } from '../settings.ts';
 import { mountCloseButton } from './closeButton.ts';
 import { askChoice } from './confirm.ts';
-import { openModalShell } from './modal.ts';
+import { FILTER_OVER, openModalShell } from './modal.ts';
 import { mountStartOptions } from './startOptions.ts';
 
 export type AddModalModel = {
@@ -65,8 +66,6 @@ export type AddModalCallbacks = {
 };
 
 const NONE = '';
-/** Over this many blockers a filter field is shown. */
-const FILTER_OVER = 8;
 
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, className: string, text?: string): HTMLElementTagNameMap[K] => {
   const node = document.createElement(tag);
