@@ -92,7 +92,7 @@ Types: `bug` and `enhancement` (a feature), plus your own (`chore` and `research
 
 A click on any card (or Enter on a focused card) opens the task in a modal, in every column; a click never jumps to a session. Reading comes first:
 
-- **Header**: title, id, state and type badges and the × close. **Open session** opens the task's agent session (running, waiting or finished) when it has one that is not archived; **Session archived** says that its only session was archived.
+- **Header**: title, id, state and type badges and the × close. **Open session** opens the task's agent session (running, waiting or finished) when it has one that is not archived; **Session archived** says that its only session was archived; **Session not listed in OpenChamber** that the board knows a session for it that no project lists (it is never opened). While the board is open, the rest of the page is inactive: Tab stays in the modal.
 - **Summary**: the personal summary (see [Summaries](#summaries)), or a **Summarise** button.
 - **Task**: the full body as formatted markdown: headings, lists, task-list checkboxes (read-only), code, quotes, tables, links. Raw HTML in a body is shown as text; only `http` and `https` links are links, opened in your browser; images are not loaded but shown as links.
 - **Sub-tasks** (parents): the children with their states; a click opens that task.
@@ -100,7 +100,7 @@ A click on any card (or Enter on a focused card) opens the task in a modal, in e
 
 Sections fold open and shut; which ones are open is remembered on this device for every task.
 
-The session behind **Open session** is checked before it opens. A session the board knows only from `~/.icf-kanban/links.json` (path B) is looked up in every project's session list first and opens only when it is there and not archived. (In 0.1 a click on a Review or Done card whose session had been archived opened an unrelated session of another project: the link's live status reads `idle` for an archived session too, and OpenChamber was asked to open an id it no longer listed.) Such a card can still sit in Review until it is moved: its link reads as a finished session.
+The session behind **Open session** is checked before it opens. A session the board knows only from `~/.icf-kanban/links.json` (path B) is looked up in every project's session list first and opens only when it is there and not archived. (In 0.1 a click on a Review or Done card whose session had been archived opened an unrelated session of another project: the link's live status reads `idle` for an archived session too, and OpenChamber was asked to open an id it no longer listed.) The board also looks up such finished link-only sessions on its own (once per panel session): one found archived no longer places its card, which leaves Review for the column of its tracker state. Those ids are remembered per project in the extension's storage (`archivedSessions:<projectId>`, only while a link still names them).
 
 ## Parents and orchestration
 

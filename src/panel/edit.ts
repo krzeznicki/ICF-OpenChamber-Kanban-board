@@ -6,7 +6,7 @@ import type { NewTask, Task, TaskState } from '../core/types.ts';
 import type { Api } from './api.ts';
 import type { Preset } from './presets.ts';
 import { resolveStart, type CardOptions, type Sections, type Settings } from './settings.ts';
-import { COLUMNS, type Column, type SessionTarget } from './columns.ts';
+import { COLUMNS, type Column, type SessionLookup, type SessionTarget } from './columns.ts';
 import { openChildren, planMove, taskTypes, type Move } from './moves.ts';
 import { mountAddForm } from './ui/add.ts';
 import type { Board } from './ui/board.ts';
@@ -41,7 +41,7 @@ export type EditorDeps = {
     /** What the task's session allows (columns.ts sessionTarget). */
     target: (task: Task) => SessionTarget;
     /** A session known only from a link, looked up in every project's snapshot (columns.ts resolveSession). */
-    check: (sessionId: string) => Promise<'open' | 'archived' | 'missing'>;
+    check: (sessionId: string) => Promise<SessionLookup>;
     /** Only ever called with an id that is `open` in a host snapshot. */
     open: (sessionId: string) => void;
   };
@@ -74,31 +74,33 @@ export const createEditor = (deps: EditorDeps) => {
   /** The open modal's stored start options; version bumps when they are (re)loaded. */
   let card: { taskId: string; projectId: string; options: CardOptions; version: number } | null = null;
   /** The open modal's lookup of a session known only from a link (SessionTarget `check`). */
-  let lookup: { id: string; result: 'pending' | 'open' | 'archived' | 'missing' } | null = null;
+  let lookup: { id: string; result: SessionLookup; inflight: boolean } | null = null;
 
   const find = (id: string): Task | null => deps.tasks().find((t) => t.id === id) ?? null;
   const info = (message: string): void => void deps.host.toast({ kind: 'info', message }).catch(() => {});
   const fail = (message: string): void => void deps.host.toast({ kind: 'error', message }).catch(() => {});
 
   const runLookup = (id: string): void => {
-    const mine: NonNullable<typeof lookup> = { id, result: 'pending' };
+    const mine: NonNullable<typeof lookup> = { id, result: 'pending', inflight: true };
     lookup = mine;
     deps.session
       .check(id)
       .catch(() => 'missing' as const)
       .then((result) => {
         if (lookup !== mine) return;
+        mine.inflight = false;
         mine.result = result;
-        refreshDetail();
+        // Still pending (a snapshot was loading): keep the spinner; the next refresh asks again.
+        if (result !== 'pending') refreshDetail();
       });
   };
 
   const sessionView = (task: Task): SessionView => {
     const target = deps.session.target(task);
     if (target.kind !== 'check') return target.kind;
-    if (lookup?.id !== target.id) runLookup(target.id);
+    if (lookup?.id !== target.id || (!lookup.inflight && lookup.result === 'pending')) runLookup(target.id);
     const result = lookup?.result ?? 'pending';
-    return result === 'pending' ? 'checking' : result === 'missing' ? 'none' : result;
+    return result === 'pending' ? 'checking' : result;
   };
 
   const openSession = (taskId: string): void => {
@@ -117,8 +119,15 @@ export const createEditor = (deps: EditorDeps) => {
       .catch(() => 'missing' as const)
       .then((result) => {
         if (result === 'open') deps.session.open(id);
-        else info(result === 'archived' ? 'That session was archived.' : 'That session is no longer there.');
-        if (lookup?.id === id) {
+        else
+          info(
+            result === 'archived'
+              ? 'That session was archived.'
+              : result === 'pending'
+                ? 'OpenChamber is still loading its sessions; try again in a moment.'
+                : 'That session is not listed in OpenChamber.',
+          );
+        if (lookup?.id === id && result !== 'pending') {
           lookup.result = result;
           refreshDetail();
         }

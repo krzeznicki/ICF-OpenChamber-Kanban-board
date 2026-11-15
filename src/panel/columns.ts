@@ -45,7 +45,20 @@ export const columnFor = (task: Task, session: SessionInfo | null, queued: boole
  * A session the service knows works on a task: started by the service (path B, no items) or
  * recorded by the panel (path A). `status` is its live state from the service, when known.
  */
-export type SessionLink = { taskId: string; sessionId: string; createdAt?: number; status?: 'idle' | 'busy' | 'waiting' | 'unknown' };
+export type SessionLink = { taskId: string; sessionId: string; createdAt?: number; status?: 'idle' | 'busy' | 'waiting' | 'unknown' | 'archived' };
+
+/**
+ * Links whose session a host lookup found archived (resolveSession) read `archived`: sessions.status
+ * still answers `idle` for them, which would keep their card in Review. Such a link places no card.
+ */
+export const markArchived = <L extends SessionLink>(links: readonly L[], archived: ReadonlySet<string>): L[] =>
+  archived.size === 0 ? [...links] : links.map((l) => (archived.has(l.sessionId) ? { ...l, status: 'archived' as const } : l));
+
+/** The archived marks still worth keeping: those of sessions some link still names. */
+export const pruneArchived = (archived: ReadonlySet<string>, links: readonly SessionLink[]): Set<string> => {
+  const named = new Set(links.map((l) => l.sessionId));
+  return new Set([...archived].filter((id) => named.has(id)));
+};
 
 /** A linked session missing from the snapshot (e.g. in a sibling worktree project), from its live status. */
 const fromLink = (link: SessionLink): SessionInfo | null => {
@@ -117,19 +130,28 @@ export const sessionTarget = (
   const s = sessionForTask(taskId, sessions, links, detachedAt);
   if (s !== null) return sessions.some((r) => r.id === s.id) ? { kind: 'open', id: s.id } : { kind: 'check', id: s.id };
   const linked = new Set(links.filter((l) => l.taskId === taskId).map((l) => l.sessionId));
-  const archived = sessions.some(
-    (r) => r.archivedAt !== null && r.createdAt >= detachedAt && (linked.has(r.id) || r.items.some((item) => item.id === taskId)),
-  );
+  const archived =
+    sessions.some(
+      (r) => r.archivedAt !== null && r.createdAt >= detachedAt && (linked.has(r.id) || r.items.some((item) => item.id === taskId)),
+    ) || links.some((l) => l.taskId === taskId && l.status === 'archived' && (l.createdAt ?? 0) >= detachedAt);
   return archived ? { kind: 'archived' } : { kind: 'none' };
 };
 
-/** A session id looked up in host snapshots (every project's): only `open` may go to host.openSession. */
-export const resolveSession = (sessionId: string, snapshots: readonly (readonly GuestSessionRecord[])[]): 'open' | 'archived' | 'missing' => {
-  for (const list of snapshots) {
-    const r = list.find((s) => s.id === sessionId);
+export type SessionLookup = 'open' | 'archived' | 'missing' | 'pending';
+
+/**
+ * A session id looked up in host snapshots (every project's): only `open` may go to host.openSession.
+ * Not found while a snapshot is still `loading` is `pending` (it may yet appear), not `missing`.
+ */
+export const resolveSession = (
+  sessionId: string,
+  snapshots: readonly { state: 'loading' | 'ready' | 'error'; sessions: readonly GuestSessionRecord[] }[],
+): SessionLookup => {
+  for (const snap of snapshots) {
+    const r = snap.sessions.find((s) => s.id === sessionId);
     if (r !== undefined) return r.archivedAt === null ? 'open' : 'archived';
   }
-  return 'missing';
+  return snapshots.some((snap) => snap.state === 'loading') ? 'pending' : 'missing';
 };
 
 /**

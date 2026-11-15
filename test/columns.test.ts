@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { GuestSessionRecord } from '@openchamber/sdk';
-import { columnFor, groupTasks, ledByOrchestrator, resolveSession, sessionForTask, sessionTarget, type SessionInfo } from '../src/panel/columns.ts';
+import { columnFor, groupTasks, ledByOrchestrator, markArchived, pruneArchived, resolveSession, sessionForTask, sessionTarget, type SessionInfo } from '../src/panel/columns.ts';
 import type { Task, TaskState } from '../src/core/types.ts';
 
 const task = (state: TaskState, id = '.scratch/f/issues/01-a.md'): Task => ({
@@ -346,10 +346,46 @@ test('sessionTarget: a live session wins over an archived one; a detach hides bo
 });
 
 test('resolveSession: found and not archived -> open; archived -> archived; in no snapshot -> missing', () => {
-  const a = [record('x', []), record('arch', [], { archivedAt: 3 })];
-  const b = [record('y', [], { projectId: 'p2' })];
+  const a = { state: 'ready' as const, sessions: [record('x', []), record('arch', [], { archivedAt: 3 })] };
+  const b = { state: 'ready' as const, sessions: [record('y', [], { projectId: 'p2' })] };
   assert.equal(resolveSession('y', [a, b]), 'open');
   assert.equal(resolveSession('arch', [a, b]), 'archived');
   assert.equal(resolveSession('ses_gone', [a, b]), 'missing');
   assert.equal(resolveSession('ses_gone', []), 'missing');
+});
+
+test('resolveSession: not found while a snapshot still loads -> pending (found wins, even while loading)', () => {
+  const loading = { state: 'loading' as const, sessions: [record('y', [])] };
+  const ready = { state: 'ready' as const, sessions: [record('x', [])] };
+  assert.equal(resolveSession('ses_gone', [ready, loading]), 'pending');
+  assert.equal(resolveSession('y', [ready, loading]), 'open');
+  assert.equal(resolveSession('ses_gone', [ready, { state: 'error' as const, sessions: [] }]), 'missing');
+});
+
+test('markArchived: a link whose session was found archived no longer places its card; the modal says archived', () => {
+  const tasks = [t('a', 'ready-for-agent'), t('b', 'needs-triage')];
+  const raw = [
+    { taskId: 'a', sessionId: 'sa', status: 'idle' as const, createdAt: 1 },
+    { taskId: 'b', sessionId: 'sb', status: 'idle' as const, createdAt: 1 },
+  ];
+  assert.deepEqual(ids(groupTasks(tasks, [], new Set(), false, raw).review), ['a', 'b']);
+  const links = markArchived(raw, new Set(['sa', 'sb']));
+  assert.equal(links[0]?.status, 'archived');
+  const board = groupTasks(tasks, [], new Set(), false, links);
+  assert.deepEqual(ids(board.review), []);
+  assert.deepEqual(ids(board.ready), ['a']);
+  assert.deepEqual(ids(board.backlog), ['b']);
+  assert.equal(sessionForTask('a', [], links), null);
+  assert.deepEqual(sessionTarget('a', [], links), { kind: 'archived' });
+  // A newer live link wins over the archived one.
+  const again = [...links, { taskId: 'a', sessionId: 'sa2', status: 'busy' as const, createdAt: 2 }];
+  assert.deepEqual(sessionTarget('a', [], again), { kind: 'check', id: 'sa2' });
+  // Unmarked ids are left alone; the input is not changed.
+  assert.equal(markArchived(raw, new Set(['other']))[0]?.status, 'idle');
+  assert.equal(raw[0]?.status, 'idle');
+});
+
+test('pruneArchived: keeps only ids still named by a link', () => {
+  const links = [{ taskId: 'a', sessionId: 'sa' }];
+  assert.deepEqual([...pruneArchived(new Set(['sa', 'gone']), links)], ['sa']);
 });

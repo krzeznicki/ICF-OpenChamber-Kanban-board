@@ -10,7 +10,7 @@ import type { GuestProject, GuestSessionRecord, HostReadyContext } from '@opench
 import { applyHostReady } from '@openchamber/sdk/ui';
 import type { Task } from '../core/types.ts';
 import { ApiError, createApi, type Api, type ConfigResult, type ProjectConfig } from './api.ts';
-import { groupTasks, resolveSession, sessionForTask, sessionTarget, type Column } from './columns.ts';
+import { groupTasks, pruneArchived, resolveSession, sessionForTask, sessionTarget, type Column, type SessionLookup } from './columns.ts';
 import { createEditor, type Editor } from './edit.ts';
 import { listPresets, parseStoredPresets, type Preset, type StoredPresets } from './presets.ts';
 import {
@@ -64,6 +64,9 @@ type State = {
   /** Cards the user dragged away from their sessions (columns.ts Detached); `detachedFor` is their project. */
   detached: Map<string, number>;
   detachedFor: string | null;
+  /** Session ids of links a host lookup found archived (columns.ts markArchived); `archivedFor` is their project. */
+  archived: Set<string>;
+  archivedFor: string | null;
 };
 
 const state: State = {
@@ -84,6 +87,8 @@ const state: State = {
   presets: parseStoredPresets(undefined),
   detached: new Map(),
   detachedFor: null,
+  archived: new Set(),
+  archivedFor: null,
 };
 
 const store = createSettingsStore(host.storage);
@@ -92,6 +97,8 @@ const info = (message: string): void => void host.toast({ kind: 'info', message 
 
 /** The shown project's detach marks (empty while another project's are loaded). */
 const detached = (): Map<string, number> => (state.detachedFor === state.projectId ? state.detached : new Map());
+/** The shown project's sessions found archived (empty while another project's are loaded). */
+const archived = (): Set<string> => (state.archivedFor === state.projectId ? state.archived : new Set());
 // Every field reports each keystroke; only the newest value per key is written.
 const saver = createLatestSaver<() => Promise<void>>(
   (_key, run) => run(),
@@ -247,6 +254,7 @@ const draw = (): void => {
   // The attention mark: sessions that finished or wait for the user.
   setBadge(model.review.length || null);
   board.render(model, editor.busy, (task) => summaries.get(task));
+  auditLinks();
   if (state.tasks.length === 0) {
     board.setStatus({
       kind: 'empty',
@@ -352,9 +360,10 @@ const load = async (): Promise<void> => {
       return;
     }
     // Links and the start queue come from the service's own files (starter.ts).
-    const [tasks, marks] = await Promise.all([
+    const [tasks, marks, gone] = await Promise.all([
       api.list(),
       store.loadDetached(p.id).catch(() => null),
+      store.loadArchived(p.id).catch(() => null),
       starter.refresh(p.id, p.directory),
     ]);
     if (mine !== generation) return;
@@ -364,6 +373,10 @@ const load = async (): Promise<void> => {
       for (const [taskId, at] of marks) if (at > (merged.get(taskId) ?? 0)) merged.set(taskId, at);
       state.detached = merged;
       state.detachedFor = p.id;
+    }
+    if (gone !== null) {
+      state.archived = new Set([...archived(), ...gone]);
+      state.archivedFor = p.id;
     }
     state.config = result.config;
     state.tasks = tasks;
@@ -396,6 +409,9 @@ const selectProject = async (id: string | null): Promise<void> => {
   state.sessions = [];
   state.detached = new Map();
   state.detachedFor = null;
+  state.archived = new Set();
+  state.archivedFor = null;
+  audited.clear();
   starter.reset();
   state.config = null;
   state.tasks = null;
@@ -505,6 +521,7 @@ const starter = createStarter({
   context: startContext,
   loadCard: (projectId, taskId) => store.loadCard(projectId, taskId),
   detached,
+  archived,
   draw: () => draw(),
   loadModels,
 });
@@ -529,12 +546,47 @@ const detach = async (task: Task, from: Column): Promise<void> => {
  * A session known only from a link: looked up in every project's snapshot, so that
  * host.openSession only ever gets an id the host lists, not archived (columns.ts SessionTarget).
  */
-const checkSession = async (sessionId: string): Promise<'open' | 'archived' | 'missing'> => {
+const checkSessions = async (sessionIds: readonly string[]): Promise<Map<string, SessionLookup>> => {
+  const projectId = state.projectId;
   const lists = await Promise.allSettled(state.projects.map((p) => host.listSessions(p.id)));
-  return resolveSession(
-    sessionId,
-    lists.flatMap((r) => (r.status === 'fulfilled' ? [r.value.sessions] : [])),
-  );
+  const snapshots = lists.flatMap((r) => (r.status === 'fulfilled' ? [r.value] : []));
+  const out = new Map(sessionIds.map((id) => [id, resolveSession(id, snapshots)] as const));
+  const gone = [...out].filter(([, r]) => r === 'archived').map(([id]) => id);
+  if (gone.length > 0 && projectId !== null && projectId === state.projectId) noteArchived(projectId, gone);
+  return out;
+};
+
+const checkSession = async (sessionId: string): Promise<SessionLookup> => (await checkSessions([sessionId])).get(sessionId) ?? 'missing';
+
+/** Sessions found archived: their links stop placing cards (Review -> the tracker state's column); kept per project. */
+const noteArchived = (projectId: string, ids: readonly string[]): void => {
+  const next = pruneArchived(new Set([...archived(), ...ids]), starter.links());
+  state.archived = next;
+  state.archivedFor = projectId;
+  saver.save(STORAGE_KEYS.archivedSessions(projectId), () => store.saveArchived(projectId, next));
+  draw();
+  editor.refresh();
+};
+
+/**
+ * Link-only sessions reading `idle` (finished, or archived: sessions.status cannot tell) are looked
+ * up once per panel session, so a card whose session was archived leaves Review without a click.
+ */
+const audited = new Set<string>();
+const auditLinks = (): void => {
+  const listed = new Set(state.sessions.map((s) => s.id));
+  const ids = starter
+    .links()
+    .filter((l) => l.status === 'idle' && !listed.has(l.sessionId) && !audited.has(l.sessionId))
+    .map((l) => l.sessionId);
+  if (ids.length === 0) return;
+  for (const id of ids) audited.add(id);
+  void checkSessions(ids).then((r) => {
+    // Still loading somewhere: try those again on a later draw.
+    for (const [id, result] of r) if (result === 'pending') audited.delete(id);
+  }, () => {
+    for (const id of ids) audited.delete(id);
+  });
 };
 
 /** Which task modal sections are open; read once at start, saved on every toggle. */

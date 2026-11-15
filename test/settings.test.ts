@@ -371,3 +371,18 @@ test('detail sections: defaults (Settings collapsed), defensive parse, short key
   await s.saveSections({ ...DEFAULT_SECTIONS, task: false });
   assert.deepEqual(await s.loadSections(), { ...DEFAULT_SECTIONS, task: false });
 });
+
+test('archived sessions: parsed defensively, stored per project under archivedSessions:<projectId>', async () => {
+  const { parseArchivedSessions, STORAGE_KEYS: K, createSettingsStore: create } = await import('../src/panel/settings.ts');
+  assert.deepEqual([...parseArchivedSessions(['a', 3, '', 'b', 'a'])], ['a', 'b']);
+  assert.deepEqual([...parseArchivedSessions({ a: 1 })], []);
+  assert.equal(K.archivedSessions('p1'), 'archivedSessions:p1');
+  assert.ok(K.archivedSessions('p'.repeat(300)).length <= 128);
+  const data = new Map<string, unknown>();
+  const store = create({ get: async (k) => data.get(k), set: async (k, v) => void data.set(k, v), delete: async (k) => void data.delete(k) });
+  await store.saveArchived('p1', new Set(['s1']));
+  assert.deepEqual(data.get('archivedSessions:p1'), ['s1']);
+  assert.deepEqual([...(await store.loadArchived('p1'))], ['s1']);
+  await store.saveArchived('p1', new Set());
+  assert.equal(data.has('archivedSessions:p1'), false);
+});

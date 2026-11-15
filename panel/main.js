@@ -2766,6 +2766,11 @@ ${GUEST_UI_LOOK_CSS}`;
     if (task.state === "ready-for-agent" && task.claimed && parentSessionRunning) return "in_progress";
     return task.state === "ready-for-agent" ? "ready" : "backlog";
   };
+  var markArchived = (links, archived2) => archived2.size === 0 ? [...links] : links.map((l) => archived2.has(l.sessionId) ? { ...l, status: "archived" } : l);
+  var pruneArchived = (archived2, links) => {
+    const named = new Set(links.map((l) => l.sessionId));
+    return new Set([...archived2].filter((id) => named.has(id)));
+  };
   var fromLink = (link2) => {
     switch (link2.status) {
       case "busy":
@@ -2801,17 +2806,17 @@ ${GUEST_UI_LOOK_CSS}`;
     const s = sessionForTask(taskId, sessions, links, detachedAt);
     if (s !== null) return sessions.some((r) => r.id === s.id) ? { kind: "open", id: s.id } : { kind: "check", id: s.id };
     const linked = new Set(links.filter((l) => l.taskId === taskId).map((l) => l.sessionId));
-    const archived = sessions.some(
+    const archived2 = sessions.some(
       (r) => r.archivedAt !== null && r.createdAt >= detachedAt && (linked.has(r.id) || r.items.some((item) => item.id === taskId))
-    );
-    return archived ? { kind: "archived" } : { kind: "none" };
+    ) || links.some((l) => l.taskId === taskId && l.status === "archived" && (l.createdAt ?? 0) >= detachedAt);
+    return archived2 ? { kind: "archived" } : { kind: "none" };
   };
   var resolveSession = (sessionId, snapshots) => {
-    for (const list2 of snapshots) {
-      const r = list2.find((s) => s.id === sessionId);
+    for (const snap of snapshots) {
+      const r = snap.sessions.find((s) => s.id === sessionId);
       if (r !== void 0) return r.archivedAt === null ? "open" : "archived";
     }
-    return "missing";
+    return snapshots.some((snap) => snap.state === "loading") ? "pending" : "missing";
   };
   var ledByOrchestrator = (task, sessions, links = [], detached2 = NONE) => task.parentId !== null && task.state !== "done" && isWorking(sessionForTask(task.parentId, sessions, links, detached2.get(task.parentId)));
   var groupTasks = (tasks, sessions, starting, hideSubtasks, links = [], queued = /* @__PURE__ */ new Set(), queueErrors = /* @__PURE__ */ new Map(), detached2 = NONE) => {
@@ -3368,9 +3373,13 @@ ${ref}`,
     card: (projectId, taskId) => fit(`card:${projectId}:${taskId}`),
     /** Per project: task id -> when the user dragged the card away from its session (columns.ts Detached). */
     detached: (projectId) => fit(`detached:${projectId}`),
+    /** Per project: session ids a host lookup found archived (columns.ts markArchived). */
+    archivedSessions: (projectId) => fit(`archivedSessions:${projectId}`),
     /** Which sections of the task modal are open (one entry for every task and project). */
     detailSections: "detail-sections"
   };
+  var ARCHIVED_MAX = 500;
+  var parseArchivedSessions = (raw) => new Set(Array.isArray(raw) ? raw.filter((id) => typeof id === "string" && id !== "").slice(-ARCHIVED_MAX) : []);
   var DEFAULT_SECTIONS = Object.freeze({ summary: true, task: true, subtasks: true, settings: false });
   var parseSections = (raw) => {
     const r = record2(raw);
@@ -3422,6 +3431,8 @@ ${ref}`,
       },
       loadDetached: async (projectId) => parseDetached(await storage.get(STORAGE_KEYS.detached(projectId))),
       saveDetached: (projectId, marks) => put(STORAGE_KEYS.detached(projectId), Object.fromEntries(marks), marks.size === 0),
+      loadArchived: async (projectId) => parseArchivedSessions(await storage.get(STORAGE_KEYS.archivedSessions(projectId))),
+      saveArchived: (projectId, ids) => ids.size === 0 ? storage.delete(STORAGE_KEYS.archivedSessions(projectId)) : storage.set(STORAGE_KEYS.archivedSessions(projectId), [...ids].slice(-ARCHIVED_MAX)),
       loadSections: async () => parseSections(await storage.get(STORAGE_KEYS.detailSections)),
       saveSections: (sections2) => {
         const clean2 = parseSections(sections2);
@@ -9964,6 +9975,7 @@ ${ref}`,
     return node;
   };
   var openDetail = (initial, callbacks, options) => {
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const backdrop = el4("div", "kb-backdrop kb-modal-backdrop");
     const modal = el4("div", "kb-modal");
     modal.setAttribute("role", "dialog");
@@ -9993,6 +10005,8 @@ ${ref}`,
     settingsSec.content.append(settingsTop, startBox);
     modal.append(head, summarySec.box, taskSec.box, subSec.box, settingsSec.box);
     backdrop.append(modal);
+    const inerted = [...document.body.children].filter((n) => n instanceof HTMLElement && !n.inert);
+    for (const n of inerted) n.inert = true;
     document.body.append(backdrop);
     let disposers = [];
     const clear = () => {
@@ -10110,6 +10124,8 @@ ${ref}`,
         disposers.push(mountButton(session, { label: "Open session", variant: "default", size: "sm", onClick: callbacks.onOpenSession }).dispose);
       } else if (m.session === "archived") {
         session.append(el4("span", "kb-muted", "Session archived"));
+      } else if (m.session === "missing") {
+        session.append(el4("span", "kb-muted", "Session not listed in OpenChamber"));
       } else if (m.session === "checking") {
         const spin = el4("span", "kb-inline-spin");
         session.append(spin);
@@ -10242,7 +10258,6 @@ ${ref}`,
       if (e.target === backdrop) callbacks.onDismiss();
     });
     document.addEventListener("keydown", onKey);
-    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     draw2(initial);
     modal.focus();
     return {
@@ -10252,6 +10267,7 @@ ${ref}`,
         clear();
         clearStart();
         backdrop.remove();
+        for (const n of inerted) n.inert = false;
         if (previous?.isConnected) previous.focus();
       }
     };
@@ -10438,20 +10454,21 @@ ${ref}`,
     const fail2 = (message) => void deps.host.toast({ kind: "error", message }).catch(() => {
     });
     const runLookup = (id) => {
-      const mine = { id, result: "pending" };
+      const mine = { id, result: "pending", inflight: true };
       lookup = mine;
       deps.session.check(id).catch(() => "missing").then((result) => {
         if (lookup !== mine) return;
+        mine.inflight = false;
         mine.result = result;
-        refreshDetail();
+        if (result !== "pending") refreshDetail();
       });
     };
     const sessionView = (task) => {
       const target = deps.session.target(task);
       if (target.kind !== "check") return target.kind;
-      if (lookup?.id !== target.id) runLookup(target.id);
+      if (lookup?.id !== target.id || !lookup.inflight && lookup.result === "pending") runLookup(target.id);
       const result = lookup?.result ?? "pending";
-      return result === "pending" ? "checking" : result === "missing" ? "none" : result;
+      return result === "pending" ? "checking" : result;
     };
     const openSession = (taskId) => {
       const task = find(taskId);
@@ -10465,8 +10482,11 @@ ${ref}`,
       const id = target.id;
       void deps.session.check(id).catch(() => "missing").then((result) => {
         if (result === "open") deps.session.open(id);
-        else info2(result === "archived" ? "That session was archived." : "That session is no longer there.");
-        if (lookup?.id === id) {
+        else
+          info2(
+            result === "archived" ? "That session was archived." : result === "pending" ? "OpenChamber is still loading its sessions; try again in a moment." : "That session is not listed in OpenChamber."
+          );
+        if (lookup?.id === id && result !== "pending") {
           lookup.result = result;
           refreshDetail();
         }
@@ -10940,7 +10960,7 @@ ${note}` : note;
     let shown = null;
     const currentId = () => deps.project()?.id ?? null;
     const hasLiveSession = (taskId) => {
-      const s = sessionForTask(taskId, deps.sessions(), links, deps.detached().get(taskId));
+      const s = sessionForTask(taskId, deps.sessions(), markArchived(links, deps.archived()), deps.detached().get(taskId));
       return s !== null && LIVE.has(s.activity);
     };
     let cli = null;
@@ -11145,7 +11165,7 @@ ${note}` : note;
       }
     };
     const onStart = async (task) => {
-      if (ledByOrchestrator(task, deps.sessions(), links, deps.detached())) {
+      if (ledByOrchestrator(task, deps.sessions(), markArchived(links, deps.archived()), deps.detached())) {
         info2("The orchestrator leads this task");
         return;
       }
@@ -11223,7 +11243,8 @@ ${note}` : note;
     };
     return {
       isStarting,
-      links: () => shown === currentId() ? links : [],
+      /** The shown project's links, those of sessions found archived marked `archived`. */
+      links: () => shown === currentId() ? markArchived(links, deps.archived()) : [],
       queuedIds,
       queueErrors,
       hasLiveSession,
@@ -11666,7 +11687,9 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     settingsFor: null,
     presets: parseStoredPresets(void 0),
     detached: /* @__PURE__ */ new Map(),
-    detachedFor: null
+    detachedFor: null,
+    archived: /* @__PURE__ */ new Set(),
+    archivedFor: null
   };
   var store = createSettingsStore(host.storage);
   var fail = (message) => void host.toast({ kind: "error", message }).catch(() => {
@@ -11674,6 +11697,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
   var info = (message) => void host.toast({ kind: "info", message }).catch(() => {
   });
   var detached = () => state.detachedFor === state.projectId ? state.detached : /* @__PURE__ */ new Map();
+  var archived = () => state.archivedFor === state.projectId ? state.archived : /* @__PURE__ */ new Set();
   var saver = createLatestSaver(
     (_key, run) => run(),
     (e) => fail(`Could not save settings: ${e instanceof Error ? e.message : String(e)}`)
@@ -11804,6 +11828,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     for (const [column, cards] of Object.entries(model)) for (const c of cards) state.columns.set(c.task.id, column);
     setBadge(model.review.length || null);
     board.render(model, editor.busy, (task) => summaries.get(task));
+    auditLinks();
     if (state.tasks.length === 0) {
       board.setStatus({
         kind: "empty",
@@ -11897,9 +11922,10 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
         showWizard(api, remote);
         return;
       }
-      const [tasks, marks] = await Promise.all([
+      const [tasks, marks, gone] = await Promise.all([
         api.list(),
         store.loadDetached(p.id).catch(() => null),
+        store.loadArchived(p.id).catch(() => null),
         starter.refresh(p.id, p.directory)
       ]);
       if (mine !== generation) return;
@@ -11908,6 +11934,10 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
         for (const [taskId, at] of marks) if (at > (merged.get(taskId) ?? 0)) merged.set(taskId, at);
         state.detached = merged;
         state.detachedFor = p.id;
+      }
+      if (gone !== null) {
+        state.archived = /* @__PURE__ */ new Set([...archived(), ...gone]);
+        state.archivedFor = p.id;
       }
       state.config = result.config;
       state.tasks = tasks;
@@ -11937,6 +11967,9 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     state.sessions = [];
     state.detached = /* @__PURE__ */ new Map();
     state.detachedFor = null;
+    state.archived = /* @__PURE__ */ new Set();
+    state.archivedFor = null;
+    audited.clear();
     starter.reset();
     state.config = null;
     state.tasks = null;
@@ -12020,6 +12053,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     context: startContext,
     loadCard: (projectId, taskId) => store.loadCard(projectId, taskId),
     detached,
+    archived,
     draw: () => draw(),
     loadModels
   });
@@ -12034,12 +12068,35 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     saver.save(STORAGE_KEYS.detached(id), () => store.saveDetached(id, saved));
     info("Moved; the agent session keeps running \u2014 open it from the session list");
   };
-  var checkSession = async (sessionId) => {
+  var checkSessions = async (sessionIds) => {
+    const projectId = state.projectId;
     const lists = await Promise.allSettled(state.projects.map((p) => host.listSessions(p.id)));
-    return resolveSession(
-      sessionId,
-      lists.flatMap((r) => r.status === "fulfilled" ? [r.value.sessions] : [])
-    );
+    const snapshots = lists.flatMap((r) => r.status === "fulfilled" ? [r.value] : []);
+    const out = new Map(sessionIds.map((id) => [id, resolveSession(id, snapshots)]));
+    const gone = [...out].filter(([, r]) => r === "archived").map(([id]) => id);
+    if (gone.length > 0 && projectId !== null && projectId === state.projectId) noteArchived(projectId, gone);
+    return out;
+  };
+  var checkSession = async (sessionId) => (await checkSessions([sessionId])).get(sessionId) ?? "missing";
+  var noteArchived = (projectId, ids) => {
+    const next = pruneArchived(/* @__PURE__ */ new Set([...archived(), ...ids]), starter.links());
+    state.archived = next;
+    state.archivedFor = projectId;
+    saver.save(STORAGE_KEYS.archivedSessions(projectId), () => store.saveArchived(projectId, next));
+    draw();
+    editor.refresh();
+  };
+  var audited = /* @__PURE__ */ new Set();
+  var auditLinks = () => {
+    const listed = new Set(state.sessions.map((s) => s.id));
+    const ids = starter.links().filter((l) => l.status === "idle" && !listed.has(l.sessionId) && !audited.has(l.sessionId)).map((l) => l.sessionId);
+    if (ids.length === 0) return;
+    for (const id of ids) audited.add(id);
+    void checkSessions(ids).then((r) => {
+      for (const [id, result] of r) if (result === "pending") audited.delete(id);
+    }, () => {
+      for (const id of ids) audited.delete(id);
+    });
   };
   var sections = { ...DEFAULT_SECTIONS };
   var saveSections = (next) => {

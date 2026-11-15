@@ -43,10 +43,11 @@ export type DetailModel = {
 };
 
 /**
- * `open`: an "Open session" button; `archived`: muted "Session archived"; `checking`: the session
- * is being looked up; `none`: nothing.
+ * `open`: an "Open session" button; `archived`: muted "Session archived"; `missing`: muted "Session
+ * not listed in OpenChamber" (a linked session no host snapshot lists: never opened); `checking`:
+ * the session is being looked up; `none`: nothing.
  */
-export type SessionView = 'open' | 'archived' | 'checking' | 'none';
+export type SessionView = 'open' | 'archived' | 'missing' | 'checking' | 'none';
 
 export type SummaryModel = {
   /** The summary of the task's current body, or null. */
@@ -102,6 +103,8 @@ const el = <K extends keyof HTMLElementTagNameMap>(tag: K, className: string, te
 };
 
 export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, options: DetailOptions): DetailHandle => {
+  // Taken before the board goes inert (which drops its focus); focused again on close.
+  const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   const backdrop = el('div', 'kb-backdrop kb-modal-backdrop');
   const modal = el('div', 'kb-modal');
   modal.setAttribute('role', 'dialog');
@@ -135,6 +138,10 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
   settingsSec.content.append(settingsTop, startBox);
   modal.append(head, summarySec.box, taskSec.box, subSec.box, settingsSec.box);
   backdrop.append(modal);
+  // Focus stays in the modal: what was on the page before it (the board) is inert while it is open.
+  // Layers opened on top later (a confirm) are appended after it and stay usable.
+  const inerted = [...document.body.children].filter((n): n is HTMLElement => n instanceof HTMLElement && !n.inert);
+  for (const n of inerted) n.inert = true;
   document.body.append(backdrop);
 
   let disposers: Array<() => void> = [];
@@ -259,6 +266,8 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
       disposers.push(mountButton(session, { label: 'Open session', variant: 'default', size: 'sm', onClick: callbacks.onOpenSession }).dispose);
     } else if (m.session === 'archived') {
       session.append(el('span', 'kb-muted', 'Session archived'));
+    } else if (m.session === 'missing') {
+      session.append(el('span', 'kb-muted', 'Session not listed in OpenChamber'));
     } else if (m.session === 'checking') {
       const spin = el('span', 'kb-inline-spin');
       session.append(spin);
@@ -410,7 +419,6 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
   });
   document.addEventListener('keydown', onKey);
 
-  const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   draw(initial);
   modal.focus();
 
@@ -421,6 +429,7 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
       clear();
       clearStart();
       backdrop.remove();
+      for (const n of inerted) n.inert = false;
       if (previous?.isConnected) previous.focus();
     },
   };

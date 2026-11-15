@@ -182,9 +182,18 @@ export const STORAGE_KEYS = {
   card: (projectId: string, taskId: string): string => fit(`card:${projectId}:${taskId}`),
   /** Per project: task id -> when the user dragged the card away from its session (columns.ts Detached). */
   detached: (projectId: string): string => fit(`detached:${projectId}`),
+  /** Per project: session ids a host lookup found archived (columns.ts markArchived). */
+  archivedSessions: (projectId: string): string => fit(`archivedSessions:${projectId}`),
   /** Which sections of the task modal are open (one entry for every task and project). */
   detailSections: 'detail-sections',
 } as const;
+
+/** Archived-session marks kept per project. */
+export const ARCHIVED_MAX = 500;
+
+/** The stored archived-session ids, read defensively: non-empty strings, no duplicates. */
+export const parseArchivedSessions = (raw: unknown): Set<string> =>
+  new Set(Array.isArray(raw) ? raw.filter((id): id is string => typeof id === 'string' && id !== '').slice(-ARCHIVED_MAX) : []);
 
 /** The task modal's collapsible sections: open (true) or collapsed. */
 export type Sections = { summary: boolean; task: boolean; subtasks: boolean; settings: boolean };
@@ -257,6 +266,9 @@ export const createSettingsStore = (storage: SettingsStorage) => {
     loadDetached: async (projectId: string): Promise<Map<string, number>> => parseDetached(await storage.get(STORAGE_KEYS.detached(projectId))),
     saveDetached: (projectId: string, marks: ReadonlyMap<string, number>): Promise<void> =>
       put(STORAGE_KEYS.detached(projectId), Object.fromEntries(marks), marks.size === 0),
+    loadArchived: async (projectId: string): Promise<Set<string>> => parseArchivedSessions(await storage.get(STORAGE_KEYS.archivedSessions(projectId))),
+    saveArchived: (projectId: string, ids: ReadonlySet<string>): Promise<void> =>
+      ids.size === 0 ? storage.delete(STORAGE_KEYS.archivedSessions(projectId)) : storage.set(STORAGE_KEYS.archivedSessions(projectId), [...ids].slice(-ARCHIVED_MAX) as never),
     loadSections: async (): Promise<Sections> => parseSections(await storage.get(STORAGE_KEYS.detailSections)),
     saveSections: (sections: Sections): Promise<void> => {
       const clean = parseSections(sections);
