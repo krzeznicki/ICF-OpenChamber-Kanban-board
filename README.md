@@ -100,7 +100,7 @@ Types: `bug` and `enhancement` (a feature), plus your own (`chore` and `research
 
 **Add task** in the toolbar opens a modal with everything a task can carry:
 
-- **Title** (required), **Type**, **State** (`needs-triage` by default; the open states only) and **Parent** (none, or an open parent). Locally, no parent creates a feature (`.scratch/<feature>/spec.md`); a parent creates a ticket under it.
+- **Title** (required), **Type**, **State** (the open states only) and **Parent** (none, or an open parent). Locally, no parent creates a feature (`.scratch/<feature>/spec.md`); a parent creates a ticket under it.
 - **Blocked by**: tick the tasks it waits for. Locally only open tickets of the chosen feature are offered (the format resolves blockers within a feature), so a new feature takes none; on GitHub any open issue except the chosen parent. A filter appears when the list is long.
 - **Description**: markdown.
 - **Start options**: preset, location, model, thinking, agent and summary language for this card, each showing what it would inherit. They are stored with the card (`card:<projectId>:<taskId>`) as soon as the task exists, as if set in its modal. They appear once the project's settings have loaded.
@@ -109,6 +109,12 @@ Types: `bug` and `enhancement` (a feature), plus your own (`chore` and `research
 The service's error shows inside the modal and nothing is lost. If the task was created but some sub-tasks were not, the modal names the ones that failed (with the reason) and offers only Close; add them later from the task's **Sub-tasks** section. The board reloads once at the end.
 
 Closing a form you have filled in (Escape, a click beside it, × or Cancel) first asks **Discard this task?**; an untouched form closes at once.
+
+### Type and state suggested by your Small Model
+
+**Type** and **State** start on **Let the model pick**. A field left there is filled in by your Small Model (OpenChamber's `host.generate`, `model` permission; extensions cannot reach OpenChamber's decision model): the task is created as `needs-triage` with no type, then the board sends the title and description once, as data, asking for one JSON object `{"type", "state"}`: a type from the board's types and one of `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`. An answer that is anything else (prose around it, another value, an extra key) is ignored whole. Pick a type, **No type** or a state yourself and the model leaves that field alone.
+
+Right before writing, the board reads the task again and only sets a field the task still has as created (no type; `needs-triage`): if you changed it meanwhile (or are moving the card just then), yours stays. Sub-tasks created in the same form stay as created, and tasks made elsewhere (the CLI, agents, GitHub) are never touched. The request shares the summaries' limit (two model requests at a time from the panel) and is not cached. If no Small Model is set, the permission is missing, or the answer is unusable, the fields keep their defaults and one quiet notice per panel session says so; after a missing model the form stops offering **Let the model pick** until the panel reopens. An answer that arrives after the panel was closed is dropped, since the task may have changed by then. **Settings → Global → Suggest type and state for new tasks** (on by default, for every project) turns it off; the form then starts on `enhancement` (when the board has it) and `needs-triage`, as before.
 
 ## The task modal
 
@@ -202,6 +208,7 @@ The first entry of each, **Default (…)**, means "not set here" and names what 
 | Summarise automatically | on |
 | Summary language | Polish |
 | Summary prompt | a built-in prompt (2 to 4 plain sentences); `{language}`, `{title}` and `{body}` are filled in |
+| Suggest type and state for new tasks (Global only) | on |
 
 ## Queue
 
@@ -281,6 +288,7 @@ Not done yet; each needs the extension installed in OpenChamber:
 9. Agent skills: an agent finds the CLI from the instructions and creates, claims and closes a task with the skills.
 10. The task modal: a Review card whose path B session was archived shows **Session archived** and opens nothing; **Open session** on a live path B session in a worktree opens that session.
 11. Archive done: the confirm counts the done tasks; after it Done is empty in both the rail panel and the full-screen page; **Show archived** and **Unarchive** work; reopening an archived task (CLI or GitHub) brings it back without a click.
+12. Type and state suggested: a task added with both on **Let the model pick** gets a type and state from the Small Model a moment later; one with a type picked keeps it; with no Small Model set, one notice and the form stops offering it.
 
 ## Development
 

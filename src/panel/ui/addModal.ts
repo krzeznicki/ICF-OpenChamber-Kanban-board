@@ -3,7 +3,8 @@
 // a list of sub-tasks to create under the new task. What may be offered for the chosen tracker and
 // parent comes from addTask.ts; the editor (edit.ts) runs the creates. The service's error shows
 // inside the modal; when the task was created but some sub-tasks were not, the modal says which
-// and offers only Close.
+// and offers only Close. With suggestions on, Type and State start on "Let the model pick"
+// (suggest.ts fills those in after the create).
 import { filterSelectOptions, mountBanner, mountButton, mountCheckbox, mountSearchField, mountSelect, mountTextField } from '@openchamber/sdk/ui';
 import type { Task, TaskKind, TaskState } from '../../core/types.ts';
 import {
@@ -11,9 +12,11 @@ import {
   blockerChoices,
   canHaveSubtasks,
   draftKind,
+  draftType,
   emptyDraft,
   isDirty,
   keepOffered,
+  MODEL_PICK,
   validateDraft,
   type AddDraft,
   type Choice,
@@ -40,6 +43,8 @@ export type AddModalModel = {
   start: AddModalStart | null;
   /** The model and agent lists of the start pickers. */
   lists: StartLists;
+  /** Type and State offer "Let the model pick" first, and start on it (suggest.ts). */
+  suggest: boolean;
 };
 
 export type AddModalStart = {
@@ -73,8 +78,11 @@ export const openAddModal = (
   model: AddModalModel,
   callbacks: AddModalCallbacks,
 ): { setStart: (start: AddModalStart | null) => void; dispose: () => void } => {
-  const d: AddDraft = emptyDraft();
-  d.type = model.types.includes('enhancement') ? 'enhancement' : NONE;
+  const d: AddDraft = emptyDraft(model.suggest);
+  if (!model.suggest) d.type = model.types.includes('enhancement') ? 'enhancement' : NONE;
+  /** A type literally named like the sentinel is not offered (it would read as the model's pick). */
+  const types = model.types.filter((t) => t !== MODEL_PICK);
+  const pick = model.suggest ? [{ id: MODEL_PICK, label: 'Let the model pick', hint: 'Small Model, after the task is created' }] : [];
   /** What the form opened with: closing it unchanged asks nothing. */
   const initial: AddDraft = { ...d };
   let busy = false;
@@ -150,7 +158,7 @@ export const openAddModal = (
   const typeSelect = mountSelect(typeSlot, {
     label: 'Type',
     value: d.type,
-    options: [{ id: NONE, label: 'No type' }, ...model.types.map((t) => ({ id: t, label: t }))],
+    options: [...pick, { id: NONE, label: 'No type' }, ...types.map((t) => ({ id: t, label: t }))],
     onChange: (id) => {
       d.type = id;
       typeSelect.update({ value: id });
@@ -160,12 +168,15 @@ export const openAddModal = (
   const stateSelect = mountSelect(stateSlot, {
     label: 'State',
     value: d.state,
-    options: CREATE_STATES.map((s) => {
-      const label = model.labels[s];
-      return { id: s, label: s, ...(label !== undefined && label !== s ? { hint: label } : {}) };
-    }),
+    options: [
+      ...pick,
+      ...CREATE_STATES.map((s) => {
+        const label = model.labels[s];
+        return { id: s, label: s, ...(label !== undefined && label !== s ? { hint: label } : {}) };
+      }),
+    ],
     onChange: (id) => {
-      d.state = id as TaskState;
+      d.state = id as TaskState | typeof MODEL_PICK;
       stateSelect.update({ value: id });
     },
   });
@@ -345,7 +356,7 @@ export const openAddModal = (
   };
   const drawStart = (): void => {
     const s = start;
-    const inherited = s === null ? null : s.inherited(d.type === NONE ? null : d.type, draftKind(d, model.tracker));
+    const inherited = s === null ? null : s.inherited(draftType(d), draftKind(d, model.tracker));
     const key =
       s === null ? 'loading' : JSON.stringify([s.projectId, inherited, s.summaryLanguage, s.presets.map((p) => [p.id, p.name])]);
     lockStart();

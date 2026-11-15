@@ -5,6 +5,7 @@
 // it, and a new one is generated. Pure apart from the injected generate and storage, so it runs
 // under node:test.
 import type { Task } from '../core/types.ts';
+import { createLimiter, type Limiter } from './limiter.ts';
 import type { SummarySettings } from './settings.ts';
 
 /** `{language}`, `{title}` and `{body}` are filled in by buildPrompt. */
@@ -21,8 +22,6 @@ const MAX_OUTPUT_TOKENS = 400;
 /** What is kept of an answer (a storage value may hold 64 KiB). */
 const TEXT_MAX = 2_000;
 const MAX_KEY = 128;
-/** Generations running at once; the rest wait their turn. */
-const CONCURRENCY = 2;
 
 /** The system prompt; a request also carries a reference line so a late answer finds its key. */
 export const SUMMARY_SYSTEM =
@@ -111,6 +110,8 @@ export type SummariesDeps = {
   onChange?: (taskId: string) => void;
   /** Called once per session when the model is missing (NO_MODEL) or not granted. */
   onUnavailable?: (code: string) => void;
+  /** The panel's generate limit (shared with suggest.ts); a private one of GENERATE_CONCURRENCY otherwise. */
+  limit?: Limiter;
   now?: () => number;
 };
 
@@ -130,20 +131,9 @@ export const createSummaries = (deps: SummariesDeps) => {
   let unavailable = false;
   let noticed = false;
 
-  // --- at most CONCURRENCY generations; a freed slot goes straight to the next waiter ---
-  let active = 0;
-  const waiting: Array<() => void> = [];
-  const slot = async <T>(fn: () => Promise<T>): Promise<T> => {
-    if (active >= CONCURRENCY) await new Promise<void>((resolve) => waiting.push(resolve));
-    else active++;
-    try {
-      return await fn();
-    } finally {
-      const next = waiting.shift();
-      if (next !== undefined) next();
-      else active--;
-    }
-  };
+  // At most GENERATE_CONCURRENCY generations, shared with type/state suggestions when the panel passes its limiter.
+  const limit = deps.limit ?? createLimiter();
+  const slot = <T>(fn: () => Promise<T>): Promise<T> => limit.run(fn);
 
   const langKey = (projectId: string, taskId: string): string => `${projectId}\0${taskId}`;
 

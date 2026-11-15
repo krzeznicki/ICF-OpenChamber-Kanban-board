@@ -30,6 +30,8 @@ import {
 import { defaultChoice, loadNotice, setupOutcome, type ApiFailure, type NoticeModel, type TrackerChoice } from './setup.ts';
 import { createAgentLoader, createModelLoader, type StartLists } from './models.ts';
 import { createStarter } from './starter.ts';
+import { createLimiter } from './limiter.ts';
+import { createSuggester } from './suggest.ts';
 import { createSummaries } from './summaries.ts';
 import { createBoard, type Board } from './ui/board.ts';
 import { askChoice } from './ui/confirm.ts';
@@ -553,8 +555,12 @@ const summaryChanged = (): void => {
   }, 50);
 };
 
+/** One generate limit for the panel: summaries and type/state suggestions take turns. */
+const generateLimit = createLimiter();
+
 const summaries = createSummaries({
   generate: (request) => host.generate(request),
+  limit: generateLimit,
   storage: host.storage,
   // Only once the shown project's settings are in: a summary in the wrong language is wasted.
   context: () => {
@@ -573,6 +579,17 @@ const summaries = createSummaries({
             : 'No small model is set, so automatic summaries are off for now. Choose a Small Model in OpenChamber settings, then press Summarise in a task.',
       })
       .catch(() => {}),
+});
+
+// --- type and state of tasks added here (suggest.ts) ---
+
+const suggester = createSuggester({
+  generate: (request) => host.generate(request),
+  limit: generateLimit,
+  busy: (taskId) => editor.busy.has(taskId),
+  // The suggestion was written: show it (load refreshes an open task modal too).
+  onApplied: () => void load(),
+  onNotice: (message) => void host.toast({ kind: 'info', message }).catch(() => {}),
 });
 
 /**
@@ -827,8 +844,12 @@ const start = (ctx: HostReadyContext): void => {
       summarise: (task) => void summaries.summarise(task),
       onLanguage: (projectId, taskId, language) => summaries.setLanguage(projectId, taskId, language),
     },
+    // Global only; until the global layer is read, the default (on).
+    suggest: { enabled: () => resolveSettings(state.globalSettings, {}).suggestFields, suggester },
   });
-  // Answers the model gave after an earlier frame of this panel was gone are kept by the host.
+  // Answers the model gave after an earlier frame of this panel was gone are kept by the host. Only
+  // summaries are taken back; a late type/state suggestion is dropped (summaries.acceptLate ignores
+  // it), since the task may have been changed by then.
   if (ctx.features?.lateGenerateResults === true) host.onLateGenerateResult((late) => void summaries.acceptLate(late));
   void loadGlobalSettings();
   board.setStatus({ kind: 'loading' });

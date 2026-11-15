@@ -158,6 +158,8 @@ const drawLayerForm = (
     lists: StartLists;
     /** The preset set picker: the sets, the label of its inherit option, and the line under it. */
     sets: { options: SelectOption[]; inheritLabel: string; line: string };
+    /** The global layer: also shows the global-only "Suggest type and state for new tasks". */
+    global?: boolean;
     onChange: (layer: SettingsLayer) => void;
   },
 ): void => {
@@ -336,6 +338,13 @@ const drawLayerForm = (
       emit();
     },
   });
+  if (opts.global === true) {
+    const fresh = section(
+      'New tasks',
+      'Add task offers "Let the model pick" for Type and State: your Small Model suggests them from the title and description once the task is created. Only the fields left to it change. Applies to every project.',
+    );
+    bool(row(fresh), 'Suggest type and state for new tasks', () => layer.suggestFields, (v) => (layer.suggestFields = v), base.suggestFields);
+  }
 };
 
 /** The Presets tab: a set picker with set actions, then the chosen set's presets. */
@@ -557,6 +566,7 @@ export const openSettings = (initial: SettingsModel, callbacks: SettingsCallback
         layer: m.global,
         base: resolveSettings({}, {}, found),
         inheritWord: 'Default',
+        global: true,
         presets: listPresets(m.presets, globalSet),
         lists: callbacks.lists,
         sets: {

@@ -43,6 +43,15 @@ test('defaults when nothing is stored', () => {
   assert.equal(s.hideChildren, false);
   assert.deepEqual(s.types, ['enhancement', 'bug', 'chore', 'research']);
   assert.equal(s.presetSet, 'plain');
+  assert.equal(s.suggestFields, true);
+});
+
+test('suggestFields ("Suggest type and state for new tasks") is global only: a project layer cannot change it', () => {
+  assert.equal(resolveSettings({ suggestFields: false }, {}).suggestFields, false);
+  assert.equal(resolveSettings({}, { suggestFields: false }).suggestFields, true);
+  assert.equal(resolveSettings({ suggestFields: false }, { suggestFields: true }).suggestFields, false);
+  assert.deepEqual(parseSettings({ suggestFields: false }), { suggestFields: false });
+  assert.deepEqual(parseSettings({ suggestFields: 'no' }), {});
 });
 
 test('project overrides global field by field, nested fields included', () => {

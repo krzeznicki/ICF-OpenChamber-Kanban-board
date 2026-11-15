@@ -32,6 +32,11 @@ export type Settings = {
    * default too: use presetSetOf for the set a start uses.
    */
   presetSet: string;
+  /**
+   * "Suggest type and state for new tasks" (suggest.ts): the add form offers "Let the model pick".
+   * Global only: resolveSettings ignores it in a project layer.
+   */
+  suggestFields: boolean;
 };
 
 /**
@@ -64,6 +69,7 @@ export const DEFAULT_SETTINGS: Settings = {
   hideChildren: false,
   types: ['enhancement', 'bug', 'chore', 'research'],
   presetSet: defaultSetId([]),
+  suggestFields: true,
 };
 
 const record = (v: unknown): Record<string, unknown> | null =>
@@ -106,6 +112,7 @@ export const parseSettings = (raw: unknown): SettingsLayer => {
   if (typeof r.autoStart === 'boolean') out.autoStart = r.autoStart;
   if (typeof r.maxParallel === 'number' && Number.isFinite(r.maxParallel)) out.maxParallel = clampParallel(r.maxParallel);
   if (typeof r.hideChildren === 'boolean') out.hideChildren = r.hideChildren;
+  if (typeof r.suggestFields === 'boolean') out.suggestFields = r.suggestFields;
   const presetSet = text(r.presetSet);
   if (presetSet !== undefined) out.presetSet = presetSet;
   if (Array.isArray(r.types)) {
@@ -184,6 +191,7 @@ export const resolveSettings = (global: SettingsLayer, project: SettingsLayer, f
     hideChildren: p.hideChildren ?? g.hideChildren ?? d.hideChildren,
     types: [...(p.types ?? g.types ?? d.types)],
     presetSet: p.presetSet ?? g.presetSet ?? defaultSetId(found),
+    suggestFields: g.suggestFields ?? d.suggestFields,
   };
 };
 

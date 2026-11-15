@@ -8,7 +8,9 @@ import {
   canHaveSubtasks,
   createWithSubtasks,
   draftKind,
+  draftType,
   emptyDraft,
+  MODEL_PICK,
   isDirty,
   keepOffered,
   parentChoices,
@@ -149,6 +151,24 @@ test('toNewTask: trims, leaves out what is unset', () => {
     toNewTask(draft({ title: 'T', type: 'bug', body: ' Why \n', state: 'ready-for-agent', parentId: '#1', blockedBy: ['#3'] }), 'github'),
     { title: 'T', state: 'ready-for-agent', type: 'bug', body: 'Why', parentId: '#1', blockedBy: ['#3'] },
   );
+});
+
+test('toNewTask: "Let the model pick" creates the task as needs-triage with no type', () => {
+  assert.deepEqual(toNewTask(draft({ title: 'T', type: MODEL_PICK, state: MODEL_PICK }), 'github'), { title: 'T', state: 'needs-triage' });
+  assert.deepEqual(toNewTask(draft({ title: 'T', type: 'bug', state: MODEL_PICK }), 'github'), { title: 'T', state: 'needs-triage', type: 'bug' });
+  assert.deepEqual(toNewTask(draft({ title: 'T', type: MODEL_PICK, state: 'needs-info' }), 'github'), { title: 'T', state: 'needs-info' });
+});
+
+test('emptyDraft(true): Type and State start on "Let the model pick"', () => {
+  assert.deepEqual(emptyDraft(true), { ...emptyDraft(), type: MODEL_PICK, state: MODEL_PICK });
+  assert.equal(isDirty(emptyDraft(true), emptyDraft(true)), false);
+  assert.equal(isDirty({ ...emptyDraft(true), state: 'needs-triage' }, emptyDraft(true)), true);
+});
+
+test('draftType: the type a draft would have now (the model\'s pick counts as none yet)', () => {
+  assert.equal(draftType(draft({ type: MODEL_PICK })), null);
+  assert.equal(draftType(draft({ type: '' })), null);
+  assert.equal(draftType(draft({ type: 'bug' })), 'bug');
 });
 
 test('toNewTask local: a new feature takes no blockers', () => {
