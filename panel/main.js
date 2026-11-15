@@ -3039,33 +3039,27 @@ ${GUEST_UI_LOOK_CSS}`;
   };
 
   // src/panel/link.ts
+  var isOrAbove = (id, from, tasks) => {
+    const seen = /* @__PURE__ */ new Set();
+    for (let up = from; up !== null && !seen.has(up); up = tasks.find((t) => t.id === up)?.parentId ?? null) {
+      if (up === id) return true;
+      seen.add(up);
+    }
+    return false;
+  };
+  var movableLocally = (child, tasks) => child.kind === "ticket" || !tasks.some((t) => t.parentId === child.id);
   var canLinkUnder = (tracker, child, parent, tasks) => {
     if (child.id === parent.id || child.state === "done" || parent.state === "done") return false;
     if (child.parentId === parent.id) return false;
-    if (tracker === "local") {
-      if (parent.kind !== "parent") return false;
-      return child.kind === "ticket" || !tasks.some((t) => t.parentId === child.id);
-    }
-    const seen = /* @__PURE__ */ new Set();
-    for (let up = parent.parentId; up !== null && !seen.has(up); ) {
-      if (up === child.id) return false;
-      seen.add(up);
-      up = tasks.find((t) => t.id === up)?.parentId ?? null;
-    }
-    return true;
+    if (tracker === "local") return parent.kind === "parent" && movableLocally(child, tasks);
+    return !isOrAbove(child.id, parent.parentId, tasks);
   };
   var parentTargets = (tracker, child, tasks) => tasks.filter((p) => canLinkUnder(tracker, child, p, tasks));
   var childCandidates = (tracker, parent, tasks) => tasks.filter((c) => canLinkUnder(tracker, c, parent, tasks));
   var canLinkUnderNew = (tracker, child, parentId, tasks) => {
     if (child.state === "done") return false;
-    if (tracker === "local") return parentId === null && (child.kind === "ticket" || !tasks.some((t) => t.parentId === child.id));
-    const seen = /* @__PURE__ */ new Set();
-    for (let up = parentId; up !== null && !seen.has(up); ) {
-      if (up === child.id) return false;
-      seen.add(up);
-      up = tasks.find((t) => t.id === up)?.parentId ?? null;
-    }
-    return true;
+    if (tracker === "local") return parentId === null && movableLocally(child, tasks);
+    return !isOrAbove(child.id, parentId, tasks);
   };
   var newChildCandidates = (tracker, parentId, tasks) => tasks.filter((c) => canLinkUnderNew(tracker, c, parentId, tasks));
   var linkChoice = (t) => ({ id: t.id, label: t.title, hint: t.id });
@@ -3073,6 +3067,17 @@ ${GUEST_UI_LOOK_CSS}`;
     parents: parentTargets(tracker, task, tasks).map(linkChoice),
     children: childCandidates(tracker, task, tasks).map(linkChoice)
   });
+  var followingSetParent = (setParent, onMoved, onError) => async (id, parentId) => {
+    const task = await setParent(id, parentId);
+    if (task.id !== id) {
+      try {
+        await onMoved(id, task.id);
+      } catch (e) {
+        onError(id, task.id, e);
+      }
+    }
+    return task;
+  };
   var linkConfirm = (tracker, child, parent) => ({
     title: `Make \u201C${child.title}\u201D a sub-task of \u201C${parent.title}\u201D?`,
     body: tracker === "local" ? `${child.id} moves into the feature ${parent.id} as its next ticket: it gets a new id and its blockers (both ways) are dropped.` : `${child.id} becomes a sub-task of ${parent.id}, replacing its current parent if it has one.`
@@ -3109,7 +3114,7 @@ ${GUEST_UI_LOOK_CSS}`;
   var subtaskTitles = (rows) => rows.map((r) => r.trim()).filter((r) => r !== "");
   var subtasksToCreate = (d, tracker) => canHaveSubtasks(tracker, d.parentId) ? subtaskTitles(d.subtasks) : [];
   var existingSubtaskChoices = (tasks, tracker, parentId) => canHaveSubtasks(tracker, parentId) ? newChildCandidates(tracker, parentId === "" ? null : parentId, tasks).map(choice) : [];
-  var existingToLink = (d, tracker) => canHaveSubtasks(tracker, d.parentId) ? [...d.existing] : [];
+  var existingToLink = (d, tracker, tasks) => keepOffered(d.existing, existingSubtaskChoices(tasks, tracker, d.parentId));
   var draftKind = (d, tracker) => {
     if (tracker === "local") return d.parentId === "" ? "parent" : "ticket";
     return subtaskTitles(d.subtasks).length > 0 || d.existing.length > 0 ? "parent" : "ticket";
@@ -3137,31 +3142,26 @@ ${GUEST_UI_LOOK_CSS}`;
       try {
         await create({ title, state: "needs-triage", parentId: task.id });
       } catch (e) {
-        failed.push({ title, message: messageOf(e) });
+        failed.push({ title, message: messageOf(e), kind: "create" });
       }
     }
     for (const c of link2?.existing ?? []) {
       try {
         await link2.setParent(c.id, task.id);
       } catch (e) {
-        failed.push({ title: c.label, message: messageOf(e), link: true });
+        failed.push({ title: c.label, message: messageOf(e), kind: "link" });
       }
     }
     return { task, failed };
   };
   var partialMessage = (taskId, failed) => {
-    const list2 = (fs) => fs.map((f) => `\u201C${f.title}\u201D (${f.message})`).join("; ");
-    const created = failed.filter((f) => f.link !== true);
-    const linked = failed.filter((f) => f.link === true);
-    const parts = [];
-    if (created.length > 0) {
-      const n = created.length;
-      parts.push(`${n} sub-task${n === 1 ? " was" : "s were"} not created: ${list2(created)}`);
-    }
-    if (linked.length > 0) {
-      const n = linked.length;
-      parts.push(`${n} existing task${n === 1 ? " was" : "s were"} not linked under it: ${list2(linked)}`);
-    }
+    const part = (kind, noun, what) => {
+      const fs = failed.filter((f) => f.kind === kind);
+      const n = fs.length;
+      if (n === 0) return [];
+      return [`${n} ${noun}${n === 1 ? " was" : "s were"} ${what}: ${fs.map((f) => `\u201C${f.title}\u201D (${f.message})`).join("; ")}`];
+    };
+    const parts = [...part("create", "sub-task", "not created"), ...part("link", "existing task", "not linked under it")];
     return `Created ${taskId}, but ${parts.join("; ")}.`;
   };
 
@@ -4159,6 +4159,13 @@ ${ref}`,
         const clean2 = parseCardOptions(card);
         return put(STORAGE_KEYS.card(projectId, taskId), clean2, Object.keys(clean2).length === 0);
       },
+      /** The task got a new id (a local link moved its file): its start options go under that id, the old key is deleted. */
+      moveCard: async (projectId, from, to) => {
+        const clean2 = parseCardOptions(await storage.get(STORAGE_KEYS.card(projectId, from)));
+        if (Object.keys(clean2).length === 0) return;
+        await storage.set(STORAGE_KEYS.card(projectId, to), clean2);
+        await storage.delete(STORAGE_KEYS.card(projectId, from));
+      },
       loadDetached: async (projectId) => parseDetached(await storage.get(STORAGE_KEYS.detached(projectId))),
       saveDetached: (projectId, marks) => put(STORAGE_KEYS.detached(projectId), Object.fromEntries(marks), marks.size === 0),
       loadArchived: async (projectId) => parseArchivedSessions(await storage.get(STORAGE_KEYS.archivedSessions(projectId))),
@@ -4434,6 +4441,7 @@ ${ref}`,
   });
 
   // src/panel/ui/modal.ts
+  var FILTER_OVER = 8;
   var openModalShell = (options) => {
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const backdrop = document.createElement("div");
@@ -5327,7 +5335,6 @@ ${ref}`,
 
   // src/panel/ui/addModal.ts
   var NONE2 = "";
-  var FILTER_OVER = 8;
   var el3 = (tag, className, text3) => {
     const node = document.createElement(tag);
     node.className = className;
@@ -11542,7 +11549,6 @@ ${ref}`,
 
   // src/panel/ui/detail.ts
   var NO_TYPE = "";
-  var FILTER_OVER2 = 8;
   var STATES = ["needs-triage", "needs-info", "ready-for-agent", "ready-for-human", "wontfix", "done"];
   var stateTone = (state2) => state2 === "done" ? "success" : state2 === "ready-for-agent" ? "primary" : state2 === "wontfix" ? "neutral" : state2 === "ready-for-human" ? "info" : "warning";
   var el5 = (tag, className, text3) => {
@@ -11737,7 +11743,7 @@ ${ref}`,
       fields.append(stateSlot, typeSlot);
       quick.append(fields);
       const { parent, parents } = m.links;
-      if (parents.length > 0) {
+      if (parents.length > 0 || parent !== null) {
         const parentSlot = el5("div", "kb-field");
         fields.append(parentSlot);
         const options2 = parent !== null && !parents.some((p) => p.id === parent.id) ? [parent, ...parents] : parents;
@@ -11747,8 +11753,9 @@ ${ref}`,
             value: parent?.id ?? null,
             placeholder: "No parent",
             options: options2,
-            searchable: options2.length > FILTER_OVER2,
-            disabled: m.busy,
+            searchable: options2.length > FILTER_OVER,
+            disabled: m.busy || parents.length === 0,
+            // only the current parent: shown, nothing to pick
             onChange: (id) => {
               if (id === task.parentId) return;
               const taskId = task.id;
@@ -11874,7 +11881,7 @@ ${ref}`,
           value: null,
           placeholder: "Choose a task",
           options: offered,
-          searchable: offered.length > FILTER_OVER2,
+          searchable: offered.length > FILTER_OVER,
           disabled: m.busy,
           onChange: (id) => {
             const taskId = task.id;
@@ -12328,7 +12335,16 @@ ${ref}`,
         refreshDetail();
       }
     };
-    const linkFromDetail = async (childId, parentId) => {
+    const setParentOf = (api) => followingSetParent(
+      api.setParent,
+      async (from, to) => {
+        follow(from, to);
+        const ctx = deps.start.context();
+        if (ctx !== null) await deps.start.move(ctx.projectId, from, to);
+      },
+      (from, to, e) => fail2(`${from} is now ${to}, but its start options could not follow: ${errorText2(e)}`)
+    );
+    const linkTask = async (childId, parentId) => {
       const api = deps.api();
       if (api === null) return "No project is open.";
       if (moving.has(childId)) return null;
@@ -12336,8 +12352,7 @@ ${ref}`,
       deps.redraw();
       refreshDetail();
       try {
-        const moved = await api.setParent(childId, parentId);
-        if (moved.id !== childId) follow(childId, moved.id);
+        const moved = await setParentOf(api)(childId, parentId);
         info2(moved.id !== childId ? `Linked ${childId} under ${parentId}; it is now ${moved.id}` : `Linked ${childId} under ${parentId}`);
         return null;
       } catch (e) {
@@ -12354,10 +12369,7 @@ ${ref}`,
       detail.id = to;
       followed = to;
       detail.onFollow(to);
-      if (card !== null && card.taskId === from) {
-        if (Object.values(card.options).some((v2) => v2 !== void 0)) deps.start.save(card.projectId, to, card.options);
-        card.taskId = to;
-      }
+      if (card !== null && card.taskId === from) card.taskId = to;
     };
     const close = async (task, askChildren) => {
       let withChildren = false;
@@ -12410,7 +12422,8 @@ ${ref}`,
       if (child === null || parent === null || moving.has(id)) return;
       const { title, body } = linkConfirm(deps.tracker(), child, parent);
       if (await askChoice(title, body, [{ id: "link", label: "Make sub-task" }]) !== "link") return;
-      await run(id, (api) => api.setParent(id, parentId));
+      const error2 = await linkTask(id, parentId);
+      if (error2 !== null) fail2(error2);
     };
     const closeDetail = () => {
       const d = detail;
@@ -12442,8 +12455,8 @@ ${ref}`,
           refreshDetail();
           return null;
         },
-        onSetParent: (parentId) => linkFromDetail(id, parentId),
-        onLinkChild: (childId) => linkFromDetail(childId, id),
+        onSetParent: (parentId) => linkTask(id, parentId),
+        onLinkChild: (childId) => linkTask(childId, id),
         onSections: deps.sections.save,
         onUnarchive: () => {
           deps.archive.unarchive(id);
@@ -12489,7 +12502,7 @@ ${ref}`,
       const ctx = deps.start.context();
       const tracker = deps.tracker();
       const subtasks = subtasksToCreate(draft, tracker);
-      const existing = existingToLink(draft, tracker).map((id) => ({ id, label: find(id)?.title ?? id }));
+      const existing = existingToLink(draft, tracker, deps.tasks()).map((id) => ({ id, label: find(id)?.title ?? id }));
       const saveStart = (taskId) => {
         if (ctx === null || Object.keys(draft.start).length === 0) return;
         try {
@@ -12513,7 +12526,7 @@ ${ref}`,
           },
           toNewTask(draft, tracker),
           subtasks,
-          { existing, setParent: api.setParent }
+          { existing, setParent: setParentOf(api) }
         );
       } catch (e) {
         return { kind: "error", message: errorText2(e) };
@@ -14251,7 +14264,12 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
       start: {
         context: startContext,
         load: (projectId, taskId) => store.loadCard(projectId, taskId),
-        save: (projectId, taskId, card) => saver.save(`card:${projectId}:${taskId}`, () => store.saveCard(projectId, taskId, card))
+        save: (projectId, taskId, card) => saver.save(`card:${projectId}:${taskId}`, () => store.saveCard(projectId, taskId, card)),
+        // After any pending save of the old key, so the options moved are the newest.
+        move: async (projectId, from, to) => {
+          await saver.idle();
+          await store.moveCard(projectId, from, to);
+        }
       },
       summary: {
         model: (task) => startContext() === null ? null : { text: summaries.get(task), status: summaries.status(task), auto: summaries.auto() },
