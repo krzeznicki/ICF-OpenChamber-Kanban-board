@@ -3,7 +3,7 @@
 // drags of it are ignored), reports a failure in a toast and reloads the board afterwards.
 import type { HostClient } from '@openchamber/sdk';
 import type { NewTask, Task, TaskState } from '../core/types.ts';
-import { MODEL_PICK, canAddSubtask, createWithSubtasks, parentChoices, partialMessage, subtasksToCreate, toNewTask, type AddDraft } from './addTask.ts';
+import { MODEL_PICK, canAddSubtask, createWithSubtasks, existingToLink, parentChoices, partialMessage, subtasksToCreate, toNewTask, type AddDraft } from './addTask.ts';
 import type { Api } from './api.ts';
 import type { Preset } from './presets.ts';
 import type { StartLists } from './models.ts';
@@ -366,6 +366,7 @@ export const createEditor = (deps: EditorDeps) => {
     const ctx = deps.start.context();
     const tracker = deps.tracker();
     const subtasks = subtasksToCreate(draft, tracker);
+    const existing = existingToLink(draft, tracker).map((id) => ({ id, label: find(id)?.title ?? id }));
     /** Never throws: the task exists by now, so a storage hiccup is a toast, not "could not create". */
     const saveStart = (taskId: string): void => {
       if (ctx === null || Object.keys(draft.start).length === 0) return;
@@ -391,6 +392,7 @@ export const createEditor = (deps: EditorDeps) => {
         },
         toNewTask(draft, tracker),
         subtasks,
+        { existing, setParent: api.setParent },
       );
     } catch (e) {
       return { kind: 'error', message: errorText(e) };
@@ -411,7 +413,7 @@ export const createEditor = (deps: EditorDeps) => {
     }
     if (failed.length === 0) {
       closeAdd();
-      const n = subtasks.length;
+      const n = subtasks.length + existing.length;
       void deps.host
         .toast({ kind: 'success', message: n === 0 ? `Created ${task.id}` : `Created ${task.id} with ${n} sub-task${n === 1 ? '' : 's'}` })
         .catch(() => {});

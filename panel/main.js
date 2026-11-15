@@ -3038,6 +3038,20 @@ ${GUEST_UI_LOOK_CSS}`;
     return board2;
   };
 
+  // src/panel/link.ts
+  var canLinkUnderNew = (tracker, child, parentId, tasks) => {
+    if (child.state === "done") return false;
+    if (tracker === "local") return parentId === null && (child.kind === "ticket" || !tasks.some((t) => t.parentId === child.id));
+    const seen = /* @__PURE__ */ new Set();
+    for (let up = parentId; up !== null && !seen.has(up); ) {
+      if (up === child.id) return false;
+      seen.add(up);
+      up = tasks.find((t) => t.id === up)?.parentId ?? null;
+    }
+    return true;
+  };
+  var newChildCandidates = (tracker, parentId, tasks) => tasks.filter((c) => canLinkUnderNew(tracker, c, parentId, tasks));
+
   // src/panel/addTask.ts
   var MODEL_PICK = ":model";
   var emptyDraft = (suggest = false) => ({
@@ -3048,9 +3062,10 @@ ${GUEST_UI_LOOK_CSS}`;
     blockedBy: [],
     body: "",
     subtasks: [],
+    existing: [],
     start: {}
   });
-  var isDirty = (draft, initial = emptyDraft()) => draft.title.trim() !== "" || draft.body.trim() !== "" || draft.subtasks.some((row) => row.trim() !== "") || draft.type !== initial.type || draft.parentId !== initial.parentId || draft.state !== initial.state || draft.blockedBy.length > 0 || Object.values(draft.start).some((v2) => v2 !== void 0);
+  var isDirty = (draft, initial = emptyDraft()) => draft.title.trim() !== "" || draft.body.trim() !== "" || draft.subtasks.some((row) => row.trim() !== "") || draft.type !== initial.type || draft.parentId !== initial.parentId || draft.state !== initial.state || draft.blockedBy.length > 0 || draft.existing.length > 0 || Object.values(draft.start).some((v2) => v2 !== void 0);
   var CREATE_STATES = ["needs-triage", "needs-info", "ready-for-agent", "ready-for-human"];
   var choice = (t) => ({ id: t.id, label: t.title, hint: t.id });
   var parentChoices = (tasks) => tasks.filter((t) => t.kind === "parent" && t.state !== "done").map(choice);
@@ -3067,9 +3082,11 @@ ${GUEST_UI_LOOK_CSS}`;
   var canAddSubtask = (task, tracker) => task.state !== "done" && (tracker === "github" || task.kind === "parent");
   var subtaskTitles = (rows) => rows.map((r) => r.trim()).filter((r) => r !== "");
   var subtasksToCreate = (d, tracker) => canHaveSubtasks(tracker, d.parentId) ? subtaskTitles(d.subtasks) : [];
+  var existingSubtaskChoices = (tasks, tracker, parentId) => canHaveSubtasks(tracker, parentId) ? newChildCandidates(tracker, parentId === "" ? null : parentId, tasks).map(choice) : [];
+  var existingToLink = (d, tracker) => canHaveSubtasks(tracker, d.parentId) ? [...d.existing] : [];
   var draftKind = (d, tracker) => {
     if (tracker === "local") return d.parentId === "" ? "parent" : "ticket";
-    return subtaskTitles(d.subtasks).length > 0 ? "parent" : "ticket";
+    return subtaskTitles(d.subtasks).length > 0 || d.existing.length > 0 ? "parent" : "ticket";
   };
   var draftType = (d) => d.type === "" || d.type === MODEL_PICK ? null : d.type;
   var validateDraft = (d) => d.title.trim() === "" ? { title: "A title is required" } : {};
@@ -3087,7 +3104,7 @@ ${GUEST_UI_LOOK_CSS}`;
     };
   };
   var messageOf = (e) => e instanceof Error ? e.message : String(e);
-  var createWithSubtasks = async (create, input, subtasks) => {
+  var createWithSubtasks = async (create, input, subtasks, link2) => {
     const task = await create(input);
     const failed = [];
     for (const title of subtasks) {
@@ -3097,12 +3114,29 @@ ${GUEST_UI_LOOK_CSS}`;
         failed.push({ title, message: messageOf(e) });
       }
     }
+    for (const c of link2?.existing ?? []) {
+      try {
+        await link2.setParent(c.id, task.id);
+      } catch (e) {
+        failed.push({ title: c.label, message: messageOf(e), link: true });
+      }
+    }
     return { task, failed };
   };
   var partialMessage = (taskId, failed) => {
-    const n = failed.length;
-    const list2 = failed.map((f) => `\u201C${f.title}\u201D (${f.message})`).join("; ");
-    return `Created ${taskId}, but ${n} sub-task${n === 1 ? " was" : "s were"} not created: ${list2}.`;
+    const list2 = (fs) => fs.map((f) => `\u201C${f.title}\u201D (${f.message})`).join("; ");
+    const created = failed.filter((f) => f.link !== true);
+    const linked = failed.filter((f) => f.link === true);
+    const parts = [];
+    if (created.length > 0) {
+      const n = created.length;
+      parts.push(`${n} sub-task${n === 1 ? " was" : "s were"} not created: ${list2(created)}`);
+    }
+    if (linked.length > 0) {
+      const n = linked.length;
+      parts.push(`${n} existing task${n === 1 ? " was" : "s were"} not linked under it: ${list2(linked)}`);
+    }
+    return `Created ${taskId}, but ${parts.join("; ")}.`;
   };
 
   // src/core/skills.ts
@@ -5329,6 +5363,7 @@ ${ref}`,
     const blockersBox = part("kb-sheet-part kb-add-group");
     const bodySlot = part("kb-add-body");
     const subBox = part("kb-sheet-part kb-add-group");
+    const existingBox = part("kb-sheet-part kb-add-group");
     const startBox = part("kb-sheet-part kb-start");
     const errorSlot = part("kb-add-error");
     const actions = part("kb-actions");
@@ -5377,6 +5412,7 @@ ${ref}`,
         parentSelect.update({ value: id });
         drawBlockers();
         drawSubtasks();
+        drawExisting();
         drawStart();
       }
     });
@@ -5392,6 +5428,54 @@ ${ref}`,
       }
     });
     const fixed = [titleField, typeSelect, stateSelect, parentSelect, bodyField];
+    const mountChecks = (box, offered, filterLabel, filter, setFilter, selected, setSelected, onPick) => {
+      const out = [];
+      const list2 = el3("div", "kb-add-checks");
+      const drawList = () => {
+        const shown = new Set(filterSelectOptions(offered, filter).map((c) => c.id));
+        for (const node of list2.children) {
+          const id = node.dataset.id ?? "";
+          node.hidden = !shown.has(id) && !selected().includes(id);
+        }
+      };
+      if (offered.length > FILTER_OVER) {
+        const filterSlot = el3("div", "kb-add-filter");
+        box.append(filterSlot);
+        const search = mountSearchField(filterSlot, {
+          value: filter,
+          label: filterLabel,
+          placeholder: "Filter",
+          onChange: (v2) => {
+            filter = v2;
+            setFilter(v2);
+            search.update({ value: v2 });
+            drawList();
+          }
+        });
+        out.push(search.dispose);
+      }
+      for (const c of offered) {
+        const cell = el3("div", "kb-add-check");
+        cell.dataset.id = c.id;
+        list2.append(cell);
+        const check = mountCheckbox(cell, {
+          label: c.label,
+          description: c.hint ?? c.id,
+          checked: selected().includes(c.id),
+          disabled: locked(),
+          onChange: (checked) => {
+            const rest = selected().filter((b) => b !== c.id);
+            setSelected(checked ? [...rest, c.id] : rest);
+            check.update({ checked });
+            onPick?.();
+          }
+        });
+        out.push(check.dispose);
+      }
+      box.append(list2);
+      drawList();
+      return out;
+    };
     let blockerDisposers = [];
     let blockerFilter = "";
     const drawBlockers = () => {
@@ -5406,47 +5490,9 @@ ${ref}`,
         blockersBox.append(el3("p", "kb-muted", why));
         return;
       }
-      const list2 = el3("div", "kb-add-checks");
-      const drawList = () => {
-        const shown = new Set(filterSelectOptions(offered, blockerFilter).map((c) => c.id));
-        for (const node of list2.children) {
-          const id = node.dataset.id ?? "";
-          node.hidden = !shown.has(id) && !d.blockedBy.includes(id);
-        }
-      };
-      if (offered.length > FILTER_OVER) {
-        const filterSlot = el3("div", "kb-add-filter");
-        blockersBox.append(filterSlot);
-        const search = mountSearchField(filterSlot, {
-          value: blockerFilter,
-          label: "Filter blockers",
-          placeholder: "Filter",
-          onChange: (v2) => {
-            blockerFilter = v2;
-            search.update({ value: v2 });
-            drawList();
-          }
-        });
-        blockerDisposers.push(search.dispose);
-      }
-      for (const c of offered) {
-        const cell = el3("div", "kb-add-check");
-        cell.dataset.id = c.id;
-        list2.append(cell);
-        const box = mountCheckbox(cell, {
-          label: c.label,
-          description: c.hint ?? c.id,
-          checked: d.blockedBy.includes(c.id),
-          disabled: locked(),
-          onChange: (checked) => {
-            d.blockedBy = checked ? [...d.blockedBy.filter((b) => b !== c.id), c.id] : d.blockedBy.filter((b) => b !== c.id);
-            box.update({ checked });
-          }
-        });
-        blockerDisposers.push(box.dispose);
-      }
-      blockersBox.append(list2);
-      drawList();
+      blockerDisposers = mountChecks(blockersBox, offered, "Filter blockers", blockerFilter, (v2) => blockerFilter = v2, () => d.blockedBy, (ids) => {
+        d.blockedBy = ids;
+      });
     };
     let subDisposers = [];
     const drawSubtasks = (focusRow) => {
@@ -5520,6 +5566,42 @@ ${ref}`,
       );
       if (focusRow !== void 0 && focusRow >= 0) subBox.querySelectorAll("input")[focusRow]?.focus();
     };
+    let existingDisposers = [];
+    let existingFilter = "";
+    const drawExisting = () => {
+      for (const x of existingDisposers) x();
+      existingDisposers = [];
+      existingBox.replaceChildren();
+      const offered = existingSubtaskChoices(model.tasks, model.tracker, d.parentId);
+      d.existing = keepOffered(d.existing, offered);
+      existingBox.hidden = !canHaveSubtasks(model.tracker, d.parentId);
+      if (existingBox.hidden) return;
+      existingBox.append(el3("h3", "kb-settings-heading", "Existing sub-tasks"));
+      if (offered.length === 0) {
+        existingBox.append(el3("p", "kb-muted", model.tracker === "local" ? "No open tickets or features without tickets to move." : "No open issues."));
+        return;
+      }
+      existingBox.append(
+        el3(
+          "p",
+          "kb-muted",
+          model.tracker === "local" ? "Moved into the new feature as its tickets once it is created." : "Linked as sub-issues of the new issue once it is created."
+        )
+      );
+      existingDisposers = mountChecks(
+        existingBox,
+        offered,
+        "Filter existing tasks",
+        existingFilter,
+        (v2) => existingFilter = v2,
+        () => d.existing,
+        (ids) => {
+          d.existing = ids;
+        },
+        drawStart
+        // GitHub: having sub-tasks makes it a parent (orchestrate preset)
+      );
+    };
     let start2 = model.start;
     let startDispose = null;
     let startKey = null;
@@ -5571,6 +5653,7 @@ ${ref}`,
       for (const h of fixed) h.update({ disabled: next || finished });
       drawBlockers();
       drawSubtasks();
+      drawExisting();
       lockStart();
     };
     const submit = () => {
@@ -5583,7 +5666,7 @@ ${ref}`,
       }
       showBanner(null);
       setBusy(true);
-      void callbacks.onSubmit({ ...d, blockedBy: [...d.blockedBy], subtasks: [...d.subtasks], start: { ...d.start } }).then((result) => {
+      void callbacks.onSubmit({ ...d, blockedBy: [...d.blockedBy], subtasks: [...d.subtasks], existing: [...d.existing], start: { ...d.start } }).then((result) => {
         if (!modal.isConnected) return;
         if (result?.kind === "partial") finished = true;
         setBusy(false);
@@ -5592,7 +5675,7 @@ ${ref}`,
           showBanner("error", "Could not create the task", result.message);
           return;
         }
-        showBanner("warning", "Some sub-tasks were not created", result.message);
+        showBanner("warning", "Some sub-tasks were not created or linked", result.message);
         createDisposed = true;
         create.dispose();
         cancel.update({ label: "Close", variant: "default" });
@@ -5610,6 +5693,7 @@ ${ref}`,
     });
     drawBlockers();
     drawSubtasks();
+    drawExisting();
     drawStart();
     titleSlot.querySelector("input")?.focus();
     return {
@@ -5618,7 +5702,7 @@ ${ref}`,
         drawStart();
       },
       dispose: () => {
-        for (const x of [...disposers, ...blockerDisposers, ...subDisposers]) x();
+        for (const x of [...disposers, ...blockerDisposers, ...subDisposers, ...existingDisposers]) x();
         for (const h of fixed) h.dispose();
         startDispose?.();
         errorDispose?.();
@@ -12222,6 +12306,7 @@ ${ref}`,
       const ctx = deps.start.context();
       const tracker = deps.tracker();
       const subtasks = subtasksToCreate(draft, tracker);
+      const existing = existingToLink(draft, tracker).map((id) => ({ id, label: find(id)?.title ?? id }));
       const saveStart = (taskId) => {
         if (ctx === null || Object.keys(draft.start).length === 0) return;
         try {
@@ -12244,7 +12329,8 @@ ${ref}`,
             return task2;
           },
           toNewTask(draft, tracker),
-          subtasks
+          subtasks,
+          { existing, setParent: api.setParent }
         );
       } catch (e) {
         return { kind: "error", message: errorText2(e) };
@@ -12263,7 +12349,7 @@ ${ref}`,
       }
       if (failed.length === 0) {
         closeAdd();
-        const n = subtasks.length;
+        const n = subtasks.length + existing.length;
         void deps.host.toast({ kind: "success", message: n === 0 ? `Created ${task.id}` : `Created ${task.id} with ${n} sub-task${n === 1 ? "" : "s"}` }).catch(() => {
         });
       }

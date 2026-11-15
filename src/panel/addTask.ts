@@ -5,6 +5,7 @@
 // local tracker rejects any other). GitHub: any open issue may be a blocker, and any open issue can
 // take sub-tasks (it becomes a parent).
 import type { NewTask, Task, TaskKind, TaskState } from '../core/types.ts';
+import { newChildCandidates } from './link.ts';
 import type { CardOptions } from './settings.ts';
 
 export type TrackerKind = 'local' | 'github';
@@ -28,6 +29,8 @@ export type AddDraft = {
   body: string;
   /** Raw sub-task rows as typed (empty rows are ignored). */
   subtasks: string[];
+  /** Existing tasks picked to be linked under the new task, in the order picked. */
+  existing: string[];
   /** The card's start options, saved under card:<projectId>:<taskId> once the task exists. */
   start: CardOptions;
 };
@@ -41,6 +44,7 @@ export const emptyDraft = (suggest = false): AddDraft => ({
   blockedBy: [],
   body: '',
   subtasks: [],
+  existing: [],
   start: {},
 });
 
@@ -56,6 +60,7 @@ export const isDirty = (draft: AddDraft, initial: AddDraft = emptyDraft()): bool
   draft.parentId !== initial.parentId ||
   draft.state !== initial.state ||
   draft.blockedBy.length > 0 ||
+  draft.existing.length > 0 ||
   Object.values(draft.start).some((v) => v !== undefined);
 
 /** States a new task may start in: the open ones (done and wontfix are reached by moving it). */
@@ -94,10 +99,18 @@ export const subtaskTitles = (rows: readonly string[]): string[] => rows.map((r)
 export const subtasksToCreate = (d: AddDraft, tracker: TrackerKind): string[] =>
   canHaveSubtasks(tracker, d.parentId) ? subtaskTitles(d.subtasks) : [];
 
+/** Open existing tasks the new task may take as sub-tasks, given the chosen parent ('' = none). */
+export const existingSubtaskChoices = (tasks: readonly Task[], tracker: TrackerKind, parentId: string): Choice[] =>
+  canHaveSubtasks(tracker, parentId) ? newChildCandidates(tracker, parentId === '' ? null : parentId, tasks).map(choice) : [];
+
+/** The picked existing tasks to link under the new task: none when it may not have sub-tasks. */
+export const existingToLink = (d: AddDraft, tracker: TrackerKind): string[] =>
+  canHaveSubtasks(tracker, d.parentId) ? [...d.existing] : [];
+
 /** What the new task will be, so its inherited start options (preset by kind) can be shown. */
 export const draftKind = (d: AddDraft, tracker: TrackerKind): TaskKind => {
   if (tracker === 'local') return d.parentId === '' ? 'parent' : 'ticket';
-  return subtaskTitles(d.subtasks).length > 0 ? 'parent' : 'ticket';
+  return subtaskTitles(d.subtasks).length > 0 || d.existing.length > 0 ? 'parent' : 'ticket';
 };
 
 /** The type the task is created with: none for "No type" and for "Let the model pick". */
@@ -119,18 +132,27 @@ export const toNewTask = (d: AddDraft, tracker: TrackerKind): NewTask => {
   };
 };
 
-export type SubtaskFailure = { title: string; message: string };
+/** `link`: an existing task that could not be linked under the new one (else a sub-task not created). */
+export type SubtaskFailure = { title: string; message: string; link?: true };
 
 const messageOf = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
+/** Existing tasks to link under the new task, and the tracker operation that does it. */
+export type LinkExisting = {
+  existing: readonly Choice[];
+  setParent: (id: string, parentId: string) => Promise<Task>;
+};
+
 /**
  * Creates the task, then each sub-task under it, one after another (local numbering and GitHub's
- * `--parent` both want that order). The task failing rejects; a failing sub-task is collected.
+ * `--parent` both want that order), then links each picked existing task under it. The task
+ * failing rejects; a failing sub-task or link is collected and the task stays.
  */
 export const createWithSubtasks = async (
   create: (input: NewTask) => Promise<Task>,
   input: NewTask,
   subtasks: readonly string[],
+  link?: LinkExisting,
 ): Promise<{ task: Task; failed: SubtaskFailure[] }> => {
   const task = await create(input);
   const failed: SubtaskFailure[] = [];
@@ -141,11 +163,28 @@ export const createWithSubtasks = async (
       failed.push({ title, message: messageOf(e) });
     }
   }
+  for (const c of link?.existing ?? []) {
+    try {
+      await link!.setParent(c.id, task.id);
+    } catch (e) {
+      failed.push({ title: c.label, message: messageOf(e), link: true });
+    }
+  }
   return { task, failed };
 };
 
 export const partialMessage = (taskId: string, failed: readonly SubtaskFailure[]): string => {
-  const n = failed.length;
-  const list = failed.map((f) => `“${f.title}” (${f.message})`).join('; ');
-  return `Created ${taskId}, but ${n} sub-task${n === 1 ? ' was' : 's were'} not created: ${list}.`;
+  const list = (fs: readonly SubtaskFailure[]): string => fs.map((f) => `“${f.title}” (${f.message})`).join('; ');
+  const created = failed.filter((f) => f.link !== true);
+  const linked = failed.filter((f) => f.link === true);
+  const parts: string[] = [];
+  if (created.length > 0) {
+    const n = created.length;
+    parts.push(`${n} sub-task${n === 1 ? ' was' : 's were'} not created: ${list(created)}`);
+  }
+  if (linked.length > 0) {
+    const n = linked.length;
+    parts.push(`${n} existing task${n === 1 ? ' was' : 's were'} not linked under it: ${list(linked)}`);
+  }
+  return `Created ${taskId}, but ${parts.join('; ')}.`;
 };

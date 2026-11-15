@@ -32,3 +32,24 @@ export const parentTargets = (tracker: TrackerKind, child: Task, tasks: readonly
 /** Existing tasks that may be linked under `parent` as its sub-tasks, in board order. */
 export const childCandidates = (tracker: TrackerKind, parent: Task, tasks: readonly Task[]): Task[] =>
   tasks.filter((c) => canLinkUnder(tracker, c, parent, tasks));
+
+/**
+ * True when existing `child` may become a sub-task of a task not created yet (the add form), which
+ * will go under `parentId` (null: none). Local: only a new feature (no parent) takes sub-tasks.
+ * GitHub: the chosen parent and its ancestors would make a cycle.
+ */
+export const canLinkUnderNew = (tracker: TrackerKind, child: Task, parentId: string | null, tasks: readonly Task[]): boolean => {
+  if (child.state === 'done') return false;
+  if (tracker === 'local') return parentId === null && (child.kind === 'ticket' || !tasks.some((t) => t.parentId === child.id));
+  const seen = new Set<string>();
+  for (let up = parentId; up !== null && !seen.has(up); ) {
+    if (up === child.id) return false;
+    seen.add(up);
+    up = tasks.find((t) => t.id === up)?.parentId ?? null;
+  }
+  return true;
+};
+
+/** Existing tasks that may be linked under a task not created yet, in board order. */
+export const newChildCandidates = (tracker: TrackerKind, parentId: string | null, tasks: readonly Task[]): Task[] =>
+  tasks.filter((c) => canLinkUnderNew(tracker, c, parentId, tasks));
