@@ -16,6 +16,7 @@ import {
   pickedModel,
   thinkingDefaultLabel,
   thinkingField,
+  variantAfterModelPick,
   type AgentInfo,
   type ModelInfo,
   type StartLists,
@@ -165,9 +166,9 @@ export const mountStartTarget = (
         return;
       }
       value.model = picked.value;
-      // A level the new model does not offer is dropped (kept while its levels are unknown), and
-      // with no model in force at all there is nothing to think with (resolveStart drops it too).
-      value.variant = effectiveModel() === null ? null : keptVariant(value.variant, value.model, models);
+      // A level the model now in force (picked, else inherited) does not offer is dropped (kept
+      // while its levels are unknown); with no model at all there is nothing to think with.
+      value.variant = variantAfterModelPick(value.variant, value.model, inherited.model, models);
       drawModels();
       emit();
     },

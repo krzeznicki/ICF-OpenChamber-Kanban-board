@@ -10,7 +10,9 @@ import {
   defaultLabel,
   keptVariant,
   modelOptions,
+  offeredVariant,
   pickedModel,
+  variantAfterModelPick,
   thinkingDefaultLabel,
   thinkingField,
   type ModelInfo,
@@ -132,6 +134,30 @@ test('keptVariant: a level survives a model change only if the new model offers 
   assert.equal(keptVariant(null, 'a/x', models), null);
   // Back to the default model: the level is kept (it may apply to an inherited model).
   assert.equal(keptVariant('high', null, models), 'high');
+});
+
+test('variantAfterModelPick: the level is checked against the model in force, the inherited one when none is picked', () => {
+  const models = [m('a/x', 'X', ['low', 'high']), m('a/y', 'Y', ['max'])];
+  assert.equal(variantAfterModelPick('high', 'a/x', null, models), 'high');
+  assert.equal(variantAfterModelPick('high', 'a/y', 'a/x', models), null);
+  // Back to the default: the inherited model decides.
+  assert.equal(variantAfterModelPick('high', null, 'a/x', models), 'high');
+  assert.equal(variantAfterModelPick('high', null, 'a/y', models), null);
+  // No model in force at all: nothing to think with.
+  assert.equal(variantAfterModelPick('high', null, null, models), null);
+  // Levels not known yet: kept.
+  assert.equal(variantAfterModelPick('high', null, 'a/y', null), 'high');
+});
+
+test('offeredVariant: a start drops a level the resolved model is known not to offer', () => {
+  const models = [m('a/x', 'X', ['low', 'high']), m('a/y', 'Y', ['max']), { id: 'a/u', name: 'U', variants: [], variantsKnown: false as const }];
+  const opts = (model: string | null, variant: string | null) => ({ presetId: 'implement', model, agent: null, variant, location: 'worktree' as const });
+  assert.deepEqual(offeredVariant(opts('a/x', 'high'), models), { opts: opts('a/x', 'high'), dropped: null });
+  assert.deepEqual(offeredVariant(opts('a/y', 'high'), models), { opts: opts('a/y', null), dropped: 'high' });
+  assert.deepEqual(offeredVariant(opts('a/u', 'high'), models), { opts: opts('a/u', 'high'), dropped: null });
+  assert.deepEqual(offeredVariant(opts('gone/m', 'high'), models), { opts: opts('gone/m', 'high'), dropped: null });
+  assert.deepEqual(offeredVariant(opts('a/y', 'high'), null), { opts: opts('a/y', 'high'), dropped: null });
+  assert.deepEqual(offeredVariant(opts('a/y', null), models), { opts: opts('a/y', null), dropped: null });
 });
 
 test('the model loader fetches once per project and shares the answer; failures are tried again', async () => {

@@ -15,7 +15,7 @@ import { createLauncher } from './launcher.ts';
 import { pickPreset, type Preset } from './presets.ts';
 import { buildPrompt } from './prompt.ts';
 import type { QueueEntry } from './queue.ts';
-import type { StartLists } from './models.ts';
+import { offeredVariant, type StartLists } from './models.ts';
 import { resolveStart, startsFromExtension, type Settings, type StartOptions } from './settings.ts';
 import { askStart } from './ui/startForm.ts';
 
@@ -336,6 +336,14 @@ export const createStarter = (deps: StarterDeps) => {
       const picked = await askStart(task.title, opts, ctx.presets, deps.lists);
       if (picked === null) return;
       opts = picked;
+    }
+    if (opts.variant !== null) {
+      // A card's level set over an inherited model is kept only if the model in force offers it
+      // (the inherited model may have changed since); unknown levels or no list keep it.
+      const models = await deps.lists.models().catch(() => null);
+      const checked = offeredVariant(opts, models);
+      if (checked.dropped !== null) info(`${opts.model ?? 'The model'} does not offer the thinking level “${checked.dropped}”; starting without it`);
+      opts = checked.opts;
     }
     if (currentId() !== ctx.projectId) return;
     if (queuedIds().size > 0 || occupied() >= ctx.settings.maxParallel) {

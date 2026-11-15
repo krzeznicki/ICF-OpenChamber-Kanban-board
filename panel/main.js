@@ -4423,6 +4423,14 @@ ${ref}`,
     const m = models.find((x) => x.id === model);
     return m === void 0 || m.variantsKnown === false || m.variants.includes(variant) ? variant : null;
   };
+  var variantAfterModelPick = (variant, picked, inherited, models) => {
+    const inForce = picked ?? inherited;
+    return inForce === null ? null : keptVariant(variant, inForce, models);
+  };
+  var offeredVariant = (opts, models) => {
+    const kept = keptVariant(opts.variant, opts.model, models);
+    return kept === opts.variant ? { opts, dropped: null } : { opts: { ...opts, variant: kept }, dropped: opts.variant };
+  };
   var createDirectoryLoader = (fetch2, directory) => {
     const kept = /* @__PURE__ */ new Map();
     return () => {
@@ -4562,7 +4570,7 @@ ${ref}`,
           return;
         }
         value.model = picked.value;
-        value.variant = effectiveModel() === null ? null : keptVariant(value.variant, value.model, models);
+        value.variant = variantAfterModelPick(value.variant, value.model, inherited.model, models);
         drawModels();
         emit();
       }
@@ -12778,6 +12786,12 @@ ${note}` : note;
         const picked = await askStart(task.title, opts, ctx.presets, deps.lists);
         if (picked === null) return;
         opts = picked;
+      }
+      if (opts.variant !== null) {
+        const models = await deps.lists.models().catch(() => null);
+        const checked = offeredVariant(opts, models);
+        if (checked.dropped !== null) info2(`${opts.model ?? "The model"} does not offer the thinking level \u201C${checked.dropped}\u201D; starting without it`);
+        opts = checked.opts;
       }
       if (currentId() !== ctx.projectId) return;
       if (queuedIds().size > 0 || occupied() >= ctx.settings.maxParallel) {

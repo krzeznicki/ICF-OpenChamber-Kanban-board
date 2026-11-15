@@ -128,6 +128,32 @@ export const keptVariant = (variant: string | null, model: string | null, models
 };
 
 /**
+ * The level after a model pick: checked against the model then in force (the picked one, else the
+ * inherited one); with no model in force at all there is nothing to think with.
+ */
+export const variantAfterModelPick = (
+  variant: string | null,
+  picked: string | null,
+  inherited: string | null,
+  models: readonly ModelInfo[] | null,
+): string | null => {
+  const inForce = picked ?? inherited;
+  return inForce === null ? null : keptVariant(variant, inForce, models);
+};
+
+/**
+ * Before a start: a level the resolved model is known not to offer (a card's level set over an
+ * inherited model that has since changed) is dropped, and named in `dropped`.
+ */
+export const offeredVariant = <T extends { model: string | null; variant: string | null }>(
+  opts: T,
+  models: readonly ModelInfo[] | null,
+): { opts: T; dropped: string | null } => {
+  const kept = keptVariant(opts.variant, opts.model, models);
+  return kept === opts.variant ? { opts, dropped: null } : { opts: { ...opts, variant: kept }, dropped: opts.variant };
+};
+
+/**
  * Loads a list once per project directory (`directory()`; the service also caches per directory):
  * concurrent callers share one request, a success is kept, a failure (an `error` answer or a throw)
  * rejects and is tried again on the next call. No project (null) rejects.
