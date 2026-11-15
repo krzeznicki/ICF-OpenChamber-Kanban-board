@@ -54,6 +54,23 @@ export const canLinkUnderNew = (tracker: TrackerKind, child: Task, parentId: str
 export const newChildCandidates = (tracker: TrackerKind, parentId: string | null, tasks: readonly Task[]): Task[] =>
   tasks.filter((c) => canLinkUnderNew(tracker, c, parentId, tasks));
 
+export type LinkChoice = { id: string; label: string; hint: string };
+
+const linkChoice = (t: Task): LinkChoice => ({ id: t.id, label: t.title, hint: t.id });
+
+/**
+ * The task detail's two pickers: `parents` for "Parent" (move this task under one) and `children`
+ * for "Link existing task" (make one a sub-task of this task). Empty hides the picker.
+ */
+export const linkChoices = (
+  tracker: TrackerKind,
+  task: Task,
+  tasks: readonly Task[],
+): { parents: LinkChoice[]; children: LinkChoice[] } => ({
+  parents: parentTargets(tracker, task, tasks).map(linkChoice),
+  children: childCandidates(tracker, task, tasks).map(linkChoice),
+});
+
 /** The confirm before linking (dropping a card onto a card): names both tasks; locally the move changes the id and drops blockers. */
 export const linkConfirm = (tracker: TrackerKind, child: Task, parent: Task): { title: string; body: string } => ({
   title: `Make “${child.title}” a sub-task of “${parent.title}”?`,
