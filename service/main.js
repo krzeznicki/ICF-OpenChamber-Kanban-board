@@ -397,7 +397,7 @@ var DONE_WINDOW_MS = 30 * 24 * 3600 * 1e3;
 var ROLES2 = ["needs-triage", "needs-info", "ready-for-agent", "ready-for-human", "wontfix"];
 var CATEGORIES = ["bug", "enhancement"];
 var TYPE_PREFIX = "type:";
-var LIST_FIELDS = "number,title,body,labels,state,updatedAt,url,closedAt";
+var LIST_FIELDS = "number,title,body,labels,state,updatedAt,url,closedAt,assignees";
 var ROLE_DESCRIPTIONS = {
   "needs-triage": "Maintainer needs to evaluate this issue",
   "needs-info": "Waiting on reporter for more information",
@@ -406,7 +406,7 @@ var ROLE_DESCRIPTIONS = {
   wontfix: "Will not be actioned"
 };
 var RELATION_FIELDS = "number parent { number } subIssues(first: 100) { totalCount nodes { number state } } issueDependenciesSummary { totalBlockedBy } blockedBy(first: 100) { nodes { number } }";
-var ISSUE_FIELDS = `title body state url updatedAt closedAt labels(first: 100) { nodes { name } } ${RELATION_FIELDS}`;
+var ISSUE_FIELDS = `title body state url updatedAt closedAt labels(first: 100) { nodes { name } } assignees(first: 10) { nodes { login } } ${RELATION_FIELDS}`;
 var parseNumber = (id) => {
   const m = typeof id === "string" ? /^\s*#?(\d+)\s*$/.exec(id) : null;
   if (m === null || Number(m[1]) === 0) throw new TrackerError("INVALID", `GitHub task id must be "#<number>": ${String(id)}`);
@@ -537,7 +537,8 @@ var createGithubTracker = (root, exec, labels) => {
     parentId: rel.parent === null ? null : idOf(rel.parent),
     blockedBy: (rel.blockedBy ?? bodyBlockers(issue.body)).map(idOf),
     url: issue.url,
-    updatedAt: Date.parse(issue.updatedAt) || 0
+    updatedAt: Date.parse(issue.updatedAt) || 0,
+    claimed: issue.assignees.length > 0
   });
   const load = async (n) => {
     const g = (await graph([n], true)).get(n) ?? null;
@@ -550,7 +551,8 @@ var createGithubTracker = (root, exec, labels) => {
       state: g.state ?? "OPEN",
       updatedAt: g.updatedAt ?? "",
       url: g.url ?? "",
-      closedAt: g.closedAt ?? null
+      closedAt: g.closedAt ?? null,
+      assignees: (g.assignees?.nodes ?? []).map((a) => a.login)
     };
     const rel = relationsOf(g);
     return { task: toTask(issue, rel), issue, rel };
@@ -603,9 +605,17 @@ var createGithubTracker = (root, exec, labels) => {
     setupLabels: () => ensureLabels([...stateLabels, ...CATEGORIES]),
     async list() {
       const r = await run(["issue", "list", "--state", "all", "--limit", "500", "--json", LIST_FIELDS]);
-      const raw = parseJson(r.stdout, "issue list");
+      const raw = parseJson(
+        r.stdout,
+        "issue list"
+      );
       const now = Date.now();
-      const issues = raw.map((i) => ({ ...i, body: i.body ?? "", labels: (i.labels ?? []).map((l) => l.name) })).filter((i) => i.state === "OPEN" || i.closedAt !== null && now - Date.parse(i.closedAt) <= DONE_WINDOW_MS).sort((a, b) => a.number - b.number);
+      const issues = raw.map((i) => ({
+        ...i,
+        body: i.body ?? "",
+        labels: (i.labels ?? []).map((l) => l.name),
+        assignees: (i.assignees ?? []).map((a) => a.login)
+      })).filter((i) => i.state === "OPEN" || i.closedAt !== null && now - Date.parse(i.closedAt) <= DONE_WINDOW_MS).sort((a, b) => a.number - b.number);
       if (issues.length === 0) return [];
       const rel = await graph(issues.map((i) => i.number), false);
       return issues.map((i) => toTask(i, relationsOf(rel.get(i.number) ?? null)));
@@ -642,6 +652,13 @@ var createGithubTracker = (root, exec, labels) => {
       const remove = issue.labels.filter((l) => isTypeLabel(l) && l !== label);
       await swapLabels(issue.number, issue.labels.includes(label) ? null : label, remove);
       return get(idOf(issue.number));
+    },
+    async claim(id) {
+      const { task, issue } = await load(parseNumber(id));
+      if (task.kind === "parent") throw new TrackerError("INVALID", `Only a sub-task can be claimed, not a parent issue: ${task.id}`);
+      if (task.state === "done") throw new TrackerError("INVALID", `A closed issue cannot be claimed; reopen it first: ${task.id}`);
+      await run(["issue", "edit", String(issue.number), "--add-assignee", "@me"]);
+      return get(task.id);
     },
     async close(id, opts) {
       const { issue, rel } = await load(parseNumber(id));
@@ -743,6 +760,7 @@ var toState = (word) => {
       return "needs-triage";
   }
 };
+var isClaimed = (word) => (word ?? "").trim().toLowerCase() === "claimed";
 var fromState = (state2) => state2 === "done" ? "resolved" : state2;
 var toType = (value) => {
   const v = (value ?? "").trim().toLowerCase();
@@ -762,6 +780,7 @@ var parseIssue = (text, fileName) => {
     state: toState(fields.Status),
     type: toType(fields.Type),
     blockedBy: toBlockers(fields["Blocked by"]),
+    claimed: isClaimed(fields.Status),
     body: text
   };
 };
@@ -911,7 +930,8 @@ var createLocalTracker = (root) => {
         parentId: null,
         blockedBy: [],
         url: null,
-        updatedAt: s.mtimeMs
+        updatedAt: s.mtimeMs,
+        claimed: false
       };
     }
     const p = parseSpec(file.text, feature);
@@ -925,7 +945,8 @@ var createLocalTracker = (root) => {
       parentId: null,
       blockedBy: [],
       url: null,
-      updatedAt: file.mtime
+      updatedAt: file.mtime,
+      claimed: false
     };
   };
   const resolveBlockers = (feature, numbers, files) => {
@@ -955,7 +976,8 @@ var createLocalTracker = (root) => {
       parentId: specId(feature),
       blockedBy: resolveBlockers(feature, p.blockedBy, siblings),
       url: null,
-      updatedAt: data.mtime
+      updatedAt: data.mtime,
+      claimed: p.claimed
     };
   };
   const get = async (id) => {
@@ -1050,6 +1072,11 @@ var createLocalTracker = (root) => {
     setState,
     setType(id, type) {
       return patch(id, "Type", type.trim());
+    },
+    async claim(id) {
+      if (parseId(id).kind !== "ticket") throw new TrackerError("INVALID", `Only a ticket can be claimed, not a feature: ${id}`);
+      if ((await get(id)).state === "done") throw new TrackerError("INVALID", `A done task cannot be claimed; reopen it first: ${id}`);
+      return patch(id, "Status", "claimed");
     },
     async close(id, opts) {
       const task = await get(id);

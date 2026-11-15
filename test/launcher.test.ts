@@ -15,6 +15,7 @@ const task: Task = {
   blockedBy: [],
   url: 'https://github.com/o/r/issues/7',
   updatedAt: 0,
+  claimed: false,
 };
 const opts: StartOptions = { presetId: 'implement', model: null, agent: null, location: 'worktree' };
 

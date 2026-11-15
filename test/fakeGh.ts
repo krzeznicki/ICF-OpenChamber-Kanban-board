@@ -12,6 +12,8 @@ export type FakeIssue = {
   closedAt?: string | null;
   parent?: number | null;
   blockedBy?: number[];
+  /** Assignee logins; `--add-assignee @me` adds "me". */
+  assignees?: string[];
 };
 
 export type FakeGhOptions = {
@@ -43,6 +45,7 @@ export const fakeGh = (seed: FakeIssue[], options: FakeGhOptions = {}) => {
     closedAt: null as string | null,
     parent: null as number | null,
     blockedBy: [] as number[],
+    assignees: [] as string[],
     ...i,
   }));
   const labels = new Set(options.labels ?? []);
@@ -59,12 +62,14 @@ export const fakeGh = (seed: FakeIssue[], options: FakeGhOptions = {}) => {
     updatedAt: i.updatedAt,
     url: `${URL}${i.number}`,
     closedAt: i.closedAt,
+    assignees: i.assignees.map((login) => ({ id: `U_${login}`, login, name: login })),
   });
   const graphJson = (i: (typeof issues)[number]) => {
     const children = issues.filter((c) => c.parent === i.number);
     return {
       ...listJson(i),
       labels: { nodes: i.labels.map((name) => ({ name })) },
+      assignees: { nodes: i.assignees.map((login) => ({ login })) },
       parent: i.parent === null ? null : { number: i.parent },
       subIssues: { totalCount: children.length, nodes: children.map((c) => ({ number: c.number, state: c.state })) },
       issueDependenciesSummary: { totalBlockedBy: i.blockedBy.length },
@@ -120,6 +125,7 @@ export const fakeGh = (seed: FakeIssue[], options: FakeGhOptions = {}) => {
         closedAt: null,
         parent: parent === undefined ? null : Number(parent),
         blockedBy: flagValues(args, '--blocked-by').map(Number),
+        assignees: [],
       });
       return ok(`${URL}${number}\n`);
     }
@@ -131,6 +137,11 @@ export const fakeGh = (seed: FakeIssue[], options: FakeGhOptions = {}) => {
       if (missing !== undefined) return fail(`'${missing}' not found\n`);
       const remove = new Set(flagValues(args, '--remove-label'));
       issue!.labels = [...issue!.labels.filter((l) => !remove.has(l)), ...add.filter((l) => !issue!.labels.includes(l))];
+      for (const login of flagValues(args, '--add-assignee').map((a) => (a === '@me' ? 'me' : a))) {
+        if (!issue!.assignees.includes(login)) issue!.assignees.push(login);
+      }
+      const unassign = new Set(flagValues(args, '--remove-assignee').map((a) => (a === '@me' ? 'me' : a)));
+      issue!.assignees = issue!.assignees.filter((l) => !unassign.has(l));
       touch(issue!);
       return ok(`${URL}${issue!.number}\n`);
     }

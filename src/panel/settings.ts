@@ -34,6 +34,8 @@ export const DEFAULT_SUMMARY_PROMPT = 'Summarise this task in a few plain senten
 export const MAX_PARALLEL_MIN = 1;
 export const MAX_PARALLEL_MAX = 10;
 export const FALLBACK_PRESET_ID = 'implement';
+/** A parent (feature) starts one orchestrator session with this preset unless its card says otherwise. */
+export const ORCHESTRATE_PRESET_ID = 'orchestrate';
 export const LOCATIONS: readonly Location[] = ['worktree', 'project'];
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -126,7 +128,7 @@ export const resolveSettings = (global: SettingsLayer, project: SettingsLayer): 
 
 /**
  * The options a session starts with: the card's choice, else the settings. The preset is the
- * card's, else the default for the task's type, else defaults.presetId; whichever id is chosen,
+ * card's, else 'orchestrate' for a parent (a feature), else the default for the task's type, else defaults.presetId; whichever id is chosen,
  * one that is not among `presets` (e.g. a deleted custom preset) becomes 'implement'.
  * `presets` defaults to the built-ins; pass listPresets(...) so custom presets count.
  */
@@ -137,8 +139,9 @@ export const resolveStart = (
   presets: readonly Preset[] = BUILTIN_PRESETS,
 ): StartOptions => {
   const c = parseCardOptions(card);
+  const byKind = task.kind === 'parent' ? ORCHESTRATE_PRESET_ID : undefined;
   const byType = task.type !== null ? s.presetByType[task.type] : undefined;
-  const wanted = c.presetId ?? byType ?? s.defaults.presetId;
+  const wanted = c.presetId ?? byKind ?? byType ?? s.defaults.presetId;
   return {
     presetId: presets.some((p) => p.id === wanted) ? wanted : FALLBACK_PRESET_ID,
     model: c.model ?? s.defaults.model,

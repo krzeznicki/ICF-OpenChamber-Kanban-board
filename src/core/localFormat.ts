@@ -9,6 +9,8 @@ export type ParsedIssue = {
   state: TaskState;
   type: string | null;
   blockedBy: number[];
+  /** The Status word is `claimed` (state stays ready-for-agent). */
+  claimed: boolean;
   /** full markdown as stored */
   body: string;
 };
@@ -111,6 +113,8 @@ const toState = (word: string | undefined): TaskState => {
   }
 };
 
+const isClaimed = (word: string | undefined): boolean => (word ?? '').trim().toLowerCase() === 'claimed';
+
 const fromState = (state: TaskState): string => (state === 'done' ? 'resolved' : state);
 
 const toType = (value: string | undefined): string | null => {
@@ -133,6 +137,7 @@ export const parseIssue = (text: string, fileName: string): ParsedIssue => {
     state: toState(fields.Status),
     type: toType(fields.Type),
     blockedBy: toBlockers(fields['Blocked by']),
+    claimed: isClaimed(fields.Status),
     body: text,
   };
 };

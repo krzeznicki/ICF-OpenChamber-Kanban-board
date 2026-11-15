@@ -36,6 +36,7 @@ const task = (type: string | null, kind: Task['kind'] = 'ticket'): Task => ({
   blockedBy: [],
   url: null,
   updatedAt: 0,
+  claimed: false,
 });
 
 // --- resolveSettings ---
@@ -140,6 +141,14 @@ test('preset order: card, then the type default, then defaults.presetId', () => 
   assert.equal(resolveStart(s, task('chore'), {}).presetId, 'prototype');
   assert.equal(resolveStart(s, task(null), {}).presetId, 'prototype');
   assert.equal(resolveStart(s, task('research'), { presetId: 'orchestrate' }).presetId, 'orchestrate');
+});
+
+test('a parent defaults to orchestrate; the card choice still wins', () => {
+  const s = resolveSettings({ defaults: { presetId: 'prototype' }, presetByType: { enhancement: 'plan' } }, {});
+  assert.equal(resolveStart(s, task('enhancement', 'parent'), {}).presetId, 'orchestrate');
+  assert.equal(resolveStart(s, task(null, 'parent'), {}).presetId, 'orchestrate');
+  assert.equal(resolveStart(s, task('enhancement', 'parent'), { presetId: 'implement' }).presetId, 'implement');
+  assert.equal(resolveStart(s, task('enhancement'), {}).presetId, 'plan');
 });
 
 test('an unknown preset id falls back to implement', () => {

@@ -221,3 +221,29 @@ test('ids escaping .scratch/ reject INVALID; missing ones NOT_FOUND', async (t) 
   await rejectsWith(tracker.get('.scratch/example-feature/issues/99-missing.md'), 'NOT_FOUND');
   await rejectsWith(tracker.get('.scratch/missing-feature/spec.md'), 'NOT_FOUND');
 });
+
+test('claim writes Status: claimed; the task stays ready-for-agent and is claimed until setState', async (t) => {
+  const root = await repo(t);
+  const tracker = createLocalTracker(root);
+  const before = await tracker.get(T2);
+  assert.equal(before.claimed, false);
+  const claimed = await tracker.claim(T2);
+  assert.equal(claimed.claimed, true);
+  assert.equal(claimed.state, 'ready-for-agent');
+  const text = await readFile(join(root, T2), 'utf8');
+  assert.match(text, /\*\*Status:\*\* claimed\n/);
+  assert.doesNotMatch(text, /needs-info/);
+  assert.equal((await tracker.list()).find((x) => x.id === T2)?.claimed, true);
+  const done = await tracker.setState(T2, 'done');
+  assert.equal(done.claimed, false);
+  assert.equal(done.state, 'done');
+});
+
+test('claim of a parent or a missing ticket fails', async (t) => {
+  const root = await repo(t);
+  const tracker = createLocalTracker(root);
+  await rejectsWith(tracker.claim('.scratch/example-feature/issues/09-none.md'), 'NOT_FOUND');
+  await rejectsWith(tracker.claim(SPEC), 'INVALID');
+  await tracker.setState(T1, 'done');
+  await rejectsWith(tracker.claim(T1), 'INVALID');
+});

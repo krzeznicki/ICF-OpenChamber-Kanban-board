@@ -1,4 +1,4 @@
-// One task card: title, id, badges (session, type, ready-for-human, wontfix, blocked) and, for a parent,
+// One task card: title, id, badges (session, led by orchestrator, type, ready-for-human, wontfix, blocked) and, for a parent,
 // its done/total sub-tasks with a progress bar. Focusable: Enter opens it (its agent session when it
 // has one, else the detail), and a press starts a drag (ui/dnd.ts). A card with a session also has a
 // Details button for the detail sheet. A card whose move is in flight is drawn busy.
@@ -62,6 +62,7 @@ export const renderCard = (model: CardModel, busy = false, onDetails?: (taskId: 
   } else if (model.starting) {
     badge('starting agent…', 'info');
   }
+  if (model.ledByOrchestrator) badge('led by orchestrator', 'primary');
   if (task.kind === 'parent') badge('parent', 'primary');
   if (task.type !== null) badge(task.type, typeTone(task.type));
   if (task.state === 'ready-for-human') badge('ready-for-human', 'warning');

@@ -103,6 +103,7 @@ export const createLocalTracker = (root: string): Tracker => {
         blockedBy: [],
         url: null,
         updatedAt: s.mtimeMs,
+        claimed: false,
       };
     }
     const p = parseSpec(file.text, feature);
@@ -117,6 +118,7 @@ export const createLocalTracker = (root: string): Tracker => {
       blockedBy: [],
       url: null,
       updatedAt: file.mtime,
+      claimed: false,
     };
   };
 
@@ -150,6 +152,7 @@ export const createLocalTracker = (root: string): Tracker => {
       blockedBy: resolveBlockers(feature, p.blockedBy, siblings),
       url: null,
       updatedAt: data.mtime,
+      claimed: p.claimed,
     };
   };
 
@@ -257,6 +260,12 @@ export const createLocalTracker = (root: string): Tracker => {
 
     setType(id, type) {
       return patch(id, 'Type', type.trim());
+    },
+
+    async claim(id) {
+      if (parseId(id).kind !== 'ticket') throw new TrackerError('INVALID', `Only a ticket can be claimed, not a feature: ${id}`);
+      if ((await get(id)).state === 'done') throw new TrackerError('INVALID', `A done task cannot be claimed; reopen it first: ${id}`);
+      return patch(id, 'Status', 'claimed');
     },
 
     async close(id, opts) {

@@ -26,6 +26,11 @@ export type Task = {
   url: string | null;
   /** epoch ms */
   updatedAt: number;
+  /**
+   * An agent took it with `task-board claim` (local: `Status: claimed`; GitHub: it has an assignee).
+   * Only counts while the task is ready-for-agent and its parent's orchestrator session runs.
+   */
+  claimed: boolean;
 };
 
 export type NewTask = {
@@ -45,6 +50,8 @@ export interface Tracker {
   /** 'done' closes; from 'done' reopens */
   setState(id: string, state: TaskState): Promise<Task>;
   setType(id: string, type: string): Promise<Task>;
+  /** Marks a sub-task as taken by the orchestrator (local: `Status: claimed`; GitHub: assign @me). */
+  claim(id: string): Promise<Task>;
   /** returns every task it closed */
   close(id: string, opts: { withChildren: boolean }): Promise<Task[]>;
 }

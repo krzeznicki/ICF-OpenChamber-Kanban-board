@@ -15,6 +15,7 @@ const task = (extra: Partial<Task> = {}): Task => ({
   blockedBy: [],
   url: null,
   updatedAt: 0,
+  claimed: false,
   ...extra,
 });
 const implement = BUILTIN_PRESETS.find((p) => p.id === 'implement')!;
@@ -74,4 +75,20 @@ test('shellWord quotes only what needs it', () => {
   assert.equal(shellWord('/a/b-c_d.mjs'), '/a/b-c_d.mjs');
   assert.equal(shellWord('/My Dir/x'), `'/My Dir/x'`);
   assert.equal(shellWord(`it's`), `'it'\\''s'`);
+});
+
+test('prompt: a parent tells the orchestrator to claim each sub-task first and move it with state when done', () => {
+  const kids = [task({ id: '#5', title: 'Kid', state: 'ready-for-agent' })];
+  const p = buildPrompt(task({ id: '#4', kind: 'parent', url: 'https://github.com/o/r/issues/4' }), implement, CLI, kids);
+  assert.ok(p.includes(`node ${CLI} claim <sub-task id>`), p);
+  assert.ok(p.includes(`node ${CLI} state <sub-task id> done`), p);
+  assert.ok(p.indexOf('claim <sub-task id>') < p.indexOf(implement.text));
+});
+
+test('prompt: a parent with no sub-tasks yet still gets the claim instructions; a ticket does not', () => {
+  const p = buildPrompt(task({ kind: 'parent' }), implement, CLI, []);
+  assert.ok(p.includes('## Sub-tasks'));
+  assert.ok(p.includes('No sub-tasks yet'));
+  assert.ok(p.includes(`node ${CLI} claim <sub-task id>`));
+  assert.ok(!buildPrompt(task(), implement, CLI, []).includes('claim'));
 });

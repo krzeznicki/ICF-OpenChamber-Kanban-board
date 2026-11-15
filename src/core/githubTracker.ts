@@ -10,7 +10,7 @@ const DONE_WINDOW_MS = 30 * 24 * 3600 * 1000;
 const ROLES: readonly LabelRole[] = ['needs-triage', 'needs-info', 'ready-for-agent', 'ready-for-human', 'wontfix'];
 const CATEGORIES = ['bug', 'enhancement'];
 const TYPE_PREFIX = 'type:';
-const LIST_FIELDS = 'number,title,body,labels,state,updatedAt,url,closedAt';
+const LIST_FIELDS = 'number,title,body,labels,state,updatedAt,url,closedAt,assignees';
 const ROLE_DESCRIPTIONS: Record<LabelRole, string> = {
   'needs-triage': 'Maintainer needs to evaluate this issue',
   'needs-info': 'Waiting on reporter for more information',
@@ -29,6 +29,8 @@ type Issue = {
   updatedAt: string;
   url: string;
   closedAt: string | null;
+  /** assignee logins; any assignee means the issue is claimed */
+  assignees: string[];
 };
 type Relations = {
   parent: number | null;
@@ -47,6 +49,7 @@ type GraphIssue = {
   updatedAt?: string;
   closedAt?: string | null;
   labels?: { nodes: { name: string }[] };
+  assignees?: { nodes: { login: string }[] };
   parent: { number: number } | null;
   subIssues: { totalCount: number; nodes: { number: number; state: string }[] } | null;
   issueDependenciesSummary: { totalBlockedBy: number } | null;
@@ -56,7 +59,7 @@ type GraphIssue = {
 const RELATION_FIELDS =
   'number parent { number } subIssues(first: 100) { totalCount nodes { number state } } ' +
   'issueDependenciesSummary { totalBlockedBy } blockedBy(first: 100) { nodes { number } }';
-const ISSUE_FIELDS = `title body state url updatedAt closedAt labels(first: 100) { nodes { name } } ${RELATION_FIELDS}`;
+const ISSUE_FIELDS = `title body state url updatedAt closedAt labels(first: 100) { nodes { name } } assignees(first: 10) { nodes { login } } ${RELATION_FIELDS}`;
 
 export const parseNumber = (id: string): number => {
   const m = typeof id === 'string' ? /^\s*#?(\d+)\s*$/.exec(id) : null;
@@ -224,6 +227,7 @@ export const createGithubTracker = (root: string, exec: Exec, labels: ProjectCon
     blockedBy: (rel.blockedBy ?? bodyBlockers(issue.body)).map(idOf),
     url: issue.url,
     updatedAt: Date.parse(issue.updatedAt) || 0,
+    claimed: issue.assignees.length > 0,
   });
 
   const load = async (n: number): Promise<{ task: Task; issue: Issue; rel: Relations }> => {
@@ -238,6 +242,7 @@ export const createGithubTracker = (root: string, exec: Exec, labels: ProjectCon
       updatedAt: g.updatedAt ?? '',
       url: g.url ?? '',
       closedAt: g.closedAt ?? null,
+      assignees: (g.assignees?.nodes ?? []).map((a) => a.login),
     };
     const rel = relationsOf(g);
     return { task: toTask(issue, rel), issue, rel };
@@ -299,10 +304,18 @@ export const createGithubTracker = (root: string, exec: Exec, labels: ProjectCon
 
     async list() {
       const r = await run(['issue', 'list', '--state', 'all', '--limit', '500', '--json', LIST_FIELDS]);
-      const raw = parseJson<(Omit<Issue, 'labels'> & { labels: { name: string }[] })[]>(r.stdout, 'issue list');
+      const raw = parseJson<(Omit<Issue, 'labels' | 'assignees'> & { labels: { name: string }[]; assignees?: { login: string }[] })[]>(
+        r.stdout,
+        'issue list',
+      );
       const now = Date.now();
       const issues: Issue[] = raw
-        .map((i) => ({ ...i, body: i.body ?? '', labels: (i.labels ?? []).map((l) => l.name) }))
+        .map((i) => ({
+          ...i,
+          body: i.body ?? '',
+          labels: (i.labels ?? []).map((l) => l.name),
+          assignees: (i.assignees ?? []).map((a) => a.login),
+        }))
         .filter((i) => i.state === 'OPEN' || (i.closedAt !== null && now - Date.parse(i.closedAt) <= DONE_WINDOW_MS))
         .sort((a, b) => a.number - b.number);
       if (issues.length === 0) return [];
@@ -345,6 +358,15 @@ export const createGithubTracker = (root: string, exec: Exec, labels: ProjectCon
       const remove = issue.labels.filter((l) => isTypeLabel(l) && l !== label);
       await swapLabels(issue.number, issue.labels.includes(label) ? null : label, remove);
       return get(idOf(issue.number));
+    },
+
+    async claim(id) {
+      const { task, issue } = await load(parseNumber(id));
+      if (task.kind === 'parent') throw new TrackerError('INVALID', `Only a sub-task can be claimed, not a parent issue: ${task.id}`);
+      if (task.state === 'done') throw new TrackerError('INVALID', `A closed issue cannot be claimed; reopen it first: ${task.id}`);
+      // The state label is left as it is; an assignee stays on later state changes too.
+      await run(['issue', 'edit', String(issue.number), '--add-assignee', '@me']);
+      return get(task.id);
     },
 
     async close(id, opts) {

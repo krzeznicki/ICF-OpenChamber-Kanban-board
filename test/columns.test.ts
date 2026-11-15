@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { GuestSessionRecord } from '@openchamber/sdk';
-import { columnFor, groupTasks, sessionForTask, type SessionInfo } from '../src/panel/columns.ts';
+import { columnFor, groupTasks, ledByOrchestrator, sessionForTask, type SessionInfo } from '../src/panel/columns.ts';
 import type { Task, TaskState } from '../src/core/types.ts';
 
 const task = (state: TaskState, id = '.scratch/f/issues/01-a.md'): Task => ({
@@ -15,6 +15,7 @@ const task = (state: TaskState, id = '.scratch/f/issues/01-a.md'): Task => ({
   blockedBy: [],
   url: null,
   updatedAt: 0,
+  claimed: false,
 });
 
 const info = (activity: SessionInfo['activity'], outcome: SessionInfo['outcome'] = null): SessionInfo => ({
@@ -207,4 +208,60 @@ test('groupTasks: link status columns (busy in progress, waiting and idle review
   const withError = groupTasks(tasks, [], new Set(), false, links, new Set(['q']), new Map([['q', 'quota'], ['a', 'x']]));
   assert.equal(withError.in_progress.find((c) => c.task.id === 'q')?.queueError, 'quota');
   assert.equal(withError.in_progress.find((c) => c.task.id === 'a')?.queueError, null);
+});
+
+// --- parent orchestration ---
+
+test('columnFor: a claimed ready-for-agent child is in progress only while its parent session runs', () => {
+  const claimed = { ...task('ready-for-agent'), parentId: 'p', claimed: true };
+  assert.equal(columnFor(claimed, null, false, true), 'in_progress');
+  assert.equal(columnFor(claimed, null, false, false), 'ready');
+  assert.equal(columnFor(claimed, null, false), 'ready');
+  // Not claimed: the orchestrator has not taken it yet.
+  assert.equal(columnFor({ ...claimed, claimed: false }, null, false, true), 'ready');
+  // Only ready-for-agent counts (on GitHub an assignee can stay on any state).
+  assert.equal(columnFor({ ...claimed, state: 'needs-info' }, null, false, true), 'backlog');
+  assert.equal(columnFor({ ...claimed, state: 'done' }, null, false, true), 'done');
+});
+
+test('groupTasks: a claimed child follows its running parent into In Progress and is led by the orchestrator', () => {
+  const tasks = [
+    t('p', 'ready-for-agent', { kind: 'parent' }),
+    t('c1', 'ready-for-agent', { parentId: 'p', claimed: true }),
+    t('c2', 'ready-for-agent', { parentId: 'p' }),
+    t('c3', 'done', { parentId: 'p' }),
+  ];
+  const board = groupTasks(tasks, [record('orch', ['p'], { activity: 'running' })], new Set(), false);
+  assert.deepEqual(ids(board.in_progress), ['p', '  c1']);
+  assert.deepEqual(ids(board.ready), ['c2']);
+  assert.deepEqual(ids(board.done), ['c3']);
+  const all = Object.values(board).flat();
+  const led = (id: string): boolean | undefined => all.find((c) => c.task.id === id)?.ledByOrchestrator;
+  assert.equal(led('p'), false);
+  assert.equal(led('c1'), true);
+  assert.equal(led('c2'), true);
+  assert.equal(led('c3'), false);
+});
+
+test('groupTasks: with the parent session finished, a claimed child shows Ready and is not led', () => {
+  const tasks = [t('p', 'ready-for-agent', { kind: 'parent' }), t('c1', 'ready-for-agent', { parentId: 'p', claimed: true })];
+  const board = groupTasks(tasks, [record('orch', ['p'], { activity: 'idle', outcome: 'completed' })], new Set(), false);
+  assert.deepEqual(ids(board.ready), ['c1']);
+  assert.equal(board.ready[0]?.ledByOrchestrator, false);
+});
+
+test('groupTasks: a parent session known only by its busy link also leads the children', () => {
+  const tasks = [t('p', 'ready-for-agent', { kind: 'parent' }), t('c1', 'ready-for-agent', { parentId: 'p', claimed: true })];
+  const board = groupTasks(tasks, [], new Set(), false, [{ taskId: 'p', sessionId: 'sp', status: 'busy' }]);
+  assert.deepEqual(ids(board.in_progress), ['p', '  c1']);
+});
+
+test('ledByOrchestrator: a not-done child whose parent session runs or retries', () => {
+  const child = t('c1', 'ready-for-agent', { parentId: 'p' });
+  assert.equal(ledByOrchestrator(child, [record('orch', ['p'], { activity: 'running' })]), true);
+  assert.equal(ledByOrchestrator(child, [record('orch', ['p'], { activity: 'retrying' })]), true);
+  assert.equal(ledByOrchestrator(child, [record('orch', ['p'], { activity: 'waiting-question' })]), false);
+  assert.equal(ledByOrchestrator(child, []), false);
+  assert.equal(ledByOrchestrator({ ...child, state: 'done' }, [record('orch', ['p'], { activity: 'running' })]), false);
+  assert.equal(ledByOrchestrator(t('x', 'ready-for-agent'), [record('orch', ['p'], { activity: 'running' })]), false);
 });

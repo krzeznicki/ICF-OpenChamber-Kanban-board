@@ -20,7 +20,15 @@ export type SessionInfo = {
   archived: boolean;
 };
 
-export const columnFor = (task: Task, session: SessionInfo | null, queued: boolean): Column => {
+/** The session works right now (running or retrying). */
+export const isWorking = (session: SessionInfo | null): boolean =>
+  session !== null && !session.archived && (session.activity === 'running' || session.activity === 'retrying');
+
+/**
+ * `parentSessionRunning`: the task's parent has a working orchestrator session (the caller asks
+ * sessionForTask for the parent). A sub-task the orchestrator claimed then sits in In Progress.
+ */
+export const columnFor = (task: Task, session: SessionInfo | null, queued: boolean, parentSessionRunning = false): Column => {
   if (task.state === 'done') return 'done';
   if (queued) return 'in_progress';
   if (session !== null && !session.archived) {
@@ -29,6 +37,7 @@ export const columnFor = (task: Task, session: SessionInfo | null, queued: boole
     if (a === 'waiting-permission' || a === 'waiting-question') return 'review';
     if (a === 'idle' && session.outcome !== null) return 'review';
   }
+  if (task.state === 'ready-for-agent' && task.claimed && parentSessionRunning) return 'in_progress';
   return task.state === 'ready-for-agent' ? 'ready' : 'backlog';
 };
 
@@ -80,6 +89,16 @@ export const sessionForTask = (
   return newest === null ? null : fromLink(newest);
 };
 
+/**
+ * A not-done sub-task whose parent has a working orchestrator session: the orchestrator leads it,
+ * so the board starts no session of its own for it.
+ */
+export const ledByOrchestrator = (
+  task: Task,
+  sessions: GuestSessionRecord[],
+  links: readonly SessionLink[] = [],
+): boolean => task.parentId !== null && task.state !== 'done' && isWorking(sessionForTask(task.parentId, sessions, links));
+
 export type CardModel = {
   task: Task;
   session: SessionInfo | null;
@@ -95,6 +114,8 @@ export type CardModel = {
   queued: boolean;
   /** Why the service's last start of this queued card failed; null otherwise. */
   queueError: string | null;
+  /** A sub-task whose parent's orchestrator session works now (see ledByOrchestrator). */
+  ledByOrchestrator: boolean;
 };
 
 export type BoardModel = Record<Column, CardModel[]>;
@@ -122,13 +143,25 @@ export const groupTasks = (
     children.set(t.parentId, list);
   }
 
+  const parentWorking = new Map<string, boolean>();
+  const parentRunning = (parentId: string | null): boolean => {
+    if (parentId === null) return false;
+    let running = parentWorking.get(parentId);
+    if (running === undefined) {
+      running = isWorking(sessionForTask(parentId, sessions, links));
+      parentWorking.set(parentId, running);
+    }
+    return running;
+  };
+
   const cards = new Map<string, { column: Column; card: CardModel }>();
   for (const task of tasks) {
     if (hideSubtasks && task.parentId !== null) continue;
     const session = sessionForTask(task.id, sessions, links);
     const kids = children.get(task.id) ?? [];
+    const led = task.state !== 'done' && parentRunning(task.parentId);
     cards.set(task.id, {
-      column: columnFor(task, session, starting.has(task.id) || (queued.has(task.id) && task.state !== 'done')),
+      column: columnFor(task, session, starting.has(task.id) || (queued.has(task.id) && task.state !== 'done'), led),
       card: {
         task,
         session,
@@ -141,6 +174,7 @@ export const groupTasks = (
         starting: starting.has(task.id) && session === null,
         queued: queued.has(task.id) && !starting.has(task.id) && task.state !== 'done',
         queueError: queued.has(task.id) && !starting.has(task.id) && task.state !== 'done' ? (queueErrors.get(task.id) ?? null) : null,
+        ledByOrchestrator: led,
       },
     });
   }

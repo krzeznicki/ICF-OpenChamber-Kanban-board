@@ -63,7 +63,7 @@ test('list maps labels, parents, sub-issues and blockers; drops issues closed ov
   const list = gh.calls.find((c) => c[1] === 'issue' && c[2] === 'list')!;
   assert.deepEqual(list, [
     'gh', 'issue', 'list', '--state', 'all', '--limit', '500',
-    '--json', 'number,title,body,labels,state,updatedAt,url,closedAt',
+    '--json', 'number,title,body,labels,state,updatedAt,url,closedAt,assignees',
   ]);
   assert.equal(gh.calls.filter((c) => c[1] === 'api' && c[2] === 'graphql').length, 1);
 });
@@ -202,4 +202,39 @@ test('empty repo lists [] without a GraphQL call', async () => {
   const { tracker, gh } = setup([]);
   assert.deepEqual(await tracker.list(), []);
   assert.equal(gh.calls.filter((c) => c[1] === 'api').length, 0);
+});
+
+test('claimed: an issue with an assignee is claimed, in list and get', async () => {
+  const { tracker } = setup([
+    { number: 1, title: 'Feature' },
+    { number: 2, title: 'Mine', labels: ['ready-for-agent'], parent: 1, assignees: ['me'] },
+    { number: 3, title: 'Free', labels: ['ready-for-agent'], parent: 1 },
+  ]);
+  const byId = new Map((await tracker.list()).map((x) => [x.id, x]));
+  assert.equal(byId.get('#2')!.claimed, true);
+  assert.equal(byId.get('#3')!.claimed, false);
+  assert.equal((await tracker.get('#2')).claimed, true);
+  assert.equal((await tracker.get('#3')).claimed, false);
+});
+
+test('claim assigns @me and keeps the state label; setState does not remove assignees', async () => {
+  const { tracker, gh } = setup([
+    { number: 1, title: 'Feature' },
+    { number: 2, title: 'Kid', labels: ['ready-for-agent'], parent: 1 },
+    { number: 3, title: 'Closed kid', parent: 1, state: 'CLOSED', closedAt: ago(1) },
+  ]);
+  await rejectsWith(tracker.claim('#3'), 'INVALID');
+  const claimed = await tracker.claim('#2');
+  assert.equal(claimed.claimed, true);
+  assert.equal(claimed.state, 'ready-for-agent');
+  assert.deepEqual(gh.commands(), ['gh issue edit 2 --add-assignee @me']);
+  const done = await tracker.setState('#2', 'done');
+  assert.equal(done.state, 'done');
+  assert.ok(!gh.commands().some((c) => c.includes('--remove-assignee')));
+});
+
+test('claim of a parent issue is INVALID and runs no edit', async () => {
+  const { tracker, gh } = setup();
+  await rejectsWith(tracker.claim('#1'), 'INVALID');
+  assert.deepEqual(gh.commands(), []);
 });

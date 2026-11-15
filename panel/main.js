@@ -2745,7 +2745,8 @@ ${GUEST_UI_LOOK_CSS}`;
     { id: "review", title: "Review" },
     { id: "done", title: "Done" }
   ];
-  var columnFor = (task, session, queued) => {
+  var isWorking = (session) => session !== null && !session.archived && (session.activity === "running" || session.activity === "retrying");
+  var columnFor = (task, session, queued, parentSessionRunning = false) => {
     if (task.state === "done") return "done";
     if (queued) return "in_progress";
     if (session !== null && !session.archived) {
@@ -2754,6 +2755,7 @@ ${GUEST_UI_LOOK_CSS}`;
       if (a === "waiting-permission" || a === "waiting-question") return "review";
       if (a === "idle" && session.outcome !== null) return "review";
     }
+    if (task.state === "ready-for-agent" && task.claimed && parentSessionRunning) return "in_progress";
     return task.state === "ready-for-agent" ? "ready" : "backlog";
   };
   var fromLink = (link) => {
@@ -2786,6 +2788,7 @@ ${GUEST_UI_LOOK_CSS}`;
     }
     return newest === null ? null : fromLink(newest);
   };
+  var ledByOrchestrator = (task, sessions, links = []) => task.parentId !== null && task.state !== "done" && isWorking(sessionForTask(task.parentId, sessions, links));
   var groupTasks = (tasks, sessions, starting, hideSubtasks, links = [], queued = /* @__PURE__ */ new Set(), queueErrors = /* @__PURE__ */ new Map()) => {
     const byId = new Map(tasks.map((t) => [t.id, t]));
     const children = /* @__PURE__ */ new Map();
@@ -2795,13 +2798,24 @@ ${GUEST_UI_LOOK_CSS}`;
       list.push(t);
       children.set(t.parentId, list);
     }
+    const parentWorking = /* @__PURE__ */ new Map();
+    const parentRunning = (parentId) => {
+      if (parentId === null) return false;
+      let running = parentWorking.get(parentId);
+      if (running === void 0) {
+        running = isWorking(sessionForTask(parentId, sessions, links));
+        parentWorking.set(parentId, running);
+      }
+      return running;
+    };
     const cards = /* @__PURE__ */ new Map();
     for (const task of tasks) {
       if (hideSubtasks && task.parentId !== null) continue;
       const session = sessionForTask(task.id, sessions, links);
       const kids = children.get(task.id) ?? [];
+      const led = task.state !== "done" && parentRunning(task.parentId);
       cards.set(task.id, {
-        column: columnFor(task, session, starting.has(task.id) || queued.has(task.id) && task.state !== "done"),
+        column: columnFor(task, session, starting.has(task.id) || queued.has(task.id) && task.state !== "done", led),
         card: {
           task,
           session,
@@ -2813,7 +2827,8 @@ ${GUEST_UI_LOOK_CSS}`;
           child: false,
           starting: starting.has(task.id) && session === null,
           queued: queued.has(task.id) && !starting.has(task.id) && task.state !== "done",
-          queueError: queued.has(task.id) && !starting.has(task.id) && task.state !== "done" ? queueErrors.get(task.id) ?? null : null
+          queueError: queued.has(task.id) && !starting.has(task.id) && task.state !== "done" ? queueErrors.get(task.id) ?? null : null,
+          ledByOrchestrator: led
         }
       });
     }
@@ -2965,6 +2980,7 @@ ${GUEST_UI_LOOK_CSS}`;
   var MAX_PARALLEL_MIN = 1;
   var MAX_PARALLEL_MAX = 10;
   var FALLBACK_PRESET_ID = "implement";
+  var ORCHESTRATE_PRESET_ID = "orchestrate";
   var DEFAULT_SETTINGS = {
     autoStart: true,
     maxParallel: 3,
@@ -3041,8 +3057,9 @@ ${GUEST_UI_LOOK_CSS}`;
   };
   var resolveStart = (s, task, card, presets = BUILTIN_PRESETS) => {
     const c = parseCardOptions(card);
+    const byKind = task.kind === "parent" ? ORCHESTRATE_PRESET_ID : void 0;
     const byType = task.type !== null ? s.presetByType[task.type] : void 0;
-    const wanted = c.presetId ?? byType ?? s.defaults.presetId;
+    const wanted = c.presetId ?? byKind ?? byType ?? s.defaults.presetId;
     return {
       presetId: presets.some((p) => p.id === wanted) ? wanted : FALLBACK_PRESET_ID,
       model: c.model ?? s.defaults.model,
@@ -4431,11 +4448,13 @@ ${GUEST_UI_LOOK_CSS}`;
       `Move it with the task-board CLI: ${cli} state ${id} <state>`,
       `States: ${STATES2}. Set "done" only when the work is finished.`
     ].join("\n");
-    const kids = children.length === 0 ? "" : [
+    const kids = children.length === 0 && task.kind !== "parent" ? "" : [
       "## Sub-tasks",
-      ...children.map((c) => `- ${c.id}: ${c.title} (${c.state})`),
+      ...children.length === 0 ? ["No sub-tasks yet."] : children.map((c) => `- ${c.id}: ${c.title} (${c.state})`),
       "",
-      "Work until every sub-task is done; move each sub-task with the CLI as you go."
+      "Work until every sub-task is done; move each sub-task with the CLI as you go.",
+      `Before working on a sub-task, claim it (the board then shows it In Progress): ${cli} claim <sub-task id>`,
+      `When a sub-task is finished, move it: ${cli} state <sub-task id> done`
     ].join("\n");
     const instructions = preset.text.trim() === "" ? "" : `## Instructions (${preset.name})
 ${preset.text.trim()}`;
@@ -4754,6 +4773,10 @@ ${note}` : note;
       }
     };
     const onStart = async (task) => {
+      if (ledByOrchestrator(task, deps.sessions(), links)) {
+        info("The orchestrator leads this task");
+        return;
+      }
       const ctx = deps.context();
       if (ctx === null) {
         info("Settings are loading, try again in a moment");
@@ -4886,6 +4909,7 @@ ${note}` : note;
     } else if (model.starting) {
       badge2("starting agent\u2026", "info");
     }
+    if (model.ledByOrchestrator) badge2("led by orchestrator", "primary");
     if (task.kind === "parent") badge2("parent", "primary");
     if (task.type !== null) badge2(task.type, typeTone(task.type));
     if (task.state === "ready-for-human") badge2("ready-for-human", "warning");

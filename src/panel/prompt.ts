@@ -28,13 +28,17 @@ export const buildPrompt = (task: Task, preset: Preset, cliPath: string, childre
     `States: ${STATES}. Set "done" only when the work is finished.`,
   ].join('\n');
   const kids =
-    children.length === 0
+    children.length === 0 && task.kind !== 'parent'
       ? ''
       : [
           '## Sub-tasks',
-          ...children.map((c) => `- ${c.id}: ${c.title} (${c.state})`),
+          ...(children.length === 0
+            ? ['No sub-tasks yet.']
+            : children.map((c) => `- ${c.id}: ${c.title} (${c.state})`)),
           '',
           'Work until every sub-task is done; move each sub-task with the CLI as you go.',
+          `Before working on a sub-task, claim it (the board then shows it In Progress): ${cli} claim <sub-task id>`,
+          `When a sub-task is finished, move it: ${cli} state <sub-task id> done`,
         ].join('\n');
   const instructions = preset.text.trim() === '' ? '' : `## Instructions (${preset.name})\n${preset.text.trim()}`;
 

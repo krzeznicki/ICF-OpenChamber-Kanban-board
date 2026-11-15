@@ -245,3 +245,10 @@ test('parseSpec reads heading, Status and Type', () => {
   const spec = '# Login flow\n\n**Status:** resolved\n**Type:** enhancement\n\n## Problem Statement\n';
   assert.deepEqual(parseSpec(spec, 'login'), { title: 'Login flow', state: 'done', type: 'enhancement' });
 });
+
+test('claimed: the "claimed" status word marks the issue claimed (state stays ready-for-agent)', () => {
+  assert.equal(parseIssue('# T\n\n**Status:** claimed\n', 'a.md').claimed, true);
+  assert.equal(parseIssue('# T\n\nStatus: Claimed\n', 'a.md').claimed, true);
+  assert.equal(parseIssue('# T\n\n**Status:** ready-for-agent\n', 'a.md').claimed, false);
+  assert.equal(parseIssue('# T\n\nNo status.\n', 'a.md').claimed, false);
+});

@@ -222,6 +222,8 @@ test('usage errors: missing args, unknown option, bad state, option of another c
     ['show', ids[0]!, 'extra'],
     ['create', '--title', 'x', '--blocked-by', `${ids[0]},`],
     ['list', '--blocked-by', ids[0]!],
+    ['claim'],
+    ['claim', ids[0]!, 'extra'],
   ]) {
     const r = await run(argv, root);
     assert.equal(r.code, 2, `${argv.join(' ')} -> ${r.code} ${r.err}`);
@@ -278,4 +280,34 @@ test('init on a dir with an unsupported tracker file exits 4', async (t) => {
   const r = await run(['init', 'local', '--json'], root);
   assert.equal(r.code, 4);
   assert.equal(json<{ error: { code: string } }>(r).error.code, 'UNSUPPORTED');
+});
+
+test('claim marks a ticket claimed (Status: claimed); state moves it on', async (t) => {
+  const { root, ids } = await project(t);
+  const r = await run(['claim', ids[2]!, '--json'], root);
+  assert.equal(r.code, 0, r.err);
+  const task = json<Task>(r);
+  assert.equal(task.claimed, true);
+  assert.equal(task.state, 'ready-for-agent');
+  assert.match(await readFile(join(root, ids[2]!), 'utf8'), /\*\*Status:\*\* claimed\n/);
+  const human = await run(['claim', ids[1]!], root);
+  assert.equal(human.code, 0, human.err);
+  assert.match(human.out, /\[ready-for-agent, claimed\]/);
+  const done = await run(['state', ids[2]!, 'done', '--json'], root);
+  assert.equal(json<Task>(done).claimed, false);
+  const missing = await run(['claim', '.scratch/feature/issues/99-x.md'], root);
+  assert.equal(missing.code, 4);
+  assert.match(missing.err, /NOT_FOUND/);
+});
+
+test('usage lists claim', async (t) => {
+  const r = await run(['--help'], await tmp(t));
+  assert.match(r.out, /claim <id>/);
+});
+
+test('next and list --ready skip a claimed ticket', async (t) => {
+  const { root, ids } = await project(t);
+  assert.equal((await run(['claim', ids[2]!], root)).code, 0);
+  assert.deepEqual(json<Task[]>(await run(['list', '--ready', '--json'], root)), []);
+  assert.equal((await run(['next'], root)).code, 3);
 });

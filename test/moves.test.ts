@@ -14,6 +14,7 @@ const task = (over: Partial<Task> = {}): Task => ({
   blockedBy: [],
   url: null,
   updatedAt: 0,
+  claimed: false,
   ...over,
 });
 
