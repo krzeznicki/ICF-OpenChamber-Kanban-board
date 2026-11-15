@@ -380,6 +380,13 @@ export const createGithubTracker = (root: string, exec: Exec, labels: ProjectCon
       const found = await graph([n, p], false);
       for (const k of [n, p]) if ((found.get(k) ?? null) === null) throw new TrackerError('NOT_FOUND', `Issue not found: #${k}`);
       if (relationsOf(found.get(n)!).parent === p) throw new TrackerError('INVALID', `${idOf(n)} is already a sub-issue of ${idOf(p)}`);
+      // Linking under one of its own descendants would make a cycle: walk up from the would-be parent.
+      const seen = new Set<number>([p]);
+      for (let up = relationsOf(found.get(p)!).parent; up !== null && !seen.has(up); ) {
+        if (up === n) throw new TrackerError('INVALID', `${idOf(p)} is a descendant of ${idOf(n)}; linking would make a cycle`);
+        seen.add(up);
+        up = relationsOf((await graph([up], false)).get(up) ?? null).parent;
+      }
       // gh replaces an existing parent; the issue keeps its number, so the id does not change.
       await run(['issue', 'edit', String(n), '--parent', String(p)]);
       return get(idOf(n));

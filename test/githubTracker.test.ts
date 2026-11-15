@@ -274,3 +274,16 @@ test('setParent refuses itself and its current parent; a missing issue is NOT_FO
   await rejectsWith(tracker.setParent('#99', '#1'), 'NOT_FOUND');
   assert.deepEqual(gh.commands(), []);
 });
+
+test('setParent refuses a parent that is the task itself’s descendant (walking up the would-be parent’s chain)', async () => {
+  const { tracker, gh } = setup([
+    { number: 1, title: 'Top' },
+    { number: 2, title: 'Middle', parent: 1 },
+    { number: 3, title: 'Leaf', parent: 2 },
+    { number: 4, title: 'Other' },
+  ]);
+  await rejectsWith(tracker.setParent('#1', '#3'), 'INVALID', /#3 is a descendant of #1/);
+  await rejectsWith(tracker.setParent('#1', '#2'), 'INVALID', /descendant/);
+  assert.deepEqual(gh.commands(), []);
+  assert.equal((await tracker.setParent('#4', '#3')).parentId, '#3');
+});
