@@ -474,3 +474,12 @@ test('removeParent refuses a feature (it has no parent) and a missing ticket', a
   await rejectsWith(tracker.removeParent('.scratch/example-feature/issues/09-x.md'), 'NOT_FOUND');
   assert.deepEqual((await tracker.list()).map((x) => x.id), [SPEC, T1, T2]);
 });
+
+test('removeParent of a feature\'s last ticket removes the emptied issues/ folder; the feature stays', async (t) => {
+  const root = await repo(t);
+  const tracker = createLocalTracker(root);
+  await tracker.removeParent(T1);
+  await tracker.removeParent(T2);
+  assert.equal(existsSync(join(root, '.scratch/example-feature/issues')), false);
+  assert.equal(existsSync(join(root, SPEC)), true);
+});
