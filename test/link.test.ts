@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Task } from '../src/core/types.ts';
-import { canLinkUnder, canLinkUnderNew, childCandidates, newChildCandidates, parentTargets } from '../src/panel/link.ts';
+import { canLinkUnder, canLinkUnderNew, childCandidates, linkConfirm, newChildCandidates, parentTargets } from '../src/panel/link.ts';
 
 const task = (id: string, over: Partial<Task> = {}): Task => ({
   id,
@@ -91,4 +91,20 @@ test('new task, github: any open issue, but not the chosen parent or its ancesto
   assert.deepEqual(newChildCandidates('github', null, tasks).map((t) => t.id), ['#1', '#2', '#3', '#4']);
   // The new task goes under #2: #2 and #1 above it would make a cycle; #3 (a sibling) may move.
   assert.deepEqual(newChildCandidates('github', '#2', tasks).map((t) => t.id), ['#3', '#4']);
+});
+
+test('the link confirm names both tasks; locally it warns about the new id and dropped blockers', () => {
+  const fb = task(B, { kind: 'parent', title: 'Feature B' });
+  const t1 = task('.scratch/a/issues/01-x.md', { title: 'Fix X' });
+  const local = linkConfirm('local', t1, fb);
+  assert.equal(local.title, 'Make “Fix X” a sub-task of “Feature B”?');
+  assert.match(local.body, /\.scratch\/a\/issues\/01-x\.md/);
+  assert.match(local.body, /\.scratch\/b\/spec\.md/);
+  assert.match(local.body, /new id/);
+  assert.match(local.body, /blockers/);
+  const gh = linkConfirm('github', task('#2', { title: 'Fix X' }), task('#1', { title: 'Epic' }));
+  assert.equal(gh.title, 'Make “Fix X” a sub-task of “Epic”?');
+  assert.doesNotMatch(gh.body, /new id|blockers/);
+  assert.match(gh.body, /#2/);
+  assert.match(gh.body, /#1/);
 });

@@ -53,3 +53,12 @@ export const canLinkUnderNew = (tracker: TrackerKind, child: Task, parentId: str
 /** Existing tasks that may be linked under a task not created yet, in board order. */
 export const newChildCandidates = (tracker: TrackerKind, parentId: string | null, tasks: readonly Task[]): Task[] =>
   tasks.filter((c) => canLinkUnderNew(tracker, c, parentId, tasks));
+
+/** The confirm before linking (dropping a card onto a card): names both tasks; locally the move changes the id and drops blockers. */
+export const linkConfirm = (tracker: TrackerKind, child: Task, parent: Task): { title: string; body: string } => ({
+  title: `Make “${child.title}” a sub-task of “${parent.title}”?`,
+  body:
+    tracker === 'local'
+      ? `${child.id} moves into the feature ${parent.id} as its next ticket: it gets a new id and its blockers (both ways) are dropped.`
+      : `${child.id} becomes a sub-task of ${parent.id}, replacing its current parent if it has one.`,
+});

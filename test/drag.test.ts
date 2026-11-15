@@ -60,3 +60,26 @@ test('events of another pointer are ignored', () => {
   assert.deepEqual(step(dragging, { ...move(50), pointerId: 9 }), { press: dragging, effect: { kind: 'none' } });
   assert.deepEqual(step(pressed, { type: 'up', pointerId: 9, to: 'done' }), { press: pressed, effect: { kind: 'none' } });
 });
+
+test('pointerup over an accepting card links the dragged task under it', () => {
+  assert.deepEqual(step(dragging, { type: 'up', pointerId: 1, to: 'ready', onto: 'p' }), {
+    press: null,
+    effect: { kind: 'link', taskId: 't', parentId: 'p' },
+  });
+  // Even outside any column (the card is what was hit).
+  assert.deepEqual(step(dragging, { type: 'up', pointerId: 1, to: null, onto: 'p' }).effect, { kind: 'link', taskId: 't', parentId: 'p' });
+});
+
+test('no accepting card under the pointer (or the card itself) falls back to the column move', () => {
+  assert.deepEqual(step(dragging, { type: 'up', pointerId: 1, to: 'done', onto: null }).effect, {
+    kind: 'drop',
+    taskId: 't',
+    from: 'backlog',
+    to: 'done',
+  });
+  assert.deepEqual(step(dragging, { type: 'up', pointerId: 1, to: 'done', onto: 't' }).effect.kind, 'drop');
+});
+
+test('a click on a card still opens it, whatever is under the pointer', () => {
+  assert.deepEqual(step(pressed, { type: 'up', pointerId: 1, to: null, onto: 'p' }).effect, { kind: 'open', taskId: 't' });
+});
