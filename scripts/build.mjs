@@ -13,7 +13,15 @@ const common = { bundle: true, logLevel: 'warning', legalComments: 'none', absWo
 /** @type {Array<{ name: string } & import('esbuild').BuildOptions>} */
 const entries = [
   // { name: 'panel', entryPoints: ['src/panel/main.ts'], outfile: 'panel/main.js', format: 'iife', platform: 'browser', target: 'es2022' },
-  // { name: 'service', entryPoints: ['src/service/main.ts'], outfile: 'service/main.js', format: 'esm', platform: 'node', target: 'node22' },
+  {
+    name: 'service',
+    entryPoints: ['src/service/main.ts'],
+    outfile: 'service/main.js',
+    format: 'esm',
+    platform: 'node',
+    target: 'node22',
+    legalComments: 'eof',
+  },
   {
     name: 'cli',
     entryPoints: ['src/cli/task-board.ts'],
