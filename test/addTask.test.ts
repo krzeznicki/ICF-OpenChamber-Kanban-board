@@ -5,6 +5,7 @@ import {
   CREATE_STATES,
   blockerChoices,
   canAddSubtask,
+  subtaskModes,
   canHaveSubtasks,
   createWithSubtasks,
   draftKind,
@@ -336,4 +337,11 @@ test('isDirty: any typed text or changed choice makes the form dirty', () => {
   ]) {
     assert.equal(isDirty(draft({ type: 'enhancement', ...over }), initial), true, JSON.stringify(over));
   }
+});
+
+test('subtaskModes: "Add sub-task" offers a new task and/or the existing tasks that may be linked; none hides it', () => {
+  assert.deepEqual(subtaskModes(true, 3), ['new', 'existing']);
+  assert.deepEqual(subtaskModes(true, 0), ['new']);
+  assert.deepEqual(subtaskModes(false, 2), ['existing']);
+  assert.deepEqual(subtaskModes(false, 0), []);
 });

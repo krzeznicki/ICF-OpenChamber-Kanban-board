@@ -153,6 +153,10 @@ export const fakeGh = (seed: FakeIssue[], options: FakeGhOptions = {}) => {
         if (find(parent) === undefined) return fail(`resolving --parent reference "${parent}": could not find issue\n`);
         issue!.parent = Number(parent);
       }
+      if (args.includes('--remove-parent')) {
+        if (issue!.parent === null) return fail(`issue #${issue!.number} has no parent issue\n`);
+        issue!.parent = null;
+      }
       touch(issue!);
       return ok(`${URL}${issue!.number}\n`);
     }
