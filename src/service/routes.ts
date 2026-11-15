@@ -7,7 +7,7 @@ import { readSessionEventRequest, SESSION_EVENTS_PATH, type GuestSessionEventReq
 import { readConfig, readLabels, writeConfig, type ProjectConfig } from '../core/config.ts';
 import { createGithubTracker } from '../core/githubTracker.ts';
 import { openTracker } from '../core/openTracker.ts';
-import type { Exec, NewTask, Task, TaskState, Tracker } from '../core/types.ts';
+import type { Exec, NewTask, Task, TaskEdit, TaskState, Tracker } from '../core/types.ts';
 import { TrackerError } from '../core/types.ts';
 import type { QueueEntry } from '../core/queue.ts';
 import { createAgentList, createModelList, type AgentList, type ModelList } from './models.ts';
@@ -31,6 +31,7 @@ import {
   defaultLinksFile,
   isInside,
   listLinks,
+  removeLinks,
   renameLinks,
   startSession,
   withStatus,
@@ -121,6 +122,11 @@ const newTask = (v: unknown): NewTask => {
         : invalid('"input.blockedBy" must be an array of task ids');
   }
   return task;
+};
+
+const withChildrenOf = (body: Body): boolean => {
+  const w = body.withChildren;
+  return w === undefined ? false : typeof w === 'boolean' ? w : invalid('"withChildren" must be a boolean');
 };
 
 /** The built CLI next to the service bundle (`service/main.js` -> `build/cli/task-board.mjs`). */
@@ -363,6 +369,18 @@ const POST: Record<string, Route> = {
     const type = str(body, 'type');
     return { task: await (await tracker(dir, deps)).setType(id, type) };
   },
+  /** Title and/or description (the tracker checks a blank title); the task keeps its id. */
+  '/tasks/edit': async (body, dir, deps) => {
+    const id = str(body, 'id');
+    const changes: TaskEdit = {};
+    for (const key of ['title', 'body'] as const) {
+      const v = body[key];
+      if (v === undefined) continue;
+      changes[key] = typeof v === 'string' ? v : invalid(`"${key}" must be a string`);
+    }
+    if (Object.keys(changes).length === 0) return invalid('Give "title", "body" or both');
+    return { task: await (await tracker(dir, deps)).edit(id, changes) };
+  },
   /**
    * Links an existing task under an existing parent. The answer's task can have a new id (local:
    * the file moved); the task's session links and queue entry are re-keyed to it first.
@@ -386,6 +404,24 @@ const POST: Record<string, Route> = {
     const w = body.withChildren;
     const withChildren = w === undefined ? false : typeof w === 'boolean' ? w : invalid('"withChildren" must be a boolean');
     return { tasks: await (await tracker(dir, deps)).close(id, { withChildren }) };
+  },
+  /**
+   * Deletes the task (and with `withChildren` its sub-tasks); answers every deleted id. Their session
+   * links and queue entries go too. The delete is done by then, so a failing cleanup is only logged.
+   */
+  '/tasks/delete': async (body, dir, deps) => {
+    const id = str(body, 'id');
+    const deleted = await (await tracker(dir, deps)).remove(id, { withChildren: withChildrenOf(body) });
+    const log = deps.log ?? ((m: string) => console.error(m));
+    for (const taskId of deleted) {
+      try {
+        await removeLinks(linksFile(deps), dir, taskId);
+        await removeFromQueue(queueFile(deps), dir, taskId);
+      } catch (e) {
+        log(`icf-kanban: ${taskId} was deleted, but its session links or queue entry could not be removed: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+    return { deleted };
   },
   '/sessions/start': async (body, dir, deps) => {
     const taskId = str(body, 'taskId');

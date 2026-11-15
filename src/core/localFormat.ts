@@ -223,6 +223,19 @@ export const renumberIssue = (text: string, n: number, title: string): string =>
 };
 
 /**
+ * Sets the heading's title, keeping its line ending and (`keepNumber`, tickets) its `NN: ` prefix.
+ * A file with no heading gets `# <title>` at the top.
+ */
+export const setTitle = (text: string, title: string, keepNumber: boolean): string => {
+  const lines = splitLines(text);
+  const i = headingIndex(lines);
+  if (i < 0) return text.trim() === '' ? `# ${title.trim()}\n` : `# ${title.trim()}${text.includes('\r\n') ? '\r\n\r\n' : '\n\n'}${text}`;
+  const prefix = keepNumber ? (/^# (\d+:\s*)/.exec(content(lines[i]!))?.[1] ?? '') : '';
+  lines[i] = `# ${prefix}${title.trim()}` + (lines[i]!.endsWith('\r') ? '\r' : '');
+  return lines.join('\n');
+};
+
+/**
  * A ticket's text as a feature's spec.md: heading `# <title>` (no number) and no `Blocked by`
  * line, since a spec has no blockers. One blank line next to the dropped line goes with it.
  */
@@ -245,20 +258,28 @@ export const specFromIssue = (text: string, title: string): string => {
 const NOT_PARAGRAPH = /^\s*(?:[-+]\s|\*\s|\d+[.)]\s|#|```|~~~|>|\|)/;
 
 /**
+ * Splits a body (LF, trimmed) into its leading paragraph ("What to build") and the rest. A first
+ * block that is not a plain paragraph, or that holds a field-like or `#` line (it would be read as a
+ * field or end the header region before the fields), is no lead.
+ */
+const splitLead = (body: string): { lead: string; rest: string } => {
+  if (body === '' || NOT_PARAGRAPH.test(body)) return { lead: '', rest: body };
+  const cut = body.search(/\n[ \t]*\n/);
+  const lead = cut < 0 ? body : body.slice(0, cut);
+  if (lead.split('\n').some((l) => matchField(l) !== null || /^\s{0,3}(#|```|~~~)/.test(l))) return { lead: '', rest: body };
+  return { lead, rest: cut < 0 ? '' : body.slice(cut).replace(/^\s*\n/, '') };
+};
+
+const normalizeBody = (body: string): string => body.replace(/\r\n/g, '\n').replace(/^\s*\n/, '').replace(/\s+$/, '');
+
+/**
  * Renders a new ticket in the shape of Matt's local-ticket-template (to-tickets skill):
  * heading, leading paragraph ("What to build"), Blocked by, Type (optional), Status, then the
  * rest of the body (acceptance criteria). With no leading paragraph the fields follow the heading.
  */
 export const renderIssue = (n: number, input: NewTask): string => {
   const blockers = (input.blockedBy ?? []).map(blockerRef);
-  const body = (input.body ?? '').replace(/\r\n/g, '\n').replace(/^\s*\n/, '').replace(/\s+$/, '');
-  let lead = '';
-  let rest = body;
-  if (body !== '' && !NOT_PARAGRAPH.test(body)) {
-    const cut = body.search(/\n[ \t]*\n/);
-    lead = cut < 0 ? body : body.slice(0, cut);
-    rest = cut < 0 ? '' : body.slice(cut).replace(/^\s*\n/, '');
-  }
+  const { lead, rest } = splitLead(normalizeBody(input.body ?? ''));
   const parts = [`# ${pad(n)}: ${input.title.trim()}`];
   if (lead !== '') parts.push(lead);
   parts.push(`**Blocked by:** ${blockers.length > 0 ? blockers.join(', ') : NONE_BLOCKERS}`);
@@ -266,6 +287,66 @@ export const renderIssue = (n: number, input: NewTask): string => {
   parts.push(`**Status:** ${fromState(input.state ?? 'needs-triage')}`);
   if (rest !== '') parts.push(rest);
   return parts.join('\n\n') + '\n';
+};
+
+/** Sections agents append at the bottom (issue-tracker-local.md); they are not part of the description. */
+const TAIL = /^## (?:Comments|Answer)\s*$/i;
+
+type Parts = { heading: string | null; fields: string[]; description: string; tail: string | null };
+
+/** The file cut into its heading line, header field lines, description (LF, trimmed) and appended tail. */
+const splitParts = (text: string): Parts => {
+  const lines = splitLines(text).map(content);
+  const tailAt = plainLines(lines, false).find(([, c]) => TAIL.test(c))?.[0] ?? lines.length;
+  const head = headingIndex(lines);
+  const fieldAt = new Set(headerFields(lines).filter((f) => f.index < tailAt).map((f) => f.index));
+  const kept: string[] = [];
+  let removed = false;
+  for (let i = 0; i < tailAt; i++) {
+    if (i === head || fieldAt.has(i)) {
+      removed = true;
+      continue;
+    }
+    const blank = lines[i]!.trim() === '';
+    // A blank line next to a removed line would leave a double gap.
+    if (blank && (kept.length === 0 || (removed && kept[kept.length - 1]!.trim() === ''))) continue;
+    kept.push(lines[i]!);
+    if (!blank) removed = false;
+  }
+  return {
+    heading: head >= 0 && head < tailAt ? lines[head]! : null,
+    fields: [...fieldAt].sort((a, b) => a - b).map((i) => lines[i]!),
+    description: kept.join('\n').replace(/\s+$/, ''),
+    tail: tailAt < lines.length ? lines.slice(tailAt).join('\n').replace(/\s+$/, '') : null,
+  };
+};
+
+/** The editable description of a local issue or spec: no heading, no header field lines, no `## Comments` / `## Answer`. */
+export const issueDescription = (text: string): string => splitParts(text).description;
+
+/**
+ * Replaces the description, keeping the heading, every header field line (as written) and the
+ * appended tail. Laid out like renderIssue: heading, leading paragraph, fields, rest, tail. CRLF
+ * files stay CRLF.
+ */
+export const withDescription = (text: string, description: string): string => {
+  const p = splitParts(text);
+  const { lead, rest } = splitLead(normalizeBody(description));
+  const parts: string[] = [];
+  if (p.heading !== null) parts.push(p.heading);
+  if (lead !== '') parts.push(lead);
+  // Field lines stay together as they were; ones that sat apart get a blank line between them.
+  if (p.fields.length > 0) parts.push(p.fields.join(fieldsTight(text) ? '\n' : '\n\n'));
+  if (rest !== '') parts.push(rest);
+  if (p.tail !== null) parts.push(p.tail);
+  const out = parts.join('\n\n') + '\n';
+  return text.includes('\r\n') ? out.replace(/\n/g, '\r\n') : out;
+};
+
+/** The file's field lines sit on consecutive lines (createParent writes them so). */
+const fieldsTight = (text: string): boolean => {
+  const f = headerFields(splitLines(text));
+  return f.length > 1 && f.every((x, i) => i === 0 || x.index === f[i - 1]!.index + 1);
 };
 
 const slugify = (title: string): string => {

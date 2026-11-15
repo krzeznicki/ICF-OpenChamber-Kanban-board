@@ -887,6 +887,10 @@ const start = (ctx: HostReadyContext): void => {
         await saver.idle();
         await store.moveCard(projectId, from, to);
       },
+      forget: async (projectId, taskId) => {
+        await saver.idle();
+        await store.forgetCard(projectId, taskId);
+      },
     },
     summary: {
       model: (task) =>

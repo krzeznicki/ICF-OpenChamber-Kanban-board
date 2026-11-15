@@ -17,6 +17,8 @@ import { askChoice } from './ui/confirm.ts';
 import { openDetail, type DetailHandle, type DetailModel, type SessionView, type SummaryModel } from './ui/detail.ts';
 import { attachDrag } from './ui/dnd.ts';
 import { canLinkUnder, followingMove, linkChoices, linkConfirm, unlinkConfirm } from './link.ts';
+import { deleteConfirm } from './taskDelete.ts';
+import { editChanges, editableText, type EditText } from './taskEdit.ts';
 
 export type EditorDeps = {
   host: HostClient;
@@ -71,6 +73,8 @@ export type EditorDeps = {
     save: (projectId: string, taskId: string, card: CardOptions) => void;
     /** A task got a new id (a local link moved it): its stored options go under that id, the old key is deleted. */
     move: (projectId: string, from: string, to: string) => Promise<void>;
+    /** A task was deleted: its stored options go. */
+    forget: (projectId: string, taskId: string) => Promise<void>;
   };
   /** The personal summary in the task modal (summaries.ts). */
   summary: {
@@ -211,6 +215,7 @@ export const createEditor = (deps: EditorDeps) => {
           ...offered,
         };
       })(),
+      text: editableText(deps.tracker(), task),
     };
   };
 
@@ -390,6 +395,49 @@ export const createEditor = (deps: EditorDeps) => {
     if (error !== null) fail(error);
   };
 
+  /** The modal's Edit form: saves only what changed. Resolves to null, or the error for the form to show. */
+  const editTask = async (id: string, from: EditText, draft: EditText): Promise<string | null> => {
+    const api = deps.api();
+    if (api === null) return 'No project is open.';
+    const result = editChanges(from, draft);
+    if ('error' in result) return result.error;
+    if (result.changes === null || moving.has(id)) return null;
+    const changes = result.changes;
+    moving.add(id);
+    deps.redraw();
+    refreshDetail();
+    try {
+      await api.edit(id, changes);
+      return null;
+    } catch (e) {
+      return errorText(e);
+    } finally {
+      moving.delete(id);
+      await deps.reload();
+      refreshDetail();
+    }
+  };
+
+  /** The modal's Delete: confirm, delete, then drop the stored start options of every deleted task. */
+  const deleteTask = async (id: string): Promise<void> => {
+    const task = find(id);
+    const api = deps.api();
+    if (task === null || api === null || moving.has(id)) return;
+    const { title, body, choices } = deleteConfirm(deps.tracker(), task, deps.tasks());
+    const answer = await askChoice(title, body, choices);
+    if (answer === null) return;
+    let deleted: string[] = [];
+    await run(id, async (a) => {
+      deleted = await a.remove(id, answer === 'all');
+    });
+    if (deleted.length === 0) return; // failed: run showed the error
+    info(deleted.length === 1 ? `Deleted ${deleted[0]}` : `Deleted ${deleted.length} tasks`);
+    const ctx = deps.start.context();
+    if (ctx !== null) {
+      for (const d of deleted) await deps.start.forget(ctx.projectId, d).catch((e: unknown) => fail(`Could not drop the start options of ${d}: ${errorText(e)}`));
+    }
+  };
+
   const closeDetail = (): void => {
     const d = detail;
     detail = null;
@@ -422,6 +470,8 @@ export const createEditor = (deps: EditorDeps) => {
         return null;
       },
       onSetParent: (parentId) => linkTask(id, parentId),
+      onEdit: (from, draft) => editTask(id, from, draft),
+      onDelete: () => void deleteTask(id),
       onLinkChild: (childId) => linkTask(childId, id),
       onRemoveParent: () => unlinkTask(id),
       onUnlinkChild: async (childId) => {

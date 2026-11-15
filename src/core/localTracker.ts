@@ -3,8 +3,8 @@
 import type { Dirent } from 'node:fs';
 import { mkdir, readdir, readFile, rmdir, stat, unlink, writeFile } from 'node:fs/promises';
 import { join, posix } from 'node:path';
-import { blockersValue, issueFileName, parseIssue, parseSpec, patchLine, renderIssue, renumberIssue, specFromIssue } from './localFormat.ts';
-import type { NewTask, Task, TaskState, Tracker } from './types.ts';
+import { blockersValue, issueFileName, parseIssue, parseSpec, patchLine, renderIssue, renumberIssue, setTitle, specFromIssue, withDescription } from './localFormat.ts';
+import type { NewTask, Task, TaskEdit, TaskState, Tracker } from './types.ts';
 import { TrackerError } from './types.ts';
 
 const SCRATCH = '.scratch';
@@ -176,6 +176,23 @@ export const createLocalTracker = (root: string): Tracker => {
 
   const setState = (id: string, state: TaskState): Promise<Task> => patch(id, 'Status', statusWord(state));
 
+  /** Rewrites the file in place: the id (path) stays even when the title changes, so links and queue entries keep pointing at it. */
+  const edit = async (id: string, changes: TaskEdit): Promise<Task> => {
+    if (changes.title !== undefined && (typeof changes.title !== 'string' || changes.title.trim() === '')) {
+      throw new TrackerError('INVALID', 'Title is required');
+    }
+    const task = await get(id);
+    const ref = parseId(task.id);
+    let text = task.body === '' && ref.kind === 'parent' ? `# ${task.title}\n` : task.body;
+    if (changes.title !== undefined) text = setTitle(text, changes.title, ref.kind === 'ticket');
+    if (changes.body !== undefined) {
+      if (typeof changes.body !== 'string') throw new TrackerError('INVALID', 'The description must be a string');
+      text = withDescription(text, changes.body);
+    }
+    if (text !== task.body) await writeFile(abs(task.id), text);
+    return get(task.id);
+  };
+
   const slugOf = (title: string): string => issueFileName(0, title).slice(3, -3);
 
   /** Makes a new, empty feature folder named after `title` (`-2`, `-3`... when taken); returns its name. */
@@ -336,6 +353,45 @@ export const createLocalTracker = (root: string): Tracker => {
     return get(newId);
   };
 
+  const unlinkIfThere = (path: string): Promise<void> =>
+    unlink(path).catch((e: unknown) => {
+      if (!isNotFound(e)) throw e;
+    });
+
+  /**
+   * A ticket: its file goes and its feature's tickets that listed it lose that blocker. A feature:
+   * spec.md, every ticket and the folder go; a folder that holds anything else (notes, a map) is
+   * refused before anything is deleted, since what is left would still list as a feature.
+   */
+  const remove = async (id: string, opts: { withChildren: boolean }): Promise<string[]> => {
+    const task = await get(id);
+    const ref = parseId(task.id);
+    if (ref.kind === 'ticket') {
+      await unlinkIfThere(abs(task.id));
+      await dropBlocker(ref.feature, fileNumber(ref.file!));
+      await removeIfEmpty(issuesDir(ref.feature));
+      return [task.id];
+    }
+    const tickets = await issueFiles(issuesDir(ref.feature));
+    if (tickets.length > 0 && !opts.withChildren) {
+      throw new TrackerError('INVALID', `${id} has ${tickets.length} sub-task${tickets.length === 1 ? '' : 's'}; delete them with it (withChildren) or move them first`);
+    }
+    const ticketEntries = new Set(tickets.map((f) => `issues/${f}`));
+    const extra = (await extraFiles(ref.feature)).filter((f) => !ticketEntries.has(f));
+    if (extra.length > 0) {
+      throw new TrackerError('INVALID', `${id} cannot be deleted: its folder also holds ${extra.join(', ')}; move or remove those first`);
+    }
+    const deleted: string[] = [];
+    for (const file of tickets) {
+      await unlinkIfThere(join(issuesDir(ref.feature), file));
+      deleted.push(ticketId(ref.feature, file));
+    }
+    await unlinkIfThere(abs(task.id));
+    await removeIfEmpty(issuesDir(ref.feature));
+    await removeIfEmpty(featureDir(ref.feature));
+    return [...deleted, task.id];
+  };
+
   /**
    * Moves a ticket out of its feature into a new feature of its own (`.scratch/<slug>/spec.md`).
    * Its blocker numbers pointed at its old feature's tickets, so they are dropped, and a feature
@@ -357,6 +413,8 @@ export const createLocalTracker = (root: string): Tracker => {
   };
 
   return {
+    remove,
+
     async list() {
       const now = Date.now();
       const out: Task[] = [];
@@ -382,6 +440,8 @@ export const createLocalTracker = (root: string): Tracker => {
     },
 
     setState,
+
+    edit,
 
     setParent,
 

@@ -342,3 +342,45 @@ test('POST /tasks/state changes exactly one line of a local issue file', async (
   assert.deepEqual(changed, [6]);
   assert.equal(b[6], '**Status:** ready-for-agent');
 });
+
+test('POST /tasks/edit changes the title and description; bad parameters are 400', async (t) => {
+  const directory = await local(t);
+  const spec = (await handle('POST', '/tasks/create', { directory, input: { title: 'Feature' } }, deps)).json as { task: Task };
+  const edited = await handle('POST', '/tasks/edit', { directory, id: spec.task.id, title: 'Renamed', body: 'Now with text.' }, deps);
+  assert.equal(edited.status, 200, JSON.stringify(edited.json));
+  const task = (edited.json as { task: Task }).task;
+  assert.equal(task.id, spec.task.id);
+  assert.equal(task.title, 'Renamed');
+  assert.match(task.body, /Now with text\./);
+  const none = await handle('POST', '/tasks/edit', { directory, id: spec.task.id }, deps);
+  assert.equal(none.status, 400);
+  const bad = await handle('POST', '/tasks/edit', { directory, id: spec.task.id, body: 3 }, deps);
+  assert.equal(bad.status, 400);
+  const blank = await handle('POST', '/tasks/edit', { directory, id: spec.task.id, title: ' ' }, deps);
+  assert.equal(blank.status, 422);
+  assert.equal((blank.json as Err).error.code, 'INVALID');
+});
+
+test('POST /tasks/delete deletes a feature with its tickets and drops their session links and queue entries', async (t) => {
+  const directory = await local(t);
+  const files = await tmp(t);
+  const d = { exec: noExec, linksFile: join(files, 'links.json'), queueFile: join(files, 'queue.json') };
+  const spec = ((await handle('POST', '/tasks/create', { directory, input: { title: 'Feature' } }, d)).json as { task: Task }).task;
+  const ticket = ((await handle('POST', '/tasks/create', { directory, input: { title: 'Ticket', parentId: spec.id } }, d)).json as { task: Task }).task;
+  const keep = ((await handle('POST', '/tasks/create', { directory, input: { title: 'Other' } }, d)).json as { task: Task }).task;
+  for (const taskId of [ticket.id, keep.id]) {
+    assert.equal((await handle('POST', '/links/add', { directory, taskId, sessionId: `ses_${taskId.length}` }, d)).status, 200);
+    const entry = { taskId, title: 't', prompt: 'p', location: 'project' };
+    assert.equal((await handle('POST', '/queue/add', { directory, entry }, d)).status, 200);
+  }
+  const alone = await handle('POST', '/tasks/delete', { directory, id: spec.id }, d);
+  assert.equal(alone.status, 422);
+  const r = await handle('POST', '/tasks/delete', { directory, id: spec.id, withChildren: true }, d);
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  assert.deepEqual((r.json as { deleted: string[] }).deleted, [ticket.id, spec.id]);
+  const links = (await handle('POST', '/links/list', { directory }, d)).json as { links: { taskId: string }[] };
+  assert.deepEqual(links.links.map((l) => l.taskId), [keep.id]);
+  const queue = (await handle('POST', '/queue/list', { directory }, d)).json as { queue: { taskId: string }[] };
+  assert.deepEqual(queue.queue.map((e) => e.taskId), [keep.id]);
+  assert.equal((await handle('POST', '/tasks/delete', { directory, id: keep.id, withChildren: 'yes' }, d)).status, 400);
+});

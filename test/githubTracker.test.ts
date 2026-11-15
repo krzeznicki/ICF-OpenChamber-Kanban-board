@@ -288,6 +288,43 @@ test('setParent refuses a parent that is the task itself’s descendant (walking
   assert.equal((await tracker.setParent('#4', '#3')).parentId, '#3');
 });
 
+test('edit changes the title and body with gh issue edit; only what is given is sent', async () => {
+  const { tracker, gh } = setup();
+  const both = await tracker.edit('#4', { title: ' New title ', body: 'New body' });
+  assert.equal(both.id, '#4');
+  assert.equal(both.title, 'New title');
+  assert.equal(both.body, 'New body');
+  await tracker.edit('#5', { body: '' });
+  assert.equal((await tracker.get('#5')).title, 'Line blocker');
+  assert.deepEqual(gh.commands(), ['gh issue edit 4 --title New title --body New body', 'gh issue edit 5 --body ']);
+});
+
+test('edit with a blank title is INVALID and runs no edit', async () => {
+  const { tracker, gh } = setup();
+  await rejectsWith(tracker.edit('#4', { title: ' ' }), 'INVALID');
+  assert.deepEqual(gh.commands(), []);
+});
+
+test('remove deletes with gh issue delete --yes; withChildren deletes the sub-issues first', async () => {
+  const { tracker, gh } = setup();
+  assert.deepEqual(await tracker.remove('#4', { withChildren: false }), ['#4']);
+  assert.deepEqual(await tracker.remove('#1', { withChildren: true }), ['#2', '#3', '#1']);
+  assert.deepEqual(gh.commands(), ['gh issue delete 4 --yes', 'gh issue delete 2 --yes', 'gh issue delete 3 --yes', 'gh issue delete 1 --yes']);
+  assert.deepEqual((await tracker.list()).map((t) => t.id), ['#5', '#6']);
+});
+
+test('remove without withChildren keeps the sub-issues as top-level issues', async () => {
+  const { tracker } = setup();
+  assert.deepEqual(await tracker.remove('#1', { withChildren: false }), ['#1']);
+  assert.equal((await tracker.get('#2')).parentId, null);
+});
+
+test('remove by a non-admin is FAILED with a clear message; a missing issue is NOT_FOUND', async () => {
+  const { tracker } = setup(ISSUES, { notAdmin: true });
+  await rejectsWith(tracker.remove('#4', { withChildren: false }), 'FAILED', /Only repository admins can delete GitHub issues.*close it instead/);
+  await rejectsWith(tracker.remove('#99', { withChildren: false }), 'NOT_FOUND');
+});
+
 test('removeParent unlinks the native parent with gh issue edit --remove-parent; the number stays', async () => {
   const { tracker, gh } = setup();
   const alone = await tracker.removeParent('#2');

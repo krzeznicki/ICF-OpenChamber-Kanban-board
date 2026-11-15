@@ -2,7 +2,7 @@
 // State is a triage label (strings from triage-labels.md), closed = done. Type is the `bug` /
 // `enhancement` label or a `type:<x>` label. Parents are issues with sub-issues.
 import type { LabelRole, ProjectConfig } from './config.ts';
-import type { Exec, NewTask, Task, TaskState, Tracker } from './types.ts';
+import type { Exec, NewTask, Task, TaskEdit, TaskState, Tracker } from './types.ts';
 import { TrackerError } from './types.ts';
 
 /**
@@ -365,6 +365,19 @@ export const createGithubTracker = (root: string, exec: Exec, labels: ProjectCon
       return get(idOf(issue.number));
     },
 
+    async edit(id: string, changes: TaskEdit) {
+      const n = parseNumber(id);
+      if (changes.title !== undefined && (typeof changes.title !== 'string' || changes.title.trim() === '')) {
+        throw new TrackerError('INVALID', 'Title is required');
+      }
+      if (changes.body !== undefined && typeof changes.body !== 'string') throw new TrackerError('INVALID', 'The description must be a string');
+      const args = ['issue', 'edit', String(n)];
+      if (changes.title !== undefined) args.push('--title', changes.title.trim());
+      if (changes.body !== undefined) args.push('--body', changes.body);
+      if (args.length > 3) await run(args);
+      return get(idOf(n));
+    },
+
     async claim(id) {
       const { task, issue } = await load(parseNumber(id));
       if (task.kind === 'parent') throw new TrackerError('INVALID', `Only a sub-task can be claimed, not a parent issue: ${task.id}`);
@@ -391,6 +404,27 @@ export const createGithubTracker = (root: string, exec: Exec, labels: ProjectCon
       // gh replaces an existing parent; the issue keeps its number, so the id does not change.
       await run(['issue', 'edit', String(n), '--parent', String(p)]);
       return get(idOf(n));
+    },
+
+    async remove(id, opts) {
+      const { issue, rel } = await load(parseNumber(id));
+      const numbers = [...(opts.withChildren ? rel.children.map((c) => c.number) : []), issue.number];
+      const deleted: string[] = [];
+      for (const n of numbers) {
+        const args = ['issue', 'delete', String(n), '--yes'];
+        const r = await run(args, true);
+        if (r.code !== 0) {
+          const detail = (r.stderr || r.stdout).trim();
+          const done = deleted.length > 0 ? ` (already deleted: ${deleted.join(', ')})` : '';
+          // GitHub lets only repository admins delete issues; anyone who can triage can still close.
+          if (/permission|must have admin|FORBIDDEN/i.test(detail)) {
+            throw new TrackerError('FAILED', `Only repository admins can delete GitHub issues; close it instead${done}. gh: ${detail}`);
+          }
+          throw new TrackerError('FAILED', `${failed(args, r).message}${done}`);
+        }
+        deleted.push(idOf(n));
+      }
+      return deleted;
     },
 
     async removeParent(id) {

@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
+  issueDescription,
   issueFileName,
   parseIssue,
   parseSpec,
@@ -251,4 +252,10 @@ test('claimed: the "claimed" status word marks the issue claimed (state stays re
   assert.equal(parseIssue('# T\n\nStatus: Claimed\n', 'a.md').claimed, true);
   assert.equal(parseIssue('# T\n\n**Status:** ready-for-agent\n', 'a.md').claimed, false);
   assert.equal(parseIssue('# T\n\nNo status.\n', 'a.md').claimed, false);
+});
+
+test('issueDescription drops the heading, the header field lines and ## Comments / ## Answer', () => {
+  const text = '# 03: Third\r\n\r\nLead.\r\n\r\n**Blocked by:** 02\r\n\r\nStatus: claimed\r\n\r\n- [ ] a\r\n\r\n## Notes\r\n\r\nkeep\r\n\r\n## Answer\r\n\r\nx\r\n';
+  assert.equal(issueDescription(text), 'Lead.\n\n- [ ] a\n\n## Notes\n\nkeep');
+  assert.equal(issueDescription('# Title only\n'), '');
 });
