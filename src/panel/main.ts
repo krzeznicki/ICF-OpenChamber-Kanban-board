@@ -10,7 +10,7 @@ import { connectHost } from '@openchamber/sdk';
 import type { GuestProject, GuestSessionRecord, HostReadyContext } from '@openchamber/sdk';
 import { applyHostReady } from '@openchamber/sdk/ui';
 import type { Task } from '../core/types.ts';
-import { archivableIds, archivedShown, archiveTasks, createArchiveSync, isArchived, mergeArchived, reconcileArchived, unarchiveTask } from './archive.ts';
+import { archivableIds, archivedShown, archiveTasks, archiveWriteJob, createArchiveSync, isArchived, mergeArchived, reconcileArchived, unarchiveTask } from './archive.ts';
 import { ApiError, createApi, type Api, type ConfigResult, type ProjectConfig } from './api.ts';
 import { groupTasks, pruneArchived, resolveSession, sessionForTask, sessionTarget, type Column, type SessionLookup } from './columns.ts';
 import { createEditor, type Editor } from './edit.ts';
@@ -118,8 +118,12 @@ const archived = (): Set<string> => (state.archivedFor === state.projectId ? sta
 const archivedTasks = (): Map<string, number> => (state.archivedTasksFor === state.projectId ? state.archivedTasks : new Map());
 /** Whether a load may take the stored archive marks over memory (archive.ts createArchiveSync). */
 const archiveSync = createArchiveSync();
-/** Task id -> when this frame unarchived it: a merge with storage does not bring those marks back. */
-let unarchivedAt = new Map<string, number>();
+/**
+ * Per project, task id -> when this frame unarchived it: a merge with storage does not bring those
+ * marks back. Kept across project switches (a write of the old project may still be queued).
+ */
+const unarchivedAt = new Map<string, Map<string, number>>();
+const removedFor = (projectId: string): ReadonlyMap<string, number> => unarchivedAt.get(projectId) ?? new Map();
 // Every field reports each keystroke; only the newest value per key is written.
 const saver = createLatestSaver<() => Promise<void>>(
   (_key, run) => run(),
@@ -444,16 +448,16 @@ const load = async (): Promise<void> => {
       state.archived = new Set([...archived(), ...gone]);
       state.archivedFor = p.id;
     }
-    // Stored archive marks (also the other frame's) win when every change of this frame is written
-    // (or it holds none for this project); otherwise both join, newest per id. Then ids the tracker
-    // no longer lists are pruned and reopened tasks unarchived, and that is written back.
-    const own = state.archivedTasksFor === p.id;
+    // Stored archive marks (also the other frame's) win when every change of this frame is written;
+    // otherwise memory (empty after a switch) and storage join, newest per id, minus this frame's
+    // unarchives. Then ids the tracker no longer lists are pruned and reopened tasks unarchived, and
+    // that is written back.
     const base =
-      shelved === null ? archivedTasks() : !own || archiveSync.trusts(token) ? shelved : mergeArchived(archivedTasks(), shelved, unarchivedAt);
+      shelved === null ? archivedTasks() : archiveSync.trusts(token) ? shelved : mergeArchived(archivedTasks(), shelved, removedFor(p.id));
     const fixed = reconcileArchived(base, tasks);
     state.archivedTasks = fixed.marks;
     state.archivedTasksFor = p.id;
-    if (fixed.changed) writeArchivedTasks(p.id);
+    if (fixed.changed) writeArchivedTasks(p.id, fixed.marks, tasks);
     state.config = result.config;
     state.tasks = tasks;
     state.view = 'board';
@@ -491,7 +495,6 @@ const selectProject = async (id: string | null): Promise<void> => {
   state.archivedTasks = new Map();
   state.archivedTasksFor = null;
   state.showArchived = false;
-  unarchivedAt = new Map();
   audited.clear();
   starter.reset();
   state.config = null;
@@ -626,31 +629,29 @@ const detach = async (task: Task, from: Column): Promise<void> => {
 // --- "Archive done" (archive.ts): panel storage only, the repo and GitHub stay as they are ---
 
 /**
- * The one write path of the archive marks (user changes and a load's reconcile). Writes collapse
- * (createLatestSaver), so the job reads memory when it runs: a replaced job's change is in it. It
- * joins what storage holds now (the other frame's marks, newest per id, minus this frame's
- * unarchives), reconciles with the tasks and writes; only a write that succeeded counts as written.
+ * The one write path of the archive marks (user changes and a load's reconcile). The marks, tasks and
+ * this frame's unarchives are snapshotted now, when the job is queued (archive.ts archiveWriteJob): a
+ * project switch before it runs, or a wait behind a running write, loses nothing, and the newest
+ * queued job holds any change of one the saver replaced. Only a write that succeeded counts as written.
  */
-const writeArchivedTasks = (projectId: string): void => {
+const writeArchivedTasks = (projectId: string, marks: ReadonlyMap<string, number>, tasks: readonly Task[] | null): void => {
   const n = archiveSync.edit();
-  saver.save(STORAGE_KEYS.archivedTasks(projectId), async () => {
-    const stored = await store.loadArchivedTasks(projectId).catch(() => null);
-    if (state.archivedTasksFor !== projectId) {
-      archiveSync.written(n); // switched project: nothing of it is held to write any more
-      return;
-    }
-    const memory = state.archivedTasks;
-    const merged = stored === null ? memory : mergeArchived(memory, stored, unarchivedAt);
-    const next = state.tasks === null ? merged : reconcileArchived(merged, state.tasks).marks;
-    await store.saveArchivedTasks(projectId, next);
-    archiveSync.written(n);
-    // The other frame's marks came in: show them, unless memory changed during the write.
-    if (state.archivedTasksFor === projectId && state.archivedTasks === memory && !sameMarks(memory, next)) {
-      state.archivedTasks = next;
+  const job = archiveWriteJob(
+    { marks: new Map(marks), removed: new Map(removedFor(projectId)), tasks },
+    { load: () => store.loadArchivedTasks(projectId), save: (next) => store.saveArchivedTasks(projectId, next) },
+    (next) => {
+      archiveSync.written(n);
+      // The other frame's marks (or, after a switch back, this job's own) join what the board shows.
+      if (state.archivedTasksFor !== projectId || state.tasks === null) return;
+      const current = state.archivedTasks;
+      const shown = reconcileArchived(mergeArchived(current, next, removedFor(projectId)), state.tasks).marks;
+      if (sameMarks(current, shown)) return;
+      state.archivedTasks = shown;
       draw();
       editor.refresh();
-    }
-  });
+    },
+  );
+  saver.save(STORAGE_KEYS.archivedTasks(projectId), job);
 };
 
 const sameMarks = (a: ReadonlyMap<string, number>, b: ReadonlyMap<string, number>): boolean =>
@@ -660,7 +661,7 @@ const sameMarks = (a: ReadonlyMap<string, number>, b: ReadonlyMap<string, number
 const setArchivedTasks = (projectId: string, marks: Map<string, number>): void => {
   state.archivedTasks = marks;
   state.archivedTasksFor = projectId;
-  writeArchivedTasks(projectId);
+  writeArchivedTasks(projectId, marks, state.tasks);
   draw();
   editor.refresh();
 };
@@ -686,7 +687,7 @@ const archiveDone = async (): Promise<void> => {
 const unarchive = (taskId: string): void => {
   const id = state.projectId;
   if (id === null || !archivedTasks().has(taskId)) return;
-  unarchivedAt = new Map(unarchivedAt).set(taskId, Date.now());
+  unarchivedAt.set(id, new Map(removedFor(id)).set(taskId, Date.now()));
   setArchivedTasks(id, unarchiveTask(archivedTasks(), taskId));
 };
 

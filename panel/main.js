@@ -2797,6 +2797,13 @@ ${GUEST_UI_LOOK_CSS}`;
       trusts: (token) => token !== -1 && token === edits
     };
   };
+  var archiveWriteJob = (snap, io, onWritten) => async () => {
+    const stored = await io.load().catch(() => null);
+    const merged = stored === null ? new Map(snap.marks) : mergeArchived(snap.marks, stored, snap.removed);
+    const next = snap.tasks === null ? merged : reconcileArchived(merged, snap.tasks).marks;
+    await io.save(next);
+    onWritten(next);
+  };
 
   // src/panel/api.ts
   var ApiError = class extends Error {
@@ -12552,6 +12559,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
   var archivedTasks = () => state.archivedTasksFor === state.projectId ? state.archivedTasks : /* @__PURE__ */ new Map();
   var archiveSync = createArchiveSync();
   var unarchivedAt = /* @__PURE__ */ new Map();
+  var removedFor = (projectId) => unarchivedAt.get(projectId) ?? /* @__PURE__ */ new Map();
   var saver = createLatestSaver(
     (_key, run) => run(),
     (e) => fail(`Could not save settings: ${e instanceof Error ? e.message : String(e)}`)
@@ -12834,12 +12842,11 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
         state.archived = /* @__PURE__ */ new Set([...archived(), ...gone]);
         state.archivedFor = p.id;
       }
-      const own = state.archivedTasksFor === p.id;
-      const base2 = shelved === null ? archivedTasks() : !own || archiveSync.trusts(token) ? shelved : mergeArchived(archivedTasks(), shelved, unarchivedAt);
+      const base2 = shelved === null ? archivedTasks() : archiveSync.trusts(token) ? shelved : mergeArchived(archivedTasks(), shelved, removedFor(p.id));
       const fixed = reconcileArchived(base2, tasks);
       state.archivedTasks = fixed.marks;
       state.archivedTasksFor = p.id;
-      if (fixed.changed) writeArchivedTasks(p.id);
+      if (fixed.changed) writeArchivedTasks(p.id, fixed.marks, tasks);
       state.config = result.config;
       state.tasks = tasks;
       state.view = "board";
@@ -12874,7 +12881,6 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     state.archivedTasks = /* @__PURE__ */ new Map();
     state.archivedTasksFor = null;
     state.showArchived = false;
-    unarchivedAt = /* @__PURE__ */ new Map();
     audited.clear();
     starter.reset();
     state.config = null;
@@ -12974,31 +12980,29 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     saver.save(STORAGE_KEYS.detached(id), () => store.saveDetached(id, saved));
     info("Moved; the agent session keeps running \u2014 open it from the session list");
   };
-  var writeArchivedTasks = (projectId) => {
+  var writeArchivedTasks = (projectId, marks, tasks) => {
     const n = archiveSync.edit();
-    saver.save(STORAGE_KEYS.archivedTasks(projectId), async () => {
-      const stored = await store.loadArchivedTasks(projectId).catch(() => null);
-      if (state.archivedTasksFor !== projectId) {
+    const job = archiveWriteJob(
+      { marks: new Map(marks), removed: new Map(removedFor(projectId)), tasks },
+      { load: () => store.loadArchivedTasks(projectId), save: (next) => store.saveArchivedTasks(projectId, next) },
+      (next) => {
         archiveSync.written(n);
-        return;
-      }
-      const memory = state.archivedTasks;
-      const merged = stored === null ? memory : mergeArchived(memory, stored, unarchivedAt);
-      const next = state.tasks === null ? merged : reconcileArchived(merged, state.tasks).marks;
-      await store.saveArchivedTasks(projectId, next);
-      archiveSync.written(n);
-      if (state.archivedTasksFor === projectId && state.archivedTasks === memory && !sameMarks(memory, next)) {
-        state.archivedTasks = next;
+        if (state.archivedTasksFor !== projectId || state.tasks === null) return;
+        const current = state.archivedTasks;
+        const shown = reconcileArchived(mergeArchived(current, next, removedFor(projectId)), state.tasks).marks;
+        if (sameMarks(current, shown)) return;
+        state.archivedTasks = shown;
         draw();
         editor.refresh();
       }
-    });
+    );
+    saver.save(STORAGE_KEYS.archivedTasks(projectId), job);
   };
   var sameMarks = (a, b) => a.size === b.size && [...a].every(([id, at]) => b.get(id) === at);
   var setArchivedTasks = (projectId, marks) => {
     state.archivedTasks = marks;
     state.archivedTasksFor = projectId;
-    writeArchivedTasks(projectId);
+    writeArchivedTasks(projectId, marks, state.tasks);
     draw();
     editor.refresh();
   };
@@ -13021,7 +13025,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
   var unarchive = (taskId) => {
     const id = state.projectId;
     if (id === null || !archivedTasks().has(taskId)) return;
-    unarchivedAt = new Map(unarchivedAt).set(taskId, Date.now());
+    unarchivedAt.set(id, new Map(removedFor(id)).set(taskId, Date.now()));
     setArchivedTasks(id, unarchiveTask(archivedTasks(), taskId));
   };
   var checkSessions = async (sessionIds) => {

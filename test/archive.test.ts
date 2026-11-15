@@ -6,6 +6,7 @@ import {
   archivableIds,
   archiveTasks,
   archivedShown,
+  archiveWriteJob,
   createArchiveSync,
   isArchived,
   mergeArchived,
@@ -189,4 +190,53 @@ test('archive sync: a failed write does not count as written (memory is kept)', 
   saver.save('k', () => Promise.reject(new Error('disk')).then(() => sync.written(n)));
   await saver.idle();
   assert.equal(sync.trusts(sync.loadToken()), false);
+});
+
+test('archiveWriteJob writes the marks snapshotted at queue time, merged with storage, whatever memory holds by then', async () => {
+  const data = new Map<string, unknown>();
+  const store = createSettingsStore({
+    get: async (k) => data.get(k),
+    set: async (k, v) => void data.set(k, v),
+    delete: async (k) => void data.delete(k),
+  });
+  await store.saveArchivedTasks('p1', new Map([['other', 2], ['gone', 1]]));
+  const tasks = [task('a', 'done'), task('other', 'done'), task('gone', 'needs-triage')];
+  let memory: Map<string, number> | null = new Map([['a', 5]]);
+  const written: Map<string, number>[] = [];
+  const job = archiveWriteJob(
+    { marks: memory, removed: new Map(), tasks },
+    { load: () => store.loadArchivedTasks('p1'), save: (m) => store.saveArchivedTasks('p1', m) },
+    (next) => written.push(next),
+  );
+  memory = null; // the user switched project before the job ran: memory is reset
+  await job();
+  assert.equal(memory, null);
+  // a: the snapshot; other: the other frame's stored mark; gone: reopened, pruned.
+  assert.deepEqual(data.get('archivedTasks:p1'), [{ id: 'other', archivedAt: 2 }, { id: 'a', archivedAt: 5 }]);
+  assert.equal(written.length, 1);
+});
+
+test('archiveWriteJob: the newest queued snapshot carries the change of a job it replaced; a local unarchive stays out', async () => {
+  const data = new Map<string, unknown>([['archivedTasks:p1', [{ id: 'x', archivedAt: 1 }]]]);
+  const store = createSettingsStore({
+    get: async (k) => data.get(k),
+    set: async (k, v) => void data.set(k, v),
+    delete: async (k) => void data.delete(k),
+  });
+  const tasks = [task('a', 'done'), task('b', 'done'), task('x', 'done')];
+  const io = { load: () => store.loadArchivedTasks('p1'), save: (m: ReadonlyMap<string, number>) => store.saveArchivedTasks('p1', m) };
+  const saver = createLatestSaver<() => Promise<void>>((_k, run) => run(), () => {});
+  let release: () => void = () => {};
+  const gate = new Promise<void>((r) => (release = r));
+  const first = archiveWriteJob({ marks: new Map([['a', 3]]), removed: new Map(), tasks }, io, () => {});
+  saver.save('k', async () => {
+    await gate;
+    await first();
+  });
+  // Queued while the first runs (it waits), then replaced: memory only builds up, so the newest has 'b'.
+  saver.save('k', archiveWriteJob({ marks: new Map([['a', 3], ['b', 4]]), removed: new Map(), tasks }, io, () => {}));
+  saver.save('k', archiveWriteJob({ marks: new Map([['a', 3], ['b', 4]]), removed: new Map([['x', 2]]), tasks }, io, () => {}));
+  release();
+  await saver.idle();
+  assert.deepEqual(data.get('archivedTasks:p1'), [{ id: 'a', archivedAt: 3 }, { id: 'b', archivedAt: 4 }]);
 });

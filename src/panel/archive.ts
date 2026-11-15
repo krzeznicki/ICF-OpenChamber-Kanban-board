@@ -103,3 +103,28 @@ export const createArchiveSync = () => {
     trusts: (token: number): boolean => token !== -1 && token === edits,
   };
 };
+
+/** What a write of one project's marks takes along when it is queued. */
+export type ArchiveSnapshot = { marks: ArchivedTasks; removed: ArchivedTasks; tasks: readonly Task[] | null };
+
+/**
+ * The job that writes one project's marks. Everything it writes is taken when it is queued, not when
+ * it runs, so a project switch (which resets memory) or a wait behind a running write loses nothing.
+ * Memory only builds up between queuings, so the newest queued snapshot holds the change of any job
+ * the saver replaced. When it runs it joins what storage holds now (the other frame's marks, minus
+ * this frame's unarchives), reconciles with the snapshot's tasks, writes, then reports what it wrote.
+ * A failed read writes the snapshot alone; a failed write throws and reports nothing.
+ */
+export const archiveWriteJob =
+  (
+    snap: ArchiveSnapshot,
+    io: { load: () => Promise<ArchivedTasks>; save: (marks: ReadonlyMap<string, number>) => Promise<void> },
+    onWritten: (marks: Map<string, number>) => void,
+  ) =>
+  async (): Promise<void> => {
+    const stored = await io.load().catch(() => null);
+    const merged = stored === null ? new Map(snap.marks) : mergeArchived(snap.marks, stored, snap.removed);
+    const next = snap.tasks === null ? merged : reconcileArchived(merged, snap.tasks).marks;
+    await io.save(next);
+    onWritten(next);
+  };
