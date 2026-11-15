@@ -159,7 +159,7 @@ The agent usually runs in a fresh worktree, where `docs/agents/` and `.scratch/`
 
 Turn it off with **Settings → Global → Use Matt Pocock's skills when installed** (on by default); that section and Settings → Presets list which skills were found, and each built-in says which text it runs with. The board checks when a project opens.
 
-A preset text (built-in or your own) may use `{cli}` (the `task-board` command with `--dir`), `{root}` (the project root), `{id}` (the task) and `{note}` (how to add a note to the task); they are filled in when the session starts.
+A preset text (built-in or your own) may use `{cli}` (the `task-board` command with `--dir`), `{root}` (the project root), `{tracker}` (the root's `docs/agents/issue-tracker.md`), `{id}` (the task) and `{note}` (how to add a note to the task); they are filled in when the session starts, each path and id quoted for the shell when it holds a space or a quote.
 
 In **Settings → Presets** you can edit the built-in texts (**Reset** brings the shipped text back) and add, rename and delete your own. An edited built-in keeps your text whether or not the skills are installed. A card whose preset was deleted falls back to Implement.
 

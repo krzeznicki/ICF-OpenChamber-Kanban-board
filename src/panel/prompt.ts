@@ -16,21 +16,31 @@ export const shellWord = (s: string): string => (/^[A-Za-z0-9_./:@%+=,-]+$/.test
 
 const isGithub = (task: Task): boolean => task.url !== null || /^#\d+$/.test(task.id);
 
+/** The project root without a trailing slash ("/" stays "/"). */
+const rootOf = (projectDir: string): string => projectDir.replace(/\/+$/, '') || '/';
+const under = (projectDir: string, rel: string): string => `${rootOf(projectDir).replace(/\/$/, '')}/${rel}`;
+
 /** How to put a note on the task: at the root's issue file (never a worktree copy), or a GitHub comment. */
 const noteHow = (task: Task, projectDir: string): string => {
   const n = /^#(\d+)$/.exec(task.id)?.[1] ?? /\/issues\/(\d+)/.exec(task.url ?? '')?.[1];
   if (isGithub(task) && n !== undefined) return `post it with \`gh issue comment ${n} --body-file -\``;
-  return `append it to the issue file ${projectDir.replace(/\/+$/, '')}/${task.id}`;
+  return `append it to the issue file \`${shellWord(under(projectDir, task.id))}\``;
 };
 
 /**
  * A preset text with its placeholders filled: {cli} (the task-board command with --dir), {root}
- * (the project root), {id} (this task, shell-quoted) and {note} (how to add a note to this task).
+ * (the project root), {tracker} (the root's docs/agents/issue-tracker.md), {id} (this task) and
+ * {note} (how to add a note to this task). Every path and id is one shell word (shellWord), so a
+ * root with a space or a quote survives being pasted into a command.
  */
 export const fillPreset = (text: string, task: Task, cli: string, projectDir: string): string =>
-  text.replace(/\{(cli|root|id|note)\}/g, (_, key: string) =>
-    key === 'cli' ? cli : key === 'root' ? projectDir : key === 'id' ? shellWord(task.id) : noteHow(task, projectDir),
-  );
+  text.replace(/\{(cli|root|tracker|id|note)\}/g, (_, key: string) => {
+    if (key === 'cli') return cli;
+    if (key === 'root') return shellWord(rootOf(projectDir));
+    if (key === 'tracker') return shellWord(under(projectDir, 'docs/agents/issue-tracker.md'));
+    if (key === 'id') return shellWord(task.id);
+    return noteHow(task, projectDir);
+  });
 
 /**
  * `projectDir` is the project root (the main checkout). Every CLI line passes it with --dir: the

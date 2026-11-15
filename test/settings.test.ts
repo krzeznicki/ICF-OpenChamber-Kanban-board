@@ -409,7 +409,7 @@ test('every built-in names its skills and carries a mattText that invokes each o
     // The tracker is at the project root; tracker writes go through the task-board CLI, which writes the skills' format.
     assert.match(p.mattText, /task-board CLI/, p.id);
     assert.match(p.mattText, /same format/, p.id);
-    assert.ok(p.mattText.includes('{root}/docs/agents/issue-tracker.md'), p.id);
+    assert.ok(p.mattText.includes('{tracker}'), p.id);
     assert.match(p.mattText, /never run \/setup-matt-pocock-skills/, p.id);
   }
   assert.deepEqual(preset('plan').skills, ['grill-with-docs', 'to-spec', 'to-tickets']);

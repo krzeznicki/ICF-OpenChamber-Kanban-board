@@ -11,7 +11,7 @@ import { MATT_SKILLS } from '../core/skills.ts';
  * `skills` (invoked by name in `mattText`), `requires` (loaded by those skills themselves) and
  * `mattText` are set on built-ins only. `skillFiles` is set by listPresets when the skills text is
  * used: the SKILL.md of each, which the prompt names for a harness that cannot load a skill.
- * A text may use {cli}, {root}, {id} and {note}; buildPrompt fills them in (prompt.ts).
+ * A text may use {cli}, {root}, {tracker}, {id} and {note}; buildPrompt fills them in (prompt.ts).
  */
 export type Preset = {
   id: string;
@@ -35,7 +35,7 @@ export const NO_SKILLS: SkillUse = Object.freeze({ use: false, found: [] });
  */
 const SKILLS_NOTE = [
   'About the skills: load each skill named here with your skill tool; if it cannot be loaded, read its SKILL.md (listed below) and follow it.',
-  'The tracker lives at the project root {root}, not in your worktree, where docs/agents/ and .scratch/ are missing or a copy the board never reads. When a skill asks for the issue tracker, it is {root}/docs/agents/issue-tracker.md; never run /setup-matt-pocock-skills.',
+  'The tracker lives at the project root {root}, not in your worktree, where docs/agents/ and .scratch/ are missing or a copy the board never reads. When a skill asks for the issue tracker, it is {tracker}; never run /setup-matt-pocock-skills.',
   "Matt's skills and the task-board CLI write the same format, so make every tracker write through the CLI at the root instead of the skills' own publishing: new issues with `{cli} create`, states with `{cli} state` (and `{cli} claim` for sub-tasks). For a note on this task, {note}. The board then follows.",
 ].join('\n');
 

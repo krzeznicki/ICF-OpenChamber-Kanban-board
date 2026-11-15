@@ -168,3 +168,28 @@ test('prompt: {cli}, {root}, {id} and {note} are filled in; skills texts reach t
   const plain = listPresets(parseStoredPresets(undefined)).find((p) => p.id === 'plan')!;
   assert.doesNotMatch(buildPrompt(task(), plain, CLI, DIR, []), /SKILL\.md/);
 });
+
+test("prompt: {root}, {tracker} and {note} are shell-quoted for a root with a space and a '", async () => {
+  const { listPresets, parseStoredPresets } = await import('../src/panel/presets.ts');
+  const { MATT_SKILLS } = await import('../src/core/skills.ts');
+  const { fillPreset } = await import('../src/panel/prompt.ts');
+  const root = "/home/u/Kamil's Projects/board";
+  const q = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
+  const t = task();
+  assert.equal(fillPreset('cd {root}', t, TB, root), `cd ${q(root)}`);
+  assert.equal(fillPreset('cat {tracker}', t, TB, `${root}/`), `cat ${q(`${root}/docs/agents/issue-tracker.md`)}`);
+  assert.equal(
+    fillPreset('{note}', t, TB, root),
+    `append it to the issue file \`${q(`${root}/.scratch/board/issues/03-drag.md`)}\``,
+  );
+  // A plain root stays bare.
+  assert.equal(fillPreset('{root} {tracker}', t, TB, DIR), `${DIR} ${DIR}/docs/agents/issue-tracker.md`);
+  const presets = listPresets(parseStoredPresets(undefined), { use: true, found: [...MATT_SKILLS] });
+  for (const preset of presets) {
+    if (preset.mattText === undefined) continue;
+    const p = buildPrompt(t, preset, CLI, root, []);
+    assert.doesNotMatch(p, /\{(cli|root|id|note|tracker)\}/, preset.id);
+    assert.ok(p.includes(q(`${root}/docs/agents/issue-tracker.md`)), preset.id);
+    assert.ok(!p.includes(`${root}/docs`), `${preset.id}: unquoted root`);
+  }
+});
