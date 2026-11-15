@@ -155,7 +155,6 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
     for (const d of disposers) d();
     disposers = [];
     head.replaceChildren();
-    quick.replaceChildren();
     summarySec.content.replaceChildren();
     subList.replaceChildren();
     settingsTop.replaceChildren();
@@ -301,8 +300,25 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
     );
   };
 
+  /**
+   * The State / Type / Move to row redraws only when what it shows changes (like the Task section),
+   * so an open select or a focused button survives a poll. Its handlers capture the task's id,
+   * state and type, which are part of the key.
+   */
+  let quickKey: string | null = null;
+  let quickDisposers: Array<() => void> = [];
+  const clearQuick = (): void => {
+    for (const d of quickDisposers) d();
+    quickDisposers = [];
+    quick.replaceChildren();
+  };
   const drawQuick = (m: DetailModel): void => {
     const { task } = m;
+    const key = JSON.stringify([task.id, task.state, task.type, m.types, m.labels, m.moves, m.busy]);
+    if (key === quickKey) return;
+    quickKey = key;
+    clearQuick();
+    const disposers = quickDisposers;
     const fields = el('div', 'kb-quick-fields');
     const stateSlot = el('div', 'kb-field');
     const typeSlot = el('div', 'kb-field');
@@ -408,6 +424,7 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
     dispose: () => {
       clear();
       clearStart();
+      clearQuick();
       addHandle?.dispose();
       shell.dispose();
     },

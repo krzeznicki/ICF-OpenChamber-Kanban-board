@@ -10746,7 +10746,6 @@ ${ref}`,
       for (const d of disposers) d();
       disposers = [];
       head.replaceChildren();
-      quick.replaceChildren();
       summarySec.content.replaceChildren();
       subList.replaceChildren();
       settingsTop.replaceChildren();
@@ -10874,14 +10873,26 @@ ${ref}`,
         }).dispose
       );
     };
+    let quickKey = null;
+    let quickDisposers = [];
+    const clearQuick = () => {
+      for (const d of quickDisposers) d();
+      quickDisposers = [];
+      quick.replaceChildren();
+    };
     const drawQuick = (m) => {
       const { task } = m;
+      const key = JSON.stringify([task.id, task.state, task.type, m.types, m.labels, m.moves, m.busy]);
+      if (key === quickKey) return;
+      quickKey = key;
+      clearQuick();
+      const disposers2 = quickDisposers;
       const fields = el5("div", "kb-quick-fields");
       const stateSlot = el5("div", "kb-field");
       const typeSlot = el5("div", "kb-field");
       fields.append(stateSlot, typeSlot);
       quick.append(fields);
-      disposers.push(
+      disposers2.push(
         mountSelect(stateSlot, {
           label: "State",
           value: task.state,
@@ -10896,7 +10907,7 @@ ${ref}`,
         }).dispose
       );
       const types = task.type !== null && !m.types.includes(task.type) ? [...m.types, task.type] : m.types;
-      disposers.push(
+      disposers2.push(
         mountSelect(typeSlot, {
           label: "Type",
           value: task.type,
@@ -10914,7 +10925,7 @@ ${ref}`,
         moveRow.setAttribute("aria-label", "Move to");
         moveRow.append(el5("span", "kb-actions-label", "Move to"));
         for (const { to, label } of m.moves) {
-          disposers.push(
+          disposers2.push(
             mountButton(moveRow, { label, variant: "outline", size: "xs", disabled: m.busy, onClick: () => callbacks.onMove(to) }).dispose
           );
         }
@@ -10972,6 +10983,7 @@ ${ref}`,
       dispose: () => {
         clear();
         clearStart();
+        clearQuick();
         addHandle?.dispose();
         shell.dispose();
       }
