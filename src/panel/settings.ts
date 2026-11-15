@@ -3,6 +3,7 @@
 // so they run under node:test; createSettingsStore is the only part that touches storage.
 import type { Task } from '../core/types.ts';
 import { parseArchivedTasks, serializeArchived, type ArchivedTasks } from './archive.ts';
+import { ORDER_MAX, parseOrder } from './order.ts';
 import { BUILTIN_PRESETS, defaultSetId, effectiveSetId, EMPTY_SETS, isPristineSets, migrateStoredPresets, parseStoredSets, type Preset, type StoredSets } from './presets.ts';
 import { DEFAULT_SUMMARY_PROMPT } from './summaries.ts';
 
@@ -270,6 +271,8 @@ export const STORAGE_KEYS = {
   archivedSessions: (projectId: string): string => fit(`archivedSessions:${projectId}`),
   /** Per project: done tasks the user archived ("Archive done", archive.ts), `{ id, archivedAt }[]`. */
   archivedTasks: (projectId: string): string => fit(`archivedTasks:${projectId}`),
+  /** Per project: the manual card order, task ids (order.ts). */
+  taskOrder: (projectId: string): string => fit(`taskOrder:${projectId}`),
   /** Which sections of the task modal are open (one entry for every task and project). */
   detailSections: 'detail-sections',
 } as const;
@@ -380,6 +383,9 @@ export const createSettingsStore = (storage: SettingsStorage) => {
       parseArchivedTasks(await storage.get(STORAGE_KEYS.archivedTasks(projectId))),
     saveArchivedTasks: (projectId: string, marks: ArchivedTasks): Promise<void> =>
       put(STORAGE_KEYS.archivedTasks(projectId), serializeArchived(marks), marks.size === 0),
+    loadOrder: async (projectId: string): Promise<string[]> => parseOrder(await storage.get(STORAGE_KEYS.taskOrder(projectId))),
+    saveOrder: (projectId: string, order: readonly string[]): Promise<void> =>
+      put(STORAGE_KEYS.taskOrder(projectId), order.slice(0, ORDER_MAX), order.length === 0),
     loadSections: async (): Promise<Sections> => parseSections(await storage.get(STORAGE_KEYS.detailSections)),
     saveSections: (sections: Sections): Promise<void> => {
       const clean = parseSections(sections);

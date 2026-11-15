@@ -374,3 +374,18 @@ test('archived sessions: parsed defensively, stored per project under archivedSe
   await store.saveArchived('p1', new Set());
   assert.equal(data.has('archivedSessions:p1'), false);
 });
+
+test('manual card order: stored under taskOrder:<projectId> as an id list, at most ORDER_MAX; empty deletes', async () => {
+  const { ORDER_MAX } = await import('../src/panel/order.ts');
+  const { data, storage } = fakeStorage();
+  const store = createSettingsStore(storage);
+  assert.equal(STORAGE_KEYS.taskOrder('p1'), 'taskOrder:p1');
+  await store.saveOrder('p1', ['b', 'a']);
+  assert.deepEqual(data.get('taskOrder:p1'), ['b', 'a']);
+  assert.deepEqual(await store.loadOrder('p1'), ['b', 'a']);
+  await store.saveOrder('p1', Array.from({ length: ORDER_MAX + 1 }, (_, i) => `t${i}`));
+  assert.equal((data.get('taskOrder:p1') as string[]).length, ORDER_MAX);
+  await store.saveOrder('p1', []);
+  assert.equal(data.has('taskOrder:p1'), false);
+  assert.deepEqual(await store.loadOrder('p2'), []);
+});

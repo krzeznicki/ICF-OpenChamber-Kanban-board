@@ -50,6 +50,13 @@ export type EditorDeps = {
     /** Only ever called with an id that is `open` in a host snapshot. */
     open: (sessionId: string) => void;
   };
+  /** The manual card order (order.ts), kept in the panel's storage. */
+  order: {
+    /** A card dropped in its own column before `before` (null: last). */
+    reorder: (taskId: string, column: Column, before: string | null) => void;
+    /** A task got a new id (a local link moved it): it keeps its place. */
+    rename: (from: string, to: string) => void;
+  };
   /** "Archive done" (archive.ts): whether a task is archived, and the modal's "Unarchive". */
   archive: { has: (task: Task) => boolean; unarchive: (taskId: string) => void };
   /** Which modal sections are open (device storage). */
@@ -257,14 +264,15 @@ export const createEditor = (deps: EditorDeps) => {
 
   /**
    * The api's setParent as every link of the panel uses it: a task that comes back with a new id
-   * (local: its file moved) is followed by the open modal, and its stored start options move to
-   * that id (the service re-keys its session links and queue entry).
+   * (local: its file moved) is followed by the open modal, its place in the manual order and its
+   * stored start options move to that id (the service re-keys its session links and queue entry).
    */
   const setParentOf = (api: Api) =>
     followingSetParent(
       api.setParent,
       async (from, to) => {
         follow(from, to);
+        deps.order.rename(from, to);
         const ctx = deps.start.context();
         if (ctx !== null) await deps.start.move(ctx.projectId, from, to);
       },
@@ -544,6 +552,9 @@ export const createEditor = (deps: EditorDeps) => {
       return child !== null && parent !== null && canLinkUnder(deps.tracker(), child, parent, deps.tasks());
     },
     onLink: (id, parentId) => void link(id, parentId),
+    onReorder: (id, column, before) => {
+      if (!moving.has(id)) deps.order.reorder(id, column, before);
+    },
     onOpen: showDetail,
   });
 

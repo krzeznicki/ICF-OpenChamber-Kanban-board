@@ -5,13 +5,15 @@
 // it starts an agent session (or queues it over the limit) and the card then follows that session. Settings (global, per project, presets, per card) come from the
 // extension's storage through settings.ts and are edited in the Settings sheet. Personal summaries
 // (summaries.ts) are read or generated for the shown cards after each load. "Archive done"
-// (archive.ts) hides done tasks from the board through the extension's storage only.
+// (archive.ts) hides done tasks from the board through the extension's storage only, and so is
+// the manual card order (order.ts: a card dragged up or down its column).
 import { connectHost } from '@openchamber/sdk';
 import type { GuestProject, GuestSessionRecord, HostReadyContext } from '@openchamber/sdk';
 import { applyHostReady } from '@openchamber/sdk/ui';
 import type { Task } from '../core/types.ts';
 import { archivableIds, archivedShown, archiveTasks, archiveWriteJob, createArchiveSync, createPendingMarks, isArchived, mergeArchived, reconcileArchived, unarchiveTask } from './archive.ts';
 import { ApiError, createApi, type Api, type ConfigResult, type ProjectConfig } from './api.ts';
+import { applyOrder, pruneOrder, renameInOrder, reorder } from './order.ts';
 import { groupTasks, pruneArchived, resolveSession, sessionForTask, sessionTarget, type Column, type SessionLookup } from './columns.ts';
 import { createEditor, type Editor } from './edit.ts';
 import { EMPTY_SETS, listPresets, type Preset, type StoredSets } from './presets.ts';
@@ -82,6 +84,9 @@ type State = {
   archivedTasksFor: string | null;
   /** The Done header's "Show archived" switch (this panel session only). */
   showArchived: boolean;
+  /** The manual card order (order.ts); `orderFor` is its project. */
+  order: string[];
+  orderFor: string | null;
 };
 
 const state: State = {
@@ -108,6 +113,8 @@ const state: State = {
   archivedTasks: new Map(),
   archivedTasksFor: null,
   showArchived: false,
+  order: [],
+  orderFor: null,
 };
 
 const store = createSettingsStore(host.storage);
@@ -122,6 +129,10 @@ const archived = (): Set<string> => (state.archivedFor === state.projectId ? sta
 const archivedTasks = (): Map<string, number> => (state.archivedTasksFor === state.projectId ? state.archivedTasks : new Map());
 /** Whether a load may take the stored archive marks over memory (archive.ts createArchiveSync). */
 const archiveSync = createArchiveSync();
+/** The shown project's manual card order (empty while another project's is loaded). */
+const order = (): string[] => (state.orderFor === state.projectId ? state.order : []);
+/** The same rule for the card order: a load takes storage only when every reorder of this frame is written. */
+const orderSync = createArchiveSync();
 /**
  * Per project, task id -> when this frame unarchived it: a merge with storage does not bring those
  * marks back. Kept across project switches (a write of the old project may still be queued).
@@ -317,7 +328,7 @@ const draw = (): void => {
   const archivedCount = archivedShown(state.tasks, marks);
   if (archivedCount === 0) state.showArchived = false;
   const model = groupTasks(
-    state.tasks,
+    applyOrder(state.tasks, order()),
     state.sessions,
     starter.isStarting,
     state.hideSubtasks,
@@ -442,11 +453,13 @@ const load = async (): Promise<void> => {
     }
     // Links and the start queue come from the service's own files (starter.ts).
     const token = archiveSync.loadToken();
-    const [tasks, marks, gone, shelved] = await Promise.all([
+    const orderToken = orderSync.loadToken();
+    const [tasks, marks, gone, shelved, ranked] = await Promise.all([
       api.list(),
       store.loadDetached(p.id).catch(() => null),
       store.loadArchived(p.id).catch(() => null),
       store.loadArchivedTasks(p.id).catch(() => null),
+      store.loadOrder(p.id).catch(() => null),
       starter.refresh(p.id, p.directory),
     ]);
     if (mine !== generation) return;
@@ -471,6 +484,11 @@ const load = async (): Promise<void> => {
     state.archivedTasks = fixed.marks;
     state.archivedTasksFor = p.id;
     if (fixed.changed) writeArchivedTasks(p.id, fixed.marks, tasks);
+    // The stored order (the other frame may have reordered) unless this frame's own is still unwritten.
+    if (ranked !== null && (orderSync.trusts(orderToken) || state.orderFor !== p.id)) {
+      state.order = ranked;
+      state.orderFor = p.id;
+    }
     state.config = result.config;
     state.tasks = tasks;
     state.view = 'board';
@@ -508,6 +526,8 @@ const selectProject = async (id: string | null): Promise<void> => {
   state.archivedTasks = new Map();
   state.archivedTasksFor = null;
   state.showArchived = false;
+  state.order = [];
+  state.orderFor = null;
   audited.clear();
   starter.reset();
   state.config = null;
@@ -651,6 +671,31 @@ const detach = async (task: Task, from: Column): Promise<void> => {
   const saved = state.detached;
   saver.save(STORAGE_KEYS.detached(id), () => store.saveDetached(id, saved));
   info('Moved; the agent session keeps running — open it from the session list');
+};
+
+// --- The manual card order (order.ts): panel storage only, for local and GitHub trackers alike ---
+
+const setOrder = (projectId: string, next: string[]): void => {
+  state.order = next;
+  state.orderFor = projectId;
+  const n = orderSync.edit();
+  saver.save(STORAGE_KEYS.taskOrder(projectId), () => store.saveOrder(projectId, next).then(() => orderSync.written(n)));
+};
+
+/** A card dropped in its own column: the whole column, as drawn, gets its positions. */
+const reorderCard = (taskId: string, column: Column, before: string | null): void => {
+  const id = state.projectId;
+  if (id === null || state.tasks === null) return;
+  const ids = [...state.columns].filter(([, c]) => c === column).map(([t]) => t);
+  const next = pruneOrder(reorder(order(), ids, taskId, before), state.tasks);
+  setOrder(id, next);
+  draw();
+};
+
+/** A local link moved a task's file: its place follows the new id. */
+const renameOrdered = (from: string, to: string): void => {
+  const id = state.projectId;
+  if (id !== null && order().includes(from)) setOrder(id, renameInOrder(order(), from, to));
 };
 
 // --- "Archive done" (archive.ts): panel storage only, the repo and GitHub stay as they are ---
@@ -831,6 +876,7 @@ const start = (ctx: HostReadyContext): void => {
     },
     sections: { get: () => sections, save: saveSections },
     archive: { has: (task) => isArchived(task, archivedTasks()), unarchive },
+    order: { reorder: reorderCard, rename: renameOrdered },
     baseTypes: () => settings().types,
     start: {
       context: startContext,

@@ -87,6 +87,7 @@ Types: `bug` and `enhancement` (a feature), plus your own (`chore` and `research
 - To close a task, drag it to Done or use **Move to → Done** under its modal's header (the × at the top right only closes the modal, as does Escape).
 - A drop on Backlog or Ready changes one line of the task file (local) or swaps the state label (GitHub). The rest of the file is left as it is.
 - Dragging a card out of In Progress or Review to Backlog or Ready detaches it from its session: the card follows its state again, and the session keeps running (open it from the session list). Starting the card again later links it to the new session.
+- Drag a card up or down its own column to reorder it: a line shows where it goes. The order is kept in the board's own storage per project (nothing changes in the repository or on GitHub); cards never reordered keep the tracker's order, below the reordered ones. Sub-tasks stay right under their parent. In its own column, only the middle of a card makes the dragged card its sub-task; the top and bottom edges reorder.
 
 ### Archiving done tasks
 
