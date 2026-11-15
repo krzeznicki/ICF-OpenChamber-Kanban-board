@@ -25,6 +25,7 @@ const setup = async (t: T) => {
   const status = new Map<string, Status>();
   const starts: Array<Parameters<SessionHost['start']>[0]> = [];
   const logs: string[] = [];
+  const statusFails = { on: false };
   let n = 0;
   const sessions: SessionHost = {
     start: async (input) => {
@@ -34,8 +35,9 @@ const setup = async (t: T) => {
       return { sessionId: `ses_q${n}`, directory: input.directory ?? null };
     },
     status: async (id) => {
+      if (statusFails.on) throw Object.assign(new Error('Session control is not approved'), { code: 'NOT_GRANTED', status: 403 });
       const s = status.get(id);
-      if (s === undefined) throw new Error('No such session');
+      if (s === undefined) throw Object.assign(new Error('No such session'), { code: 'NOT_FOUND', status: 404 });
       return s;
     },
   };
@@ -45,7 +47,7 @@ const setup = async (t: T) => {
     status.set(sessionId, s);
     await addLink(linksFile, dir, { taskId, sessionId, directory: dir, createdAt: Date.now() });
   };
-  return { root, directory, linksFile, queueFile, deps, status, starts, logs, running };
+  return { root, directory, linksFile, queueFile, deps, status, statusFails, starts, logs, running };
 };
 
 const entry = (taskId: string, extra: Partial<QueueEntry> = {}): QueueEntry => ({
@@ -231,15 +233,64 @@ test('an event names a linked session even when its directory is unknown', async
   assert.equal(starts.length, 1);
 });
 
-test('a failed queued start is logged and the entry is not retried', async (t) => {
+test('a failed queued start goes back to the front with lastError, unreserved, and is retried on the next drain only', async (t) => {
   const { directory, deps, starts, logs } = await setup(t);
-  const failing: Deps = { ...deps, sessions: { ...deps.sessions!, start: async () => Promise.reject(new Error('quota')) } };
-  await post(failing, '/queue/add', { directory, entry: entry('a') });
-  await deliver(failing, event('turn-finished', 'ses_x', directory));
+  let fail = true;
+  const flaky: Deps = {
+    ...deps,
+    sessions: { ...deps.sessions!, start: async (input) => (fail ? Promise.reject(new Error('quota')) : deps.sessions!.start(input)) },
+  };
+  await post(flaky, '/queue/add', { directory, entry: entry('a'), maxParallel: 1 });
+  await post(flaky, '/queue/add', { directory, entry: entry('b') });
+  await deliver(flaky, event('turn-finished', 'ses_x', directory));
   assert.equal(starts.length, 0);
   assert.equal(logs.length, 1);
   assert.match(logs[0]!, /could not start the queued task a: .*quota/);
-  assert.deepEqual((await post(deps, '/queue/list', { directory })).queue, []);
+  const back = (await post(deps, '/queue/list', { directory })).queue;
+  assert.deepEqual(ids(back), ['a', 'b']);
+  assert.match(back[0]!.lastError ?? '', /quota/);
+  assert.equal(back[1]!.lastError, undefined);
+  // Its reservation was released: the next drain (limit 1) takes it again, and it starts.
+  fail = false;
+  await deliver(flaky, event('turn-finished', 'ses_x', directory));
+  assert.equal(starts.length, 1);
+  assert.equal(starts[0]!.prompt, 'Do a');
+  assert.deepEqual(ids((await post(deps, '/queue/list', { directory })).queue), ['b']);
+});
+
+test('fail closed: when status lookups fail (not 404), take starts nothing; a 404 (deleted session) does not block', async (t) => {
+  const { directory, deps, starts, statusFails, running, linksFile } = await setup(t);
+  await running('x', 'ses_x', 'idle');
+  await post(deps, '/queue/add', { directory, entry: entry('a'), maxParallel: 3 });
+  statusFails.on = true;
+  const r = await post(deps, '/queue/take', { directory, maxParallel: 3 });
+  assert.deepEqual(r.taken, []);
+  assert.deepEqual(ids(r.queue), ['a']);
+  await deliver(deps, event('turn-finished', 'ses_x', directory));
+  assert.equal(starts.length, 0);
+  // /links/list shows a failed lookup as unknown.
+  const listed = (await handle('POST', '/links/list', { directory }, deps)).json as { links: Array<{ status: string }> };
+  assert.deepEqual(listed.links.map((l) => l.status), ['unknown']);
+  statusFails.on = false;
+  await addLink(linksFile, directory, { taskId: 'gone', sessionId: 'ses_deleted', directory, createdAt: Date.now() });
+  assert.deepEqual(ids((await post(deps, '/queue/take', { directory, maxParallel: 3 })).taken), ['a']);
+});
+
+test('fail closed: without a status call at all, a project with links takes nothing', async (t) => {
+  const { directory, deps, running } = await setup(t);
+  await running('x', 'ses_x', 'idle');
+  const { status: _s, ...noStatus } = deps.sessions!;
+  const blind: Deps = { ...deps, sessions: noStatus };
+  await post(blind, '/queue/add', { directory, entry: entry('a') });
+  assert.deepEqual((await post(blind, '/queue/take', { directory, maxParallel: 3 })).taken, []);
+});
+
+test('/queue/take counts the task ids the panel snapshot shows as running', async (t) => {
+  const { directory, deps } = await setup(t);
+  for (const id of ['a', 'b', 'c']) await post(deps, '/queue/add', { directory, entry: entry(id) });
+  const r = await post(deps, '/queue/take', { directory, maxParallel: 3, running: ['x', 'y'], starting: ['y'] });
+  assert.deepEqual(ids(r.taken), ['a']);
+  assert.equal((await handle('POST', '/queue/take', { directory, running: 'x' }, deps)).status, 400);
 });
 
 test('/session-events: a body that is not a session event is 400 and drains nothing', async (t) => {

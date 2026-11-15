@@ -204,4 +204,7 @@ test('groupTasks: link status columns (busy in progress, waiting and idle review
   assert.equal(board.in_progress.find((c) => c.task.id === 'q')?.queued, true);
   assert.equal(board.in_progress.find((c) => c.task.id === 'q')?.starting, false);
   assert.equal(board.done[0]?.queued, false);
+  const withError = groupTasks(tasks, [], new Set(), false, links, new Set(['q']), new Map([['q', 'quota'], ['a', 'x']]));
+  assert.equal(withError.in_progress.find((c) => c.task.id === 'q')?.queueError, 'quota');
+  assert.equal(withError.in_progress.find((c) => c.task.id === 'a')?.queueError, null);
 });

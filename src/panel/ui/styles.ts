@@ -22,6 +22,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
 .kb-card.is-child { margin-left: 0.75rem; }
 .kb-card-title { font-weight: 500; overflow-wrap: anywhere; }
 .kb-card-id { color: var(--oc-muted); font-family: var(--oc-mono); font-size: 0.8em; overflow-wrap: anywhere; }
+.kb-card-error { color: var(--oc-error-text, var(--oc-fg)); font-size: 0.8em; overflow-wrap: anywhere; }
 .kb-badges { display: flex; flex-wrap: wrap; gap: 0.25rem; }
 .kb-badges:empty { display: none; }
 .kb-card-actions { display: flex; justify-content: flex-end; margin: -0.25rem -0.25rem -0.25rem 0; }

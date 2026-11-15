@@ -19,6 +19,7 @@ import {
   queuedProjects,
   release,
   removeFromQueue,
+  requeueFailed,
   takeFromQueue,
 } from './queue.ts';
 import {
@@ -156,9 +157,14 @@ const start = async (dir: string, input: Omit<Parameters<typeof startSession>[0]
 
 const liveLinks = async (dir: string, deps: Deps) => withStatus(await listLinks(linksFile(deps), dir), deps.sessions);
 
-/** Takes what may start now from the project's queue and starts it by path B (the board may be closed). */
+const ERROR_MAX = 500;
+
+/**
+ * Takes what may start now from the project's queue and starts it by path B (the board may be
+ * closed). A failed start goes back to the front of the queue with `lastError`, which the panel
+ * shows on the queued card; it is tried again on the next drain.
+ */
 export const drainProject = async (dir: string, deps: Deps): Promise<void> => {
-  if (deps.sessions?.status === undefined) return;
   const { taken } = await takeFromQueue(queueFile(deps), dir, { links: () => liveLinks(dir, deps) });
   const log = deps.log ?? ((m: string) => console.error(m));
   await Promise.all(
@@ -166,7 +172,11 @@ export const drainProject = async (dir: string, deps: Deps): Promise<void> => {
       try {
         await start(dir, { taskId: e.taskId, title: e.title, prompt: e.prompt, model: e.model, agent: e.agent, location: e.location }, deps);
       } catch (err) {
-        log(`icf-kanban: could not start the queued task ${e.taskId}: ${err instanceof Error ? err.message : String(err)}`);
+        const why = (err instanceof Error ? err.message : String(err)).slice(0, ERROR_MAX);
+        log(`icf-kanban: could not start the queued task ${e.taskId}: ${why}`);
+        await requeueFailed(queueFile(deps), dir, e, why).catch((w: unknown) =>
+          log(`icf-kanban: could not put ${e.taskId} back in the queue: ${w instanceof Error ? w.message : String(w)}`),
+        );
       }
     }),
   );
@@ -289,7 +299,9 @@ const POST: Record<string, Route> = {
     return start(dir, { taskId, title, prompt, model, agent, location: where }, deps);
   },
   /** Links with the live status of their session (idle, busy, waiting, unknown). */
-  '/links/list': async (_body, dir, deps) => ({ links: await liveLinks(dir, deps) }),
+  '/links/list': async (_body, dir, deps) => ({
+    links: (await liveLinks(dir, deps)).map((l) => (l.status === 'error' ? { ...l, status: 'unknown' as const } : l)),
+  }),
   /** A session the panel started itself (path A), so the queue counts it while it runs. */
   '/links/add': async (body, dir, deps) => {
     const taskId = str(body, 'taskId');
@@ -304,15 +316,21 @@ const POST: Record<string, Route> = {
   '/queue/add': async (body, dir, deps) => ({ queue: await addToQueue(queueFile(deps), dir, queueEntry(body.entry), maxParallelOf(body)) }),
   '/queue/remove': async (body, dir, deps) => ({ queue: await removeFromQueue(queueFile(deps), dir, str(body, 'taskId')) }),
   '/queue/take': async (body, dir, deps) => {
-    const s = body.starting;
-    const starting =
-      s === undefined
+    const ids = (key: string): string[] => {
+      const s = body[key];
+      return s === undefined
         ? []
         : Array.isArray(s) && s.every((id) => typeof id === 'string')
           ? (s as string[])
-          : invalid('"starting" must be an array of task ids');
+          : invalid(`"${key}" must be an array of task ids`);
+    };
     const max = maxParallelOf(body);
-    return takeFromQueue(queueFile(deps), dir, { ...(max !== undefined ? { maxParallel: max } : {}), starting, links: () => liveLinks(dir, deps) });
+    return takeFromQueue(queueFile(deps), dir, {
+      ...(max !== undefined ? { maxParallel: max } : {}),
+      starting: ids('starting'),
+      running: ids('running'),
+      links: () => liveLinks(dir, deps),
+    });
   },
 };
 

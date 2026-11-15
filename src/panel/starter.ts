@@ -188,6 +188,10 @@ export const createStarter = (deps: StarterDeps) => {
 
   const queuedIds = (): Set<string> => new Set(shown === currentId() ? queue.map((e) => e.taskId) : []);
 
+  /** Queued tasks whose last start by the service failed, with the reason. */
+  const queueErrors = (): Map<string, string> =>
+    new Map(shown === currentId() ? queue.flatMap((e) => (e.lastError !== undefined ? [[e.taskId, e.lastError] as const] : [])) : []);
+
   /** Tasks with a running or waiting session, and starts in flight: the slots in use. */
   const occupied = (): number => {
     const ids = new Set(isStarting);
@@ -209,7 +213,10 @@ export const createStarter = (deps: StarterDeps) => {
     const max = ctx.settings.maxParallel;
     let r: { taken: QueueEntry[]; queue: QueueEntry[] };
     try {
-      r = await api.takeFromQueue(max, launcher.starting());
+      // The tasks the snapshot shows working count too, so the limit holds even if the service
+      // cannot read their status.
+      const running = list.filter((t) => hasLiveSession(t.id)).map((t) => t.id);
+      r = await api.takeFromQueue(max, launcher.starting(), running);
     } catch {
       return; // the next snapshot (or the service, after a session event) tries again
     }
@@ -377,6 +384,7 @@ export const createStarter = (deps: StarterDeps) => {
     isStarting: isStarting as ReadonlySet<string>,
     links: (): SessionLink[] => (shown === currentId() ? links : []),
     queuedIds,
+    queueErrors,
     hasLiveSession,
     onStart,
     leaveQueue,

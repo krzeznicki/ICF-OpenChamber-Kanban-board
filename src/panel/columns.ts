@@ -93,6 +93,8 @@ export type CardModel = {
   starting: boolean;
   /** It waits in the start queue (over the limit of running sessions). */
   queued: boolean;
+  /** Why the service's last start of this queued card failed; null otherwise. */
+  queueError: string | null;
 };
 
 export type BoardModel = Record<Column, CardModel[]>;
@@ -109,6 +111,7 @@ export const groupTasks = (
   hideSubtasks: boolean,
   links: readonly SessionLink[] = [],
   queued: ReadonlySet<string> = new Set(),
+  queueErrors: ReadonlyMap<string, string> = new Map(),
 ): BoardModel => {
   const byId = new Map(tasks.map((t) => [t.id, t]));
   const children = new Map<string, Task[]>();
@@ -137,6 +140,7 @@ export const groupTasks = (
         child: false,
         starting: starting.has(task.id) && session === null,
         queued: queued.has(task.id) && !starting.has(task.id) && task.state !== 'done',
+        queueError: queued.has(task.id) && !starting.has(task.id) && task.state !== 'done' ? (queueErrors.get(task.id) ?? null) : null,
       },
     });
   }

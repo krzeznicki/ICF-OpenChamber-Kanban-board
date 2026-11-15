@@ -33,7 +33,8 @@ const isEntry = (v: unknown): v is QueueEntry => {
     (e.model === null || typeof e.model === 'string') &&
     (e.agent === null || typeof e.agent === 'string') &&
     (e.location === 'worktree' || e.location === 'project') &&
-    typeof e.queuedAt === 'number'
+    typeof e.queuedAt === 'number' &&
+    (e.lastError === undefined || typeof e.lastError === 'string')
   );
 };
 
@@ -92,6 +93,19 @@ export const removeFromQueue = (file: string, dir: string, taskId: string): Prom
   });
 };
 
+/**
+ * A taken entry whose start failed: back at the front of the queue (unless it was queued again
+ * meanwhile) with the reason, and no longer reserved. It is retried on the next drain, not in a loop.
+ */
+export const requeueFailed = (file: string, dir: string, entry: QueueEntry, error: string): Promise<QueueEntry[]> => {
+  release(file, dir, entry.taskId);
+  return update(file, dir, (q) => {
+    q.entries = q.entries.filter((e) => e.taskId !== entry.taskId);
+    q.entries.unshift({ ...entry, lastError: error });
+    return [...q.entries];
+  });
+};
+
 // --- tasks being started, in memory (a restarted service forgets them, which only frees slots) ---
 
 type Pending = { reserved: Map<string, number>; inFlight: Map<string, number> };
@@ -131,6 +145,8 @@ export type TakeInput = {
   maxParallel?: number;
   /** Task ids the panel is starting itself right now. */
   starting?: readonly string[];
+  /** Task ids the panel's sessions snapshot shows working (running or waiting): the count never falls below them. */
+  running?: readonly string[];
   /** The project's links with their live status, read when the lock is held. */
   links: () => Promise<LiveLink[]>;
   now?: () => number;
@@ -156,11 +172,14 @@ export const takeFromQueue = (file: string, dir: string, input: TakeInput): Prom
     if (input.maxParallel !== undefined) q.maxParallel = clampMax(input.maxParallel);
     if (q.entries.length === 0) return { taken: [], queue: [] };
     const links = await input.links();
+    // Fail closed: a status lookup that failed (no grant, host unreachable, rate limit) means the
+    // running count is unknown, so nothing starts; the next event or panel drain tries again.
+    if (links.some((l) => l.status === 'error')) return { taken: [], queue: [...q.entries] };
     const live = new Set(links.filter((l) => l.status === 'busy' || l.status === 'waiting').map((l) => l.taskId));
     q.entries = q.entries.filter((e) => !live.has(e.taskId));
     const now = (input.now ?? Date.now)();
     const p = pendingFor(file, dir);
-    const running = runningNow(links, p, input.starting ?? [], now);
+    const running = runningNow(links, p, [...(input.starting ?? []), ...(input.running ?? [])], now);
     const ids = new Set(nextToStart(q.entries.map((e) => e.taskId), running, q.maxParallel));
     const taken = q.entries.filter((e) => ids.has(e.taskId));
     q.entries = q.entries.filter((e) => !ids.has(e.taskId));

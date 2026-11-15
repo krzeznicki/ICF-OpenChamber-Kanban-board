@@ -68,6 +68,12 @@ export const renderCard = (model: CardModel, busy = false, onDetails?: (taskId: 
   if (task.state === 'wontfix') badge('wontfix', 'neutral');
   if (model.blockers.length > 0) badge(`blocked by ${model.blockers.length}`, 'error');
   node.append(badges);
+  if (model.queueError !== null) {
+    const err = document.createElement('div');
+    err.className = 'kb-card-error';
+    err.textContent = `Couldn't start: ${model.queueError}`;
+    node.append(err);
+  }
   if (model.blockers.length > 0) badges.title = `Waiting for: ${model.blockers.join(', ')}`;
 
   if (model.progress !== null && model.progress.total > 0) {

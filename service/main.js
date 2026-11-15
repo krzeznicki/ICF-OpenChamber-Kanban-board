@@ -1130,7 +1130,7 @@ var MAX_PARALLEL_LIMIT = 10;
 var RESERVE_MS = 18e4;
 var isEntry = (v) => {
   const e = v;
-  return typeof e === "object" && e !== null && typeof e.taskId === "string" && typeof e.title === "string" && typeof e.prompt === "string" && (e.model === null || typeof e.model === "string") && (e.agent === null || typeof e.agent === "string") && (e.location === "worktree" || e.location === "project") && typeof e.queuedAt === "number";
+  return typeof e === "object" && e !== null && typeof e.taskId === "string" && typeof e.title === "string" && typeof e.prompt === "string" && (e.model === null || typeof e.model === "string") && (e.agent === null || typeof e.agent === "string") && (e.location === "worktree" || e.location === "project") && typeof e.queuedAt === "number" && (e.lastError === void 0 || typeof e.lastError === "string");
 };
 var clampMax = (n) => typeof n === "number" && Number.isFinite(n) ? Math.min(MAX_PARALLEL_LIMIT, Math.max(1, Math.round(n))) : DEFAULT_MAX_PARALLEL;
 var readQueueFile = async (file) => {
@@ -1167,6 +1167,14 @@ var removeFromQueue = (file, dir, taskId) => {
   release(file, dir, taskId);
   return update(file, dir, (q) => {
     q.entries = q.entries.filter((e) => e.taskId !== taskId);
+    return [...q.entries];
+  });
+};
+var requeueFailed = (file, dir, entry, error2) => {
+  release(file, dir, entry.taskId);
+  return update(file, dir, (q) => {
+    q.entries = q.entries.filter((e) => e.taskId !== entry.taskId);
+    q.entries.unshift({ ...entry, lastError: error2 });
     return [...q.entries];
   });
 };
@@ -1207,11 +1215,12 @@ var takeFromQueue = (file, dir, input) => update(file, dir, async (q) => {
   if (input.maxParallel !== void 0) q.maxParallel = clampMax(input.maxParallel);
   if (q.entries.length === 0) return { taken: [], queue: [] };
   const links = await input.links();
+  if (links.some((l) => l.status === "error")) return { taken: [], queue: [...q.entries] };
   const live = new Set(links.filter((l) => l.status === "busy" || l.status === "waiting").map((l) => l.taskId));
   q.entries = q.entries.filter((e) => !live.has(e.taskId));
   const now = (input.now ?? Date.now)();
   const p = pendingFor(file, dir);
-  const running = runningNow(links, p, input.starting ?? [], now);
+  const running = runningNow(links, p, [...input.starting ?? [], ...input.running ?? []], now);
   const ids = new Set(nextToStart(q.entries.map((e) => e.taskId), running, q.maxParallel));
   const taken = q.entries.filter((e) => ids.has(e.taskId));
   q.entries = q.entries.filter((e) => !ids.has(e.taskId));
@@ -1247,24 +1256,28 @@ var addLink = (file, project, link) => serial(file, async () => {
 });
 var STATUS_CHECK_MAX = 50;
 var STATUS_CONCURRENCY = 8;
+var unknownSession = (e) => e?.status === 404;
 var linkStatuses = async (links, sessions) => {
   const out = /* @__PURE__ */ new Map();
   const status = sessions?.status;
-  if (status === void 0) return out;
   const newest = /* @__PURE__ */ new Map();
   for (const l of links) {
     const n = newest.get(l.taskId);
     if (n === void 0 || l.createdAt >= n.createdAt) newest.set(l.taskId, l);
   }
   const ask = [...newest.values()].sort((a, b) => b.createdAt - a.createdAt).slice(0, STATUS_CHECK_MAX);
+  if (status === void 0) {
+    for (const l of ask) out.set(l.sessionId, "error");
+    return out;
+  }
   let next = 0;
   const worker = async () => {
     while (next < ask.length) {
       const l = ask[next++];
       try {
         out.set(l.sessionId, await status(l.sessionId));
-      } catch {
-        out.set(l.sessionId, "unknown");
+      } catch (e) {
+        out.set(l.sessionId, unknownSession(e) ? "unknown" : "error");
       }
     }
   };
@@ -1399,8 +1412,8 @@ var start = async (dir, input, deps2) => {
   }
 };
 var liveLinks = async (dir, deps2) => withStatus(await listLinks(linksFile(deps2), dir), deps2.sessions);
+var ERROR_MAX = 500;
 var drainProject = async (dir, deps2) => {
-  if (deps2.sessions?.status === void 0) return;
   const { taken } = await takeFromQueue(queueFile(deps2), dir, { links: () => liveLinks(dir, deps2) });
   const log = deps2.log ?? ((m) => console.error(m));
   await Promise.all(
@@ -1408,7 +1421,11 @@ var drainProject = async (dir, deps2) => {
       try {
         await start(dir, { taskId: e.taskId, title: e.title, prompt: e.prompt, model: e.model, agent: e.agent, location: e.location }, deps2);
       } catch (err) {
-        log(`icf-kanban: could not start the queued task ${e.taskId}: ${err instanceof Error ? err.message : String(err)}`);
+        const why = (err instanceof Error ? err.message : String(err)).slice(0, ERROR_MAX);
+        log(`icf-kanban: could not start the queued task ${e.taskId}: ${why}`);
+        await requeueFailed(queueFile(deps2), dir, e, why).catch(
+          (w) => log(`icf-kanban: could not put ${e.taskId} back in the queue: ${w instanceof Error ? w.message : String(w)}`)
+        );
       }
     })
   );
@@ -1512,7 +1529,9 @@ var POST = {
     return start(dir, { taskId, title, prompt, model, agent, location: where }, deps2);
   },
   /** Links with the live status of their session (idle, busy, waiting, unknown). */
-  "/links/list": async (_body, dir, deps2) => ({ links: await liveLinks(dir, deps2) }),
+  "/links/list": async (_body, dir, deps2) => ({
+    links: (await liveLinks(dir, deps2)).map((l) => l.status === "error" ? { ...l, status: "unknown" } : l)
+  }),
   /** A session the panel started itself (path A), so the queue counts it while it runs. */
   "/links/add": async (body, dir, deps2) => {
     const taskId = str(body, "taskId");
@@ -1527,10 +1546,17 @@ var POST = {
   "/queue/add": async (body, dir, deps2) => ({ queue: await addToQueue(queueFile(deps2), dir, queueEntry(body.entry), maxParallelOf(body)) }),
   "/queue/remove": async (body, dir, deps2) => ({ queue: await removeFromQueue(queueFile(deps2), dir, str(body, "taskId")) }),
   "/queue/take": async (body, dir, deps2) => {
-    const s = body.starting;
-    const starting = s === void 0 ? [] : Array.isArray(s) && s.every((id) => typeof id === "string") ? s : invalid('"starting" must be an array of task ids');
+    const ids = (key) => {
+      const s = body[key];
+      return s === void 0 ? [] : Array.isArray(s) && s.every((id) => typeof id === "string") ? s : invalid(`"${key}" must be an array of task ids`);
+    };
     const max = maxParallelOf(body);
-    return takeFromQueue(queueFile(deps2), dir, { ...max !== void 0 ? { maxParallel: max } : {}, starting, links: () => liveLinks(dir, deps2) });
+    return takeFromQueue(queueFile(deps2), dir, {
+      ...max !== void 0 ? { maxParallel: max } : {},
+      starting: ids("starting"),
+      running: ids("running"),
+      links: () => liveLinks(dir, deps2)
+    });
   }
 };
 var GET = {

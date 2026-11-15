@@ -21,7 +21,10 @@ export type SessionHost = {
     model?: string;
     agent?: string;
   }) => Promise<{ sessionId: string; directory: string | null }>;
-  /** `idle`, `busy`, or `waiting` when only the user can move it on; throws for an unknown session. */
+  /**
+   * `idle`, `busy`, or `waiting` when only the user can move it on. Throws a 404-status error
+   * (ServiceHostError) for a session the host does not know; any other throw is a failed lookup.
+   */
   status?: (sessionId: string) => Promise<'idle' | 'busy' | 'waiting'>;
 };
 
@@ -81,29 +84,35 @@ export const addLink = (file: string, project: string, link: Link): Promise<void
 export const STATUS_CHECK_MAX = 50;
 const STATUS_CONCURRENCY = 8;
 
+/** A rejected status call that means "no such session" (HTTP 404), not a failed lookup. */
+const unknownSession = (e: unknown): boolean => (e as { status?: unknown } | null)?.status === 404;
+
 /**
  * The live status of each link's session: the newest link of each task (the newest
  * STATUS_CHECK_MAX tasks) is asked through sessions.status; the rest, and a session the host
- * does not know, are `unknown`.
+ * does not know (404), are `unknown`. Any other rejection, or no status call at all, is `error`.
  */
 export const linkStatuses = async (links: readonly Link[], sessions: SessionHost | undefined): Promise<Map<string, LinkStatus>> => {
   const out = new Map<string, LinkStatus>();
   const status = sessions?.status;
-  if (status === undefined) return out;
   const newest = new Map<string, Link>();
   for (const l of links) {
     const n = newest.get(l.taskId);
     if (n === undefined || l.createdAt >= n.createdAt) newest.set(l.taskId, l);
   }
   const ask = [...newest.values()].sort((a, b) => b.createdAt - a.createdAt).slice(0, STATUS_CHECK_MAX);
+  if (status === undefined) {
+    for (const l of ask) out.set(l.sessionId, 'error');
+    return out;
+  }
   let next = 0;
   const worker = async (): Promise<void> => {
     while (next < ask.length) {
       const l = ask[next++]!;
       try {
         out.set(l.sessionId, await status(l.sessionId));
-      } catch {
-        out.set(l.sessionId, 'unknown');
+      } catch (e) {
+        out.set(l.sessionId, unknownSession(e) ? 'unknown' : 'error');
       }
     }
   };

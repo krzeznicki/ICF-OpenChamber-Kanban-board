@@ -4,7 +4,8 @@ import type { HostClient } from '@openchamber/sdk';
 import type { LinkStatus, QueueEntry } from '../core/queue.ts';
 import type { NewTask, Task, TaskState } from '../core/types.ts';
 
-export type LinkRecord = { taskId: string; sessionId: string; directory: string; createdAt: number; status: LinkStatus };
+/** `/links/list` reports a failed status lookup as `unknown`. */
+export type LinkRecord = { taskId: string; sessionId: string; directory: string; createdAt: number; status: Exclude<LinkStatus, 'error'> };
 
 /** Mirrors core/config.ts's ProjectConfig without pulling Node code into the page's type graph. */
 export type ProjectConfig = { tracker: 'local' | 'github'; labels: Record<string, string> };
@@ -91,8 +92,8 @@ export const createApi = (host: HostClient, directory: string) => {
       call<{ queue: QueueEntry[] }>('POST', '/queue/add', { entry, maxParallel }).then((r) => r.queue),
     removeFromQueue: (taskId: string) => call<{ queue: QueueEntry[] }>('POST', '/queue/remove', { taskId }).then((r) => r.queue),
     /** Atomically removes and returns the entries that may start now. */
-    takeFromQueue: (maxParallel: number, starting: string[]) =>
-      call<{ taken: QueueEntry[]; queue: QueueEntry[] }>('POST', '/queue/take', { maxParallel, starting }),
+    takeFromQueue: (maxParallel: number, starting: string[], running: string[]) =>
+      call<{ taken: QueueEntry[]; queue: QueueEntry[] }>('POST', '/queue/take', { maxParallel, starting, running }),
   };
 };
 

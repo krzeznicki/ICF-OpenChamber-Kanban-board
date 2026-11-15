@@ -2733,7 +2733,7 @@ ${GUEST_UI_LOOK_CSS}`;
       addToQueue: (entry, maxParallel) => call("POST", "/queue/add", { entry, maxParallel }).then((r) => r.queue),
       removeFromQueue: (taskId) => call("POST", "/queue/remove", { taskId }).then((r) => r.queue),
       /** Atomically removes and returns the entries that may start now. */
-      takeFromQueue: (maxParallel, starting) => call("POST", "/queue/take", { maxParallel, starting })
+      takeFromQueue: (maxParallel, starting, running) => call("POST", "/queue/take", { maxParallel, starting, running })
     };
   };
 
@@ -2786,7 +2786,7 @@ ${GUEST_UI_LOOK_CSS}`;
     }
     return newest === null ? null : fromLink(newest);
   };
-  var groupTasks = (tasks, sessions, starting, hideSubtasks, links = [], queued = /* @__PURE__ */ new Set()) => {
+  var groupTasks = (tasks, sessions, starting, hideSubtasks, links = [], queued = /* @__PURE__ */ new Set(), queueErrors = /* @__PURE__ */ new Map()) => {
     const byId = new Map(tasks.map((t) => [t.id, t]));
     const children = /* @__PURE__ */ new Map();
     for (const t of tasks) {
@@ -2812,7 +2812,8 @@ ${GUEST_UI_LOOK_CSS}`;
           progress: kids.length === 0 ? null : { done: kids.filter((k) => k.state === "done").length, total: kids.length },
           child: false,
           starting: starting.has(task.id) && session === null,
-          queued: queued.has(task.id) && !starting.has(task.id) && task.state !== "done"
+          queued: queued.has(task.id) && !starting.has(task.id) && task.state !== "done",
+          queueError: queued.has(task.id) && !starting.has(task.id) && task.state !== "done" ? queueErrors.get(task.id) ?? null : null
         }
       });
     }
@@ -4658,6 +4659,7 @@ ${note}` : note;
         info(`Starting \u201C${task.title}\u201D is taking longer than expected; the card follows its session once it shows up`);
     };
     const queuedIds = () => new Set(shown === currentId() ? queue.map((e) => e.taskId) : []);
+    const queueErrors = () => new Map(shown === currentId() ? queue.flatMap((e) => e.lastError !== void 0 ? [[e.taskId, e.lastError]] : []) : []);
     const occupied = () => {
       const ids = new Set(isStarting);
       for (const t of deps.tasks() ?? []) if (hasLiveSession(t.id)) ids.add(t.id);
@@ -4674,7 +4676,8 @@ ${note}` : note;
       const max = ctx.settings.maxParallel;
       let r;
       try {
-        r = await api.takeFromQueue(max, launcher.starting());
+        const running = list.filter((t) => hasLiveSession(t.id)).map((t) => t.id);
+        r = await api.takeFromQueue(max, launcher.starting(), running);
       } catch {
         return;
       }
@@ -4827,6 +4830,7 @@ ${note}` : note;
       isStarting,
       links: () => shown === currentId() ? links : [],
       queuedIds,
+      queueErrors,
       hasLiveSession,
       onStart,
       leaveQueue,
@@ -4888,6 +4892,12 @@ ${note}` : note;
     if (task.state === "wontfix") badge2("wontfix", "neutral");
     if (model.blockers.length > 0) badge2(`blocked by ${model.blockers.length}`, "error");
     node.append(badges);
+    if (model.queueError !== null) {
+      const err = document.createElement("div");
+      err.className = "kb-card-error";
+      err.textContent = `Couldn't start: ${model.queueError}`;
+      node.append(err);
+    }
     if (model.blockers.length > 0) badges.title = `Waiting for: ${model.blockers.join(", ")}`;
     if (model.progress !== null && model.progress.total > 0) {
       const { done, total } = model.progress;
@@ -5069,6 +5079,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
 .kb-card.is-child { margin-left: 0.75rem; }
 .kb-card-title { font-weight: 500; overflow-wrap: anywhere; }
 .kb-card-id { color: var(--oc-muted); font-family: var(--oc-mono); font-size: 0.8em; overflow-wrap: anywhere; }
+.kb-card-error { color: var(--oc-error-text, var(--oc-fg)); font-size: 0.8em; overflow-wrap: anywhere; }
 .kb-badges { display: flex; flex-wrap: wrap; gap: 0.25rem; }
 .kb-badges:empty { display: none; }
 .kb-card-actions { display: flex; justify-content: flex-end; margin: -0.25rem -0.25rem -0.25rem 0; }
@@ -5338,7 +5349,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
       board.render(null);
       return;
     }
-    const model = groupTasks(state.tasks, state.sessions, starter.isStarting, state.hideSubtasks, starter.links(), starter.queuedIds());
+    const model = groupTasks(state.tasks, state.sessions, starter.isStarting, state.hideSubtasks, starter.links(), starter.queuedIds(), starter.queueErrors());
     for (const [column, cards] of Object.entries(model)) for (const c of cards) state.columns.set(c.task.id, column);
     setBadge(model.review.length || null);
     board.render(model, editor.busy);

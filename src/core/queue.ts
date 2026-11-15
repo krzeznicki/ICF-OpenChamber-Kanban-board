@@ -12,10 +12,16 @@ export type QueueEntry = {
   agent: string | null;
   location: 'worktree' | 'project';
   queuedAt: number;
+  /** Why the service's last start of this entry failed; it was put back at the front. */
+  lastError?: string;
 };
 
-/** Live state of a session the service knows about through its links. */
-export type LinkStatus = 'idle' | 'busy' | 'waiting' | 'unknown';
+/**
+ * Live state of a session the service knows about through its links. `unknown`: the host does not
+ * know the session (deleted) or it was not asked; `error`: asking failed (no grant, host unreachable,
+ * rate limit), so the running count cannot be trusted.
+ */
+export type LinkStatus = 'idle' | 'busy' | 'waiting' | 'unknown' | 'error';
 
 /** The queued task ids (oldest first) that may start now, given how many sessions run. */
 export const nextToStart = (queued: string[], running: number, maxParallel: number): string[] =>
