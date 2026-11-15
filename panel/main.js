@@ -3950,6 +3950,7 @@ ${ref}`,
       suggestFields: g.suggestFields ?? d.suggestFields
     };
   };
+  var suggestEnabled = (globalLoaded2, global) => globalLoaded2 && resolveSettings(global, {}).suggestFields;
   var resolveStart = (s, task, card, presets2 = BUILTIN_PRESETS) => {
     const c = parseCardOptions(card);
     const byKind = task.kind === "parent" ? ORCHESTRATE_PRESET_ID : void 0;
@@ -13928,8 +13929,8 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
         summarise: (task) => void summaries.summarise(task),
         onLanguage: (projectId, taskId, language) => summaries.setLanguage(projectId, taskId, language)
       },
-      // Global only; until the global layer is read, the default (on).
-      suggest: { enabled: () => resolveSettings(state.globalSettings, {}).suggestFields, suggester }
+      // Global only; off until the global layer is read.
+      suggest: { enabled: () => suggestEnabled(globalLoaded, state.globalSettings), suggester }
     });
     if (ctx.features?.lateGenerateResults === true) host.onLateGenerateResult((late) => void summaries.acceptLate(late));
     void loadGlobalSettings();

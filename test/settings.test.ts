@@ -10,6 +10,7 @@ import {
   parseCardOptions,
   parseSettings,
   resolveSettings,
+  suggestEnabled,
   resolveStart,
   startsFromExtension,
   type SettingsStorage,
@@ -52,6 +53,13 @@ test('suggestFields ("Suggest type and state for new tasks") is global only: a p
   assert.equal(resolveSettings({ suggestFields: false }, { suggestFields: true }).suggestFields, false);
   assert.deepEqual(parseSettings({ suggestFields: false }), { suggestFields: false });
   assert.deepEqual(parseSettings({ suggestFields: 'no' }), {});
+});
+
+test('suggestEnabled: off until the global layer is read (a stored "off" must not flash on), then the global setting', () => {
+  assert.equal(suggestEnabled(false, {}), false);
+  assert.equal(suggestEnabled(false, { suggestFields: true }), false);
+  assert.equal(suggestEnabled(true, {}), true);
+  assert.equal(suggestEnabled(true, { suggestFields: false }), false);
 });
 
 test('project overrides global field by field, nested fields included', () => {

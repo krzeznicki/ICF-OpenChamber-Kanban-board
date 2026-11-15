@@ -196,6 +196,13 @@ export const resolveSettings = (global: SettingsLayer, project: SettingsLayer, f
 };
 
 /**
+ * Whether Add task offers "Let the model pick": the global setting, but off until the global layer
+ * has been read, so a stored "off" never shows as on for the first moments.
+ */
+export const suggestEnabled = (globalLoaded: boolean, global: SettingsLayer): boolean =>
+  globalLoaded && resolveSettings(global, {}).suggestFields;
+
+/**
  * The options a session starts with: the card's choice, else the settings. The preset is the
  * card's, else 'orchestrate' for a parent (a feature), else the default for the task's type, else defaults.presetId; whichever id is chosen,
  * one that is not among `presets` (a deleted preset, or one the project's set does not have) becomes

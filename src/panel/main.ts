@@ -25,6 +25,7 @@ import {
   type Settings,
   type SettingsLayer,
   STORAGE_KEYS,
+  suggestEnabled,
   withDetach,
 } from './settings.ts';
 import { defaultChoice, loadNotice, setupOutcome, type ApiFailure, type NoticeModel, type TrackerChoice } from './setup.ts';
@@ -843,8 +844,8 @@ const start = (ctx: HostReadyContext): void => {
       summarise: (task) => void summaries.summarise(task),
       onLanguage: (projectId, taskId, language) => summaries.setLanguage(projectId, taskId, language),
     },
-    // Global only; until the global layer is read, the default (on).
-    suggest: { enabled: () => resolveSettings(state.globalSettings, {}).suggestFields, suggester },
+    // Global only; off until the global layer is read.
+    suggest: { enabled: () => suggestEnabled(globalLoaded, state.globalSettings), suggester },
   });
   // Answers the model gave after an earlier frame of this panel was gone are kept by the host. Only
   // summaries are taken back; a late type/state suggestion is dropped (summaries.acceptLate ignores
