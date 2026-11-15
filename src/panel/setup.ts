@@ -13,6 +13,12 @@ export const trackerName = (tracker: TrackerChoice): string => TRACKER_NAMES[tra
 /** GitHub is preselected when the project has a github.com remote. */
 export const defaultChoice = (remote: string | null): TrackerChoice => (remote === null ? 'local' : 'github');
 
+/** The wizard's GitHub choice: disabled when no github.com remote was found (setting it up would be refused). */
+export const githubChoice = (remote: string | null): { subtitle: string; disabled: boolean } =>
+  remote === null
+    ? { subtitle: 'Issues of the repository’s GitHub remote: no GitHub remote found; add one first or choose Local', disabled: true }
+    : { subtitle: `Issues of ${remote}; creates the missing labels, needs the gh CLI`, disabled: false };
+
 const TITLES: Record<string, string> = {
   UNSUPPORTED: 'This project’s tracker is not supported',
   GH_MISSING: 'GitHub CLI is not installed',

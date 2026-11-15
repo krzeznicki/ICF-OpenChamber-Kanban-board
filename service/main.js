@@ -1534,15 +1534,20 @@ var existingConfig = async (dir) => {
     throw e;
   }
 };
+var withoutCredentials = (url) => /^https?:\/\//i.test(url) ? url.replace(/^(https?:\/\/)[^@/]*@/i, "$1") : url.replace(/^([a-z+]+:\/\/[^:@/]*):[^@/]*@/i, "$1@");
 var githubRemote = (output) => {
   const remotes = [];
   for (const line of output.split(/\r?\n/)) {
     const m = /^(\S+)\s+(\S+)/.exec(line);
     if (m === null) continue;
     const url = m[2];
-    if (/^(?:[a-z+]+:\/\/)?(?:[^@/\s]+@)?github\.com[:/]/i.test(url)) remotes.push({ name: m[1], url });
+    if (/^(?:[a-z+]+:\/\/)?(?:[^@/\s]+@)?github\.com[:/]/i.test(url)) remotes.push({ name: m[1], url: withoutCredentials(url) });
   }
   return (remotes.find((r) => r.name === "origin") ?? remotes[0])?.url ?? null;
+};
+var detectRemote = async (dir, exec) => {
+  const r = await exec("git", ["remote", "-v"], { cwd: dir });
+  return r.code === 0 ? githubRemote(r.stdout) : null;
 };
 var POST = {
   "/config/read": async (_body, dir) => {
@@ -1566,6 +1571,9 @@ var POST = {
     };
     const existing = await existingConfig(dir);
     if (existing !== null && existing.tracker !== kind) alreadySetUp(existing.tracker);
+    if (kind === "github" && await detectRemote(dir, deps2.exec) === null) {
+      throw new TrackerError("INVALID", "This folder has no GitHub remote; add one or choose Local");
+    }
     const gh = kind === "github" ? createGithubTracker(dir, deps2.exec, await readLabels(dir)) : null;
     await gh?.preflight();
     await writeConfig(dir, kind);
@@ -1574,10 +1582,7 @@ var POST = {
     await gh?.setupLabels();
     return { config };
   },
-  "/config/detect": async (_body, dir, deps2) => {
-    const r = await deps2.exec("git", ["remote", "-v"], { cwd: dir });
-    return { remote: r.code === 0 ? githubRemote(r.stdout) : null };
-  },
+  "/config/detect": async (_body, dir, deps2) => ({ remote: await detectRemote(dir, deps2.exec) }),
   "/tasks/list": async (_body, dir, deps2) => ({ tasks: await (await tracker(dir, deps2)).list() }),
   "/tasks/get": async (body, dir, deps2) => {
     const id = str(body, "id");

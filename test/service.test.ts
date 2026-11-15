@@ -214,6 +214,8 @@ test('/config/detect prefers origin, falls back to the first github.com remote, 
     ['', 0, null],
     ['', 128, null],
     ['origin\thttps://notgithub.com/me/r.git (fetch)\n', 0, null],
+    ['origin\thttps://user:ghp_secret@github.com/o/r.git (fetch)\n', 0, 'https://github.com/o/r.git'],
+    ['origin\thttps://ghp_token@github.com/o/r (fetch)\n', 0, 'https://github.com/o/r'],
   ];
   for (const [stdout, code, remote] of cases) {
     const { exec, calls } = gitExec(stdout, code);
@@ -256,6 +258,21 @@ test('/config/init github: a failed gh preflight is 422 and writes nothing', asy
     const read = await handle('POST', '/config/read', { directory }, deps);
     assert.equal((read.json as Err).error.code, 'NOT_CONFIGURED', code);
     assert.ok(!gh.calls.some((c) => c[1] === 'label'), `${code}: no label calls`);
+  }
+});
+
+test('/config/init github without a github.com remote is 422 INVALID and writes nothing', async (t) => {
+  const { fakeGh } = await import('./fakeGh.ts');
+  for (const remote of [null, 'https://gitlab.com/me/r.git']) {
+    const directory = await tmp(t);
+    const gh = fakeGh([], { remote });
+    const r = await handle('POST', '/config/init', { directory, tracker: 'github' }, { exec: gh.exec });
+    assert.equal(r.status, 422, String(remote));
+    assert.equal((r.json as Err).error.code, 'INVALID');
+    assert.equal((r.json as Err).error.message, 'This folder has no GitHub remote; add one or choose Local');
+    const read = await handle('POST', '/config/read', { directory }, deps);
+    assert.equal((read.json as Err).error.code, 'NOT_CONFIGURED');
+    assert.ok(!gh.calls.some((c) => c[0] === 'gh' && c[1] === 'label'), 'no label calls');
   }
 });
 

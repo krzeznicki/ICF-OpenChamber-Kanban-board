@@ -4653,6 +4653,7 @@ ${ref}`,
   var TRACKER_NAMES = { local: "local Markdown files", github: "GitHub Issues" };
   var trackerName = (tracker) => TRACKER_NAMES[tracker];
   var defaultChoice = (remote) => remote === null ? "local" : "github";
+  var githubChoice = (remote) => remote === null ? { subtitle: "Issues of the repository\u2019s GitHub remote: no GitHub remote found; add one first or choose Local", disabled: true } : { subtitle: `Issues of ${remote}; creates the missing labels, needs the gh CLI`, disabled: false };
   var TITLES = {
     UNSUPPORTED: "This project\u2019s tracker is not supported",
     GH_MISSING: "GitHub CLI is not installed",
@@ -5517,7 +5518,8 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     return node;
   };
   var mountWizard = (root, props) => {
-    let choice = props.initial;
+    const github = githubChoice(props.remote);
+    let choice = github.disabled ? "local" : props.initial;
     let busy = false;
     const wrap = element("section", "kb-wizard");
     const title = element("h2", "kb-wizard-title", "Set up a task board for this project");
@@ -5538,12 +5540,13 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
         {
           id: "github",
           title: "GitHub",
-          subtitle: props.remote === null ? "Issues of the repository\u2019s GitHub remote (none found); needs the gh CLI" : `Issues of ${props.remote}; creates the missing labels, needs the gh CLI`,
+          subtitle: github.subtitle,
+          disabled: github.disabled,
           ...props.remote !== null ? { badge: { label: "remote found", tone: "success" } } : {}
         }
       ],
       onSelect: (id) => {
-        if (busy || id !== "local" && id !== "github") return;
+        if (busy || id !== "local" && id !== "github" || id === "github" && github.disabled) return;
         choice = id;
         list.update({ selectedId: id });
       }

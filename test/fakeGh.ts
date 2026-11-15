@@ -23,6 +23,8 @@ export type FakeGhOptions = {
   issuesDisabled?: boolean;
   /** Labels that exist in the repo. */
   labels?: string[];
+  /** The `origin` URL `git remote -v` prints; null = no remote. Default https://github.com/o/r.git. */
+  remote?: string | null;
 };
 
 const URL = 'https://github.com/o/r/issues/';
@@ -82,6 +84,10 @@ export const fakeGh = (seed: FakeIssue[], options: FakeGhOptions = {}) => {
 
   const exec: Exec = async (cmd, args) => {
     calls.push([cmd, ...args]);
+    if (cmd === 'git' && args[0] === 'remote' && args[1] === '-v') {
+      const url = options.remote === undefined ? 'https://github.com/o/r.git' : options.remote;
+      return ok(url === null ? '' : `origin\t${url} (fetch)\norigin\t${url} (push)\n`);
+    }
     if (cmd !== 'gh') return fail(`${cmd}: unexpected command`, 127);
     if (version === null) return fail('gh: command not found', 127);
     const [a, b] = args;

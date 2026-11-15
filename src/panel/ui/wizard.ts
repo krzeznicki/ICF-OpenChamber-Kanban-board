@@ -1,7 +1,7 @@
 // The setup wizard for a project without docs/agents/issue-tracker.md: pick Local or GitHub,
 // press one button. main.ts does the work (initConfig, then load) through onSetup.
 import { mountButton, mountList } from '@openchamber/sdk/ui';
-import { type TrackerChoice } from '../setup.ts';
+import { githubChoice, type TrackerChoice } from '../setup.ts';
 
 export type WizardProps = {
   /** The github.com remote the service detected, or null. */
@@ -20,7 +20,8 @@ const element = <K extends keyof HTMLElementTagNameMap>(tag: K, className: strin
 };
 
 export const mountWizard = (root: HTMLElement, props: WizardProps): WizardHandle => {
-  let choice: TrackerChoice = props.initial;
+  const github = githubChoice(props.remote);
+  let choice: TrackerChoice = github.disabled ? 'local' : props.initial;
   let busy = false;
   const wrap = element('section', 'kb-wizard');
   const title = element('h2', 'kb-wizard-title', 'Set up a task board for this project');
@@ -42,15 +43,13 @@ export const mountWizard = (root: HTMLElement, props: WizardProps): WizardHandle
       {
         id: 'github',
         title: 'GitHub',
-        subtitle:
-          props.remote === null
-            ? 'Issues of the repository’s GitHub remote (none found); needs the gh CLI'
-            : `Issues of ${props.remote}; creates the missing labels, needs the gh CLI`,
+        subtitle: github.subtitle,
+        disabled: github.disabled,
         ...(props.remote !== null ? { badge: { label: 'remote found', tone: 'success' as const } } : {}),
       },
     ],
     onSelect: (id) => {
-      if (busy || (id !== 'local' && id !== 'github')) return;
+      if (busy || (id !== 'local' && id !== 'github') || (id === 'github' && github.disabled)) return;
       choice = id;
       list.update({ selectedId: id });
     },

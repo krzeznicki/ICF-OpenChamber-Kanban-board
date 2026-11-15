@@ -226,16 +226,30 @@ const existingConfig = async (dir: string): Promise<ProjectConfig | null> => {
   }
 };
 
-/** A github.com URL in `git remote -v` output: `origin` first, else the first such remote. */
+/**
+ * A remote URL without credentials: an http(s) URL loses its whole `user[:token]@` part; another
+ * scheme keeps its user (ssh://git@...) but loses a password. scp-style `git@github.com:o/r` stays.
+ */
+const withoutCredentials = (url: string): string =>
+  /^https?:\/\//i.test(url)
+    ? url.replace(/^(https?:\/\/)[^@/]*@/i, '$1')
+    : url.replace(/^([a-z+]+:\/\/[^:@/]*):[^@/]*@/i, '$1@');
+
+/** A github.com URL in `git remote -v` output, without credentials: `origin` first, else the first such remote. */
 export const githubRemote = (output: string): string | null => {
   const remotes: Array<{ name: string; url: string }> = [];
   for (const line of output.split(/\r?\n/)) {
     const m = /^(\S+)\s+(\S+)/.exec(line);
     if (m === null) continue;
     const url = m[2]!;
-    if (/^(?:[a-z+]+:\/\/)?(?:[^@/\s]+@)?github\.com[:/]/i.test(url)) remotes.push({ name: m[1]!, url });
+    if (/^(?:[a-z+]+:\/\/)?(?:[^@/\s]+@)?github\.com[:/]/i.test(url)) remotes.push({ name: m[1]!, url: withoutCredentials(url) });
   }
   return (remotes.find((r) => r.name === 'origin') ?? remotes[0])?.url ?? null;
+};
+
+const detectRemote = async (dir: string, exec: Exec): Promise<string | null> => {
+  const r = await exec('git', ['remote', '-v'], { cwd: dir });
+  return r.code === 0 ? githubRemote(r.stdout) : null;
 };
 
 const POST: Record<string, Route> = {
@@ -261,6 +275,10 @@ const POST: Record<string, Route> = {
     };
     const existing = await existingConfig(dir);
     if (existing !== null && existing.tracker !== kind) alreadySetUp(existing.tracker);
+    // GitHub needs a github.com remote (gh works on it); without one nothing is written.
+    if (kind === 'github' && (await detectRemote(dir, deps.exec)) === null) {
+      throw new TrackerError('INVALID', 'This folder has no GitHub remote; add one or choose Local');
+    }
     // GitHub: check gh before writing anything, so a missing or logged-out gh leaves the project untouched.
     // writeConfig never writes triage-labels.md, so the label strings are already final here.
     const gh = kind === 'github' ? createGithubTracker(dir, deps.exec, await readLabels(dir)) : null;
@@ -271,10 +289,7 @@ const POST: Record<string, Route> = {
     await gh?.setupLabels();
     return { config };
   },
-  '/config/detect': async (_body, dir, deps) => {
-    const r = await deps.exec('git', ['remote', '-v'], { cwd: dir });
-    return { remote: r.code === 0 ? githubRemote(r.stdout) : null };
-  },
+  '/config/detect': async (_body, dir, deps) => ({ remote: await detectRemote(dir, deps.exec) }),
   '/tasks/list': async (_body, dir, deps) => ({ tasks: await (await tracker(dir, deps)).list() }),
   '/tasks/get': async (body, dir, deps) => {
     const id = str(body, 'id');

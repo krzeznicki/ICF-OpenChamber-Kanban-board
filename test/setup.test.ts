@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { ConfigResult } from '../src/panel/api.ts';
-import { defaultChoice, loadNotice, setupOutcome } from '../src/panel/setup.ts';
+import { defaultChoice, githubChoice, loadNotice, setupOutcome } from '../src/panel/setup.ts';
 
 const labels = {};
 const configured = (tracker: 'local' | 'github'): ConfigResult => ({ config: { tracker, labels } });
@@ -10,6 +10,15 @@ const notConfigured: ConfigResult = { error: { code: 'NOT_CONFIGURED', message: 
 test('GitHub is preselected only when a github.com remote was detected', () => {
   assert.equal(defaultChoice('git@github.com:o/r.git'), 'github');
   assert.equal(defaultChoice(null), 'local');
+});
+
+test('wizard: without a GitHub remote the GitHub choice says so and is disabled', () => {
+  const none = githubChoice(null);
+  assert.equal(none.disabled, true);
+  assert.match(none.subtitle, /no GitHub remote found/);
+  const found = githubChoice('https://github.com/o/r.git');
+  assert.equal(found.disabled, false);
+  assert.ok(found.subtitle.includes('https://github.com/o/r.git'));
 });
 
 test('load errors become a notice with the message and a Retry button', () => {
