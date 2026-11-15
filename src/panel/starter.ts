@@ -40,6 +40,8 @@ export type StarterDeps = {
   /** Cards the user dragged away from their sessions (columns.ts Detached) in the shown project. */
   detached: () => Detached;
   draw: () => void;
+  /** The model picker's list (loaded once per panel session). */
+  loadModels: () => Promise<string[]>;
 };
 
 const errorText = (e: unknown): string => (e instanceof Error ? e.message : String(e));
@@ -326,7 +328,7 @@ export const createStarter = (deps: StarterDeps) => {
     }
     let opts = resolveStart(ctx.settings, task, card, ctx.presets);
     if (!ctx.settings.autoStart) {
-      const picked = await askStart(task.title, opts, ctx.presets);
+      const picked = await askStart(task.title, opts, ctx.presets, deps.loadModels);
       if (picked === null) return;
       opts = picked;
     }

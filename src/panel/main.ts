@@ -23,6 +23,7 @@ import {
   withDetach,
 } from './settings.ts';
 import { defaultChoice, loadNotice, setupOutcome, type ApiFailure, type NoticeModel, type TrackerChoice } from './setup.ts';
+import { createModelLoader } from './models.ts';
 import { createStarter } from './starter.ts';
 import { createSummaries } from './summaries.ts';
 import { createBoard, type Board } from './ui/board.ts';
@@ -127,6 +128,13 @@ let generation = 0;
 
 const project = (): GuestProject | null => state.projects.find((p) => p.id === state.projectId) ?? null;
 
+/** `opencode models` through the service, fetched the first time a model picker opens, then kept for this panel session. */
+const loadModels = createModelLoader(async () => {
+  const p = project();
+  if (p === null) throw new Error('Open a project to list the models');
+  return createApi(host, p.directory).listModels();
+});
+
 /** The settings in force for the shown project (global only until its layer has loaded). */
 const settings = (): Settings =>
   resolveSettings(state.globalSettings, state.settingsFor !== null && state.settingsFor === state.projectId ? state.projectSettings : {});
@@ -208,6 +216,7 @@ const showSettings = (): void => {
         editor.refresh();
       },
       onDismiss: closeSettings,
+      loadModels,
     },
   );
 };
@@ -495,6 +504,7 @@ const starter = createStarter({
   loadCard: (projectId, taskId) => store.loadCard(projectId, taskId),
   detached,
   draw: () => draw(),
+  loadModels,
 });
 
 /**
@@ -556,6 +566,7 @@ const start = (ctx: HostReadyContext): void => {
     reload: load,
     redraw: draw,
     onStart: (task) => void starter.onStart(task),
+    loadModels,
     beforeMove: (task) => starter.leaveQueue(task.id),
     afterSetState: detach,
     openCard,

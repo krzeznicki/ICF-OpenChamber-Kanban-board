@@ -10,6 +10,8 @@ import type { Preset } from '../presets.ts';
 import type { CardOptions, Location, StartOptions } from '../settings.ts';
 import type { SummaryStatus } from '../summaries.ts';
 import { mountCloseButton } from './closeButton.ts';
+import { defaultModelLabel } from '../models.ts';
+import { mountModelPicker } from './modelPicker.ts';
 import { LOCATION_LABELS, mountInheritSelect, mountInheritText } from './settingsView.ts';
 
 export const STATES: readonly TaskState[] = ['needs-triage', 'needs-info', 'ready-for-agent', 'ready-for-human', 'wontfix', 'done'];
@@ -52,6 +54,8 @@ export type StartModel = {
 
 export type DetailCallbacks = {
   onStartOptions: (card: CardOptions) => void;
+  /** The model picker's list (loaded once per panel session). */
+  loadModels: () => Promise<string[]>;
   /** The Summarise button. */
   onSummarise: () => void;
   onMove: (to: Column) => void;
@@ -142,17 +146,18 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks): De
         emit();
       },
     });
-    mountInheritText(cells[2]!, startDisposers, {
-      label: 'Model',
-      value: card.model ?? undefined,
-      placeholder: start.inherited.model ?? 'Your current model',
-      resetLabel: 'Default',
-      mono: true,
-      onChange: (v) => {
-        card.model = v ?? null;
-        emit();
-      },
-    });
+    startDisposers.push(
+      mountModelPicker(cells[2]!, {
+        label: 'Model',
+        value: card.model ?? null,
+        defaultLabel: defaultModelLabel(start.inherited.model),
+        loadModels: callbacks.loadModels,
+        onChange: (v) => {
+          card.model = v;
+          emit();
+        },
+      }),
+    );
     mountInheritText(cells[3]!, startDisposers, {
       label: 'Agent',
       value: card.agent ?? undefined,

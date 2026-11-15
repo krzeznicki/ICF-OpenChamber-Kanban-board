@@ -30,6 +30,8 @@ export type EditorDeps = {
   redraw: () => void;
   /** Dropping on In Progress (also "Move to In Progress" in the detail): starts an agent. */
   onStart: (task: Task) => void;
+  /** The model picker's list (loaded once per panel session). */
+  loadModels: () => Promise<string[]>;
   /** Before a move that writes (Backlog, Ready, Done): e.g. leave the start queue. False cancels the move. */
   beforeMove?: (task: Task) => Promise<boolean>;
   /** A move to Backlog or Ready was written, before the reload (e.g. detach the card from its session). */
@@ -201,6 +203,7 @@ export const createEditor = (deps: EditorDeps) => {
     closeDetail();
     loadCard(id);
     const handle = openDetail(detailModel(task), {
+      loadModels: deps.loadModels,
       onStartOptions: (options) => {
         if (card === null || card.taskId !== id) return;
         const languageChanged = options.summaryLanguage !== card.options.summaryLanguage;

@@ -27,7 +27,9 @@ import {
   type Settings,
   type SettingsLayer,
 } from '../settings.ts';
+import { defaultModelLabel } from '../models.ts';
 import { mountCloseButton } from './closeButton.ts';
+import { mountModelPicker } from './modelPicker.ts';
 import { askChoice } from './confirm.ts';
 
 export type SettingsTab = 'global' | 'project' | 'presets';
@@ -45,6 +47,8 @@ export type SettingsCallbacks = {
   onProject: (layer: SettingsLayer) => void;
   onPresets: (stored: StoredPresets) => void;
   onDismiss: () => void;
+  /** The model picker's list (loaded once per panel session). */
+  loadModels: () => Promise<string[]>;
 };
 
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, className: string, text?: string): HTMLElementTagNameMap[K] => {
@@ -135,6 +139,7 @@ const drawLayerForm = (
     /** "Default" for the global layer, "Use global" for a project. */
     inheritWord: string;
     presets: readonly Preset[];
+    loadModels: () => Promise<string[]>;
     onChange: (layer: SettingsLayer) => void;
   },
 ): void => {
@@ -215,18 +220,18 @@ const drawLayerForm = (
     },
   });
   const r3 = row(start);
-  mountInheritText(cell(r3), disposers, {
-    label: 'Model',
-    value: layer.defaults?.model ?? undefined,
-    placeholder: base.defaults.model ?? 'Your current model',
-    resetLabel: inheritWord,
-    helper: 'provider/model, e.g. anthropic/claude-sonnet-5-5',
-    mono: true,
-    onChange: (v) => {
-      defaults().model = v ?? null;
-      emit();
-    },
-  });
+  disposers.push(
+    mountModelPicker(cell(r3), {
+      label: 'Model',
+      value: layer.defaults?.model ?? null,
+      defaultLabel: defaultModelLabel(base.defaults.model, inheritWord),
+      loadModels: opts.loadModels,
+      onChange: (v) => {
+        defaults().model = v;
+        emit();
+      },
+    }),
+  );
   mountInheritText(cell(r3), disposers, {
     label: 'Agent',
     value: layer.defaults?.agent ?? undefined,
@@ -433,6 +438,7 @@ export const openSettings = (initial: SettingsModel, callbacks: SettingsCallback
         base: DEFAULT_SETTINGS,
         inheritWord: 'Default',
         presets,
+        loadModels: callbacks.loadModels,
         onChange: (layer) => {
           m.global = layer;
           callbacks.onGlobal(layer);
@@ -449,6 +455,7 @@ export const openSettings = (initial: SettingsModel, callbacks: SettingsCallback
           base: resolveSettings(m.global, {}),
           inheritWord: 'Use global',
           presets,
+          loadModels: callbacks.loadModels,
           onChange: (layer) => {
             project.layer = layer;
             callbacks.onProject(layer);

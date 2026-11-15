@@ -2728,6 +2728,8 @@ ${GUEST_UI_LOOK_CSS}`;
       listLinks: () => call("POST", "/links/list").then((r) => r.links),
       /** Records a session the panel started (path A), so the queue counts it while it runs. */
       addLink: (taskId, sessionId, sessionDirectory) => call("POST", "/links/add", { taskId, sessionId, sessionDirectory }).then(() => void 0),
+      /** `opencode models` (cached by the service); a failure comes back as `{ models: [], error }`. */
+      listModels: () => call("POST", "/models/list"),
       listQueue: () => call("POST", "/queue/list").then((r) => r.queue),
       /** Idempotent per task; `maxParallel` is stored so the service drains with the same limit. */
       addToQueue: (entry, maxParallel) => call("POST", "/queue/add", { entry, maxParallel }).then((r) => r.queue),
@@ -3616,6 +3618,101 @@ ${ref}`,
     return handle.dispose;
   };
 
+  // src/panel/models.ts
+  var DEFAULT_MODEL_ID = "";
+  var STATUS_ID = "status:models";
+  var HINT_MAX = 80;
+  var defaultModelLabel = (inherited, word = "Default") => `${word} (${inherited ?? "current selection"})`;
+  var clip = (s) => s.length <= HINT_MAX ? s : `${s.slice(0, HINT_MAX - 1)}\u2026`;
+  var modelOptions = (input) => {
+    const { models, value } = input;
+    const out = [{ id: DEFAULT_MODEL_ID, label: input.defaultLabel }];
+    if (value !== null && value !== DEFAULT_MODEL_ID && !(models ?? []).includes(value)) {
+      out.push(models === null ? { id: value, label: value } : { id: value, label: value, hint: "not in the list" });
+    }
+    if (models === null) {
+      out.push(
+        input.error === void 0 ? { id: STATUS_ID, label: "Loading models\u2026" } : { id: STATUS_ID, label: "Couldn\u2019t load models \u2014 try again", hint: clip(input.error) }
+      );
+      return out;
+    }
+    const sorted = [...new Set(models)].sort((a, b) => a < b ? -1 : a > b ? 1 : 0);
+    for (const m of sorted) out.push({ id: m, label: m });
+    return out;
+  };
+  var pickedModel = (id) => id === STATUS_ID ? null : { value: id === DEFAULT_MODEL_ID ? null : id };
+  var createModelLoader = (fetchModels) => {
+    let kept = null;
+    return () => {
+      kept ??= fetchModels().then((r) => {
+        if (r.error !== void 0) throw new Error(r.error);
+        return r.models;
+      });
+      kept.catch(() => {
+        kept = null;
+      });
+      return kept;
+    };
+  };
+
+  // src/panel/ui/modelPicker.ts
+  var mountModelPicker = (root, props) => {
+    let value = props.value === DEFAULT_MODEL_ID ? null : props.value;
+    let models = null;
+    let error;
+    let loading = false;
+    let disposed = false;
+    const defaultLabel = props.defaultLabel ?? defaultModelLabel(null);
+    const options = () => modelOptions({ models, value, defaultLabel, ...error !== void 0 ? { error } : {} });
+    const load2 = () => {
+      if (models !== null || loading) return;
+      loading = true;
+      error = void 0;
+      select.update({ options: options() });
+      props.loadModels().then(
+        (list) => {
+          loading = false;
+          if (disposed) return;
+          models = list;
+          select.update({ options: options() });
+        },
+        (e) => {
+          loading = false;
+          if (disposed) return;
+          error = e instanceof Error ? e.message : String(e);
+          select.update({ options: options() });
+        }
+      );
+    };
+    const select = mountSelect(root, {
+      ...props.label !== void 0 ? { label: props.label } : {},
+      value: value ?? DEFAULT_MODEL_ID,
+      options: options(),
+      searchable: true,
+      searchPlaceholder: "Filter models",
+      onChange: (id) => {
+        const picked = pickedModel(id);
+        if (picked === null) {
+          select.update({ value: value ?? DEFAULT_MODEL_ID });
+          load2();
+          return;
+        }
+        value = picked.value;
+        select.update({ value: value ?? DEFAULT_MODEL_ID, options: options() });
+        props.onChange(value);
+      }
+    });
+    const onFirstUse = () => load2();
+    root.addEventListener("pointerdown", onFirstUse, true);
+    root.addEventListener("keydown", onFirstUse, true);
+    return () => {
+      disposed = true;
+      root.removeEventListener("pointerdown", onFirstUse, true);
+      root.removeEventListener("keydown", onFirstUse, true);
+      select.dispose();
+    };
+  };
+
   // src/panel/ui/settingsView.ts
   var el2 = (tag, className, text2) => {
     const node = document.createElement(tag);
@@ -3744,18 +3841,18 @@ ${ref}`,
       }
     });
     const r3 = row(start2);
-    mountInheritText(cell(r3), disposers, {
-      label: "Model",
-      value: layer.defaults?.model ?? void 0,
-      placeholder: base.defaults.model ?? "Your current model",
-      resetLabel: inheritWord,
-      helper: "provider/model, e.g. anthropic/claude-sonnet-5-5",
-      mono: true,
-      onChange: (v2) => {
-        defaults().model = v2 ?? null;
-        emit();
-      }
-    });
+    disposers.push(
+      mountModelPicker(cell(r3), {
+        label: "Model",
+        value: layer.defaults?.model ?? null,
+        defaultLabel: defaultModelLabel(base.defaults.model, inheritWord),
+        loadModels: opts.loadModels,
+        onChange: (v2) => {
+          defaults().model = v2;
+          emit();
+        }
+      })
+    );
     mountInheritText(cell(r3), disposers, {
       label: "Agent",
       value: layer.defaults?.agent ?? void 0,
@@ -3946,6 +4043,7 @@ ${ref}`,
           base: DEFAULT_SETTINGS,
           inheritWord: "Default",
           presets,
+          loadModels: callbacks.loadModels,
           onChange: (layer) => {
             m.global = layer;
             callbacks.onGlobal(layer);
@@ -3962,6 +4060,7 @@ ${ref}`,
             base: resolveSettings(m.global, {}),
             inheritWord: "Use global",
             presets,
+            loadModels: callbacks.loadModels,
             onChange: (layer) => {
               project2.layer = layer;
               callbacks.onProject(layer);
@@ -4088,17 +4187,18 @@ ${ref}`,
           emit();
         }
       });
-      mountInheritText(cells[2], startDisposers, {
-        label: "Model",
-        value: card.model ?? void 0,
-        placeholder: start2.inherited.model ?? "Your current model",
-        resetLabel: "Default",
-        mono: true,
-        onChange: (v2) => {
-          card.model = v2 ?? null;
-          emit();
-        }
-      });
+      startDisposers.push(
+        mountModelPicker(cells[2], {
+          label: "Model",
+          value: card.model ?? null,
+          defaultLabel: defaultModelLabel(start2.inherited.model),
+          loadModels: callbacks.loadModels,
+          onChange: (v2) => {
+            card.model = v2;
+            emit();
+          }
+        })
+      );
       mountInheritText(cells[3], startDisposers, {
         label: "Agent",
         value: card.agent ?? void 0,
@@ -4557,6 +4657,7 @@ ${ref}`,
       closeDetail();
       loadCard(id);
       const handle = openDetail(detailModel(task), {
+        loadModels: deps.loadModels,
         onStartOptions: (options) => {
           if (card === null || card.taskId !== id) return;
           const languageChanged = options.summaryLanguage !== card.options.summaryLanguage;
@@ -4803,14 +4904,14 @@ ${note}` : note;
     if (text2 !== void 0) node.textContent = text2;
     return node;
   };
-  var askStart = (title, initial, presets) => new Promise((resolve) => {
+  var askStart = (title, initial, presets, loadModels2) => new Promise((resolve) => {
     const options = { ...initial };
     const backdrop = el4("div", "kb-backdrop kb-confirm-backdrop");
     const box = el4("div", "kb-confirm");
     box.setAttribute("role", "dialog");
     box.setAttribute("aria-modal", "true");
     box.append(el4("h2", "kb-confirm-title", `Start an agent on \u201C${title}\u201D`));
-    box.append(el4("p", "kb-confirm-body", "Empty model or agent uses your current selection in OpenChamber."));
+    box.append(el4("p", "kb-confirm-body", "A default model or an empty agent uses your current selection in OpenChamber."));
     const row1 = el4("div", "kb-fields");
     const row2 = el4("div", "kb-fields");
     const cells = [0, 1, 2, 3].map(() => el4("div", "kb-field"));
@@ -4851,7 +4952,16 @@ ${note}` : note;
       });
       disposers.push(field2.dispose);
     };
-    text2(cells[2], "Model", "model", "Your current model");
+    disposers.push(
+      mountModelPicker(cells[2], {
+        label: "Model",
+        value: options.model,
+        loadModels: loadModels2,
+        onChange: (v2) => {
+          options.model = v2;
+        }
+      })
+    );
     text2(cells[3], "Agent", "agent", "Your current agent");
     disposers.push(preset.dispose, location.dispose);
     const done = (answer) => {
@@ -5124,7 +5234,7 @@ ${note}` : note;
       }
       let opts = resolveStart(ctx.settings, task, card, ctx.presets);
       if (!ctx.settings.autoStart) {
-        const picked = await askStart(task.title, opts, ctx.presets);
+        const picked = await askStart(task.title, opts, ctx.presets, deps.loadModels);
         if (picked === null) return;
         opts = picked;
       }
@@ -5635,6 +5745,11 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
   var unsubscribeSessions = null;
   var generation = 0;
   var project = () => state.projects.find((p) => p.id === state.projectId) ?? null;
+  var loadModels = createModelLoader(async () => {
+    const p = project();
+    if (p === null) throw new Error("Open a project to list the models");
+    return createApi(host, p.directory).listModels();
+  });
   var settings = () => resolveSettings(state.globalSettings, state.settingsFor !== null && state.settingsFor === state.projectId ? state.projectSettings : {});
   var applySettings = () => {
     const hide = settings().hideChildren;
@@ -5704,7 +5819,8 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
           saver.save("presets", () => store.savePresets(stored));
           editor.refresh();
         },
-        onDismiss: closeSettings
+        onDismiss: closeSettings,
+        loadModels
       }
     );
   };
@@ -5945,7 +6061,8 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     context: startContext,
     loadCard: (projectId, taskId) => store.loadCard(projectId, taskId),
     detached,
-    draw: () => draw()
+    draw: () => draw(),
+    loadModels
   });
   var detach = async (task, from) => {
     const id = state.projectId;
@@ -5998,6 +6115,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
       reload: load,
       redraw: draw,
       onStart: (task) => void starter.onStart(task),
+      loadModels,
       beforeMove: (task) => starter.leaveQueue(task.id),
       afterSetState: detach,
       openCard,

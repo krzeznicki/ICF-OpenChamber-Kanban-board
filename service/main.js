@@ -162,8 +162,8 @@ var MENTIONS_IDLE_MS = 10 * 6e4;
 var ServiceHostError = class extends Error {
   code;
   status;
-  constructor(message2, code2, status) {
-    super(message2);
+  constructor(message3, code2, status) {
+    super(message3);
     this.name = "ServiceHostError";
     this.code = code2;
     this.status = status;
@@ -200,12 +200,12 @@ var createServiceHost = ({ env }) => {
       lastReply: (sessionId) => call("sessions.lastReply", { sessionId }),
       stop: (sessionId) => call("sessions.stop", { sessionId }),
       answerPermission: (sessionId, requestId, answer) => call("sessions.answerPermission", { sessionId, requestId, ...answer }),
-      answerForm: (sessionId, formId, values, message2) => call("sessions.answerForm", { sessionId, formId, values, ...message2 === void 0 ? {} : { message: message2 } })
+      answerForm: (sessionId, formId, values, message3) => call("sessions.answerForm", { sessionId, formId, values, ...message3 === void 0 ? {} : { message: message3 } })
     },
     setInstructions: (directory, text) => call("instructions.set", { directory, text }),
     emit: (topic, data) => call("panels.emit", { topic, data }),
     readSettings: () => call("settings.read", {}).then(({ settings }) => settings),
-    needsConfiguration: (message2) => call("status.set", { needsConfiguration: message2 }),
+    needsConfiguration: (message3) => call("status.set", { needsConfiguration: message3 }),
     setMark: (target, mark) => call("marks.set", { target, mark })
   };
 };
@@ -274,7 +274,7 @@ var realExec = (cmd, args, opts) => new Promise((resolve) => {
   execFile(
     cmd,
     args,
-    { cwd: opts.cwd, encoding: "utf8", maxBuffer: MAX_BUFFER, windowsHide: true },
+    { cwd: opts.cwd, encoding: "utf8", maxBuffer: MAX_BUFFER, windowsHide: true, timeout: opts.timeoutMs ?? 0 },
     (error2, stdout, stderr) => {
       if (error2 === null) {
         resolve({ code: 0, stdout, stderr });
@@ -328,8 +328,8 @@ var TEMPLATES = {
 var TrackerError = class extends Error {
   // Declared explicitly: Node's type stripping does not support constructor parameter properties.
   code;
-  constructor(code2, message2) {
-    super(message2);
+  constructor(code2, message3) {
+    super(message3);
     this.name = "TrackerError";
     this.code = code2;
   }
@@ -1116,6 +1116,50 @@ var openTracker = async (root, exec) => {
   return createGithubTracker(root, exec, config.labels);
 };
 
+// src/service/models.ts
+var MODELS_TTL_MS = 10 * 60 * 1e3;
+var MODELS_TIMEOUT_MS = 60 * 1e3;
+var ERROR_MAX = 500;
+var ANSI = /\u001b\[[0-9;]*[A-Za-z]/g;
+var MODEL = /^[^\s/]+\/\S*[^\s/]$/;
+var parseModels = (stdout) => {
+  const seen = /* @__PURE__ */ new Set();
+  for (const raw of stdout.split(/\r?\n/)) {
+    const line = raw.replace(ANSI, "").trim();
+    if (MODEL.test(line)) seen.add(line);
+  }
+  return [...seen];
+};
+var message = (e) => e instanceof Error ? e.message : String(e);
+var createModelList = (exec, now = Date.now) => {
+  const cache = /* @__PURE__ */ new Map();
+  const running = /* @__PURE__ */ new Map();
+  const run = async (directory) => {
+    try {
+      const r = await exec("opencode", ["models"], { cwd: directory, timeoutMs: MODELS_TIMEOUT_MS });
+      if (r.code !== 0) {
+        const why = (r.stderr.trim() || r.stdout.trim() || `exit code ${r.code}`).slice(0, ERROR_MAX);
+        return { models: [], error: `opencode models failed: ${why}` };
+      }
+      const models = parseModels(r.stdout);
+      if (models.length === 0) return { models: [], error: "opencode models listed no models" };
+      cache.set(directory, { at: now(), models });
+      return { models };
+    } catch (e) {
+      return { models: [], error: `opencode models failed: ${message(e).slice(0, ERROR_MAX)}` };
+    }
+  };
+  return (directory) => {
+    const hit = cache.get(directory);
+    if (hit !== void 0 && now() - hit.at < MODELS_TTL_MS) return Promise.resolve({ models: [...hit.models] });
+    const pending2 = running.get(directory);
+    if (pending2 !== void 0) return pending2;
+    const p = run(directory).finally(() => running.delete(directory));
+    running.set(directory, p);
+    return p;
+  };
+};
+
 // src/service/queue.ts
 import { homedir } from "node:os";
 import { join as join3 } from "node:path";
@@ -1355,7 +1399,7 @@ var worktreeSlug = (taskId, title, suffix = randomBytes2(3).toString("hex")) => 
   return `${name}-${suffix}`;
 };
 var worktreesRoot = (directory) => join4(dirname2(directory), `${basename(directory)}-worktrees`);
-var message = (e) => e instanceof Error ? e.message : String(e);
+var message2 = (e) => e instanceof Error ? e.message : String(e);
 var removeWorktree = async (deps2, directory, path, branch) => {
   const log = deps2.log ?? ((m) => console.error(m));
   const run = async (args, what) => {
@@ -1364,7 +1408,7 @@ var removeWorktree = async (deps2, directory, path, branch) => {
       if (r.code === 0) return true;
       log(`icf-kanban: could not remove the ${what}: ${(r.stderr || r.stdout).trim() || `git exited ${r.code}`}`);
     } catch (e) {
-      log(`icf-kanban: could not remove the ${what}: ${message(e)}`);
+      log(`icf-kanban: could not remove the ${what}: ${message2(e)}`);
     }
     return false;
   };
@@ -1397,14 +1441,14 @@ var startSession = async (input, deps2) => {
     });
   } catch (e) {
     const kept = worktree === null || await removeWorktree(deps2, input.directory, worktree, branch) ? "" : ` The worktree ${worktree} could not be removed; remove it with git worktree remove if you do not need it.`;
-    throw new TrackerError("FAILED", `Could not start the session: ${message(e).replace(/\.$/, "")}.${kept}`);
+    throw new TrackerError("FAILED", `Could not start the session: ${message2(e).replace(/\.$/, "")}.${kept}`);
   }
   const directory = started.directory ?? cwd;
   let linkError;
   try {
     await addLink(deps2.linksFile, input.directory, { taskId: input.taskId, sessionId: started.sessionId, directory, createdAt: Date.now() });
   } catch (e) {
-    linkError = `The session ${started.sessionId} started, but its link to the card could not be saved (${message(e)}); the card will not follow it.`;
+    linkError = `The session ${started.sessionId} started, but its link to the card could not be saved (${message2(e)}); the card will not follow it.`;
     (deps2.log ?? ((m) => console.error(m)))(`icf-kanban: ${linkError}`);
   }
   return { sessionId: started.sessionId, directory, worktree, ...linkError !== void 0 ? { linkError } : {} };
@@ -1414,10 +1458,10 @@ var startSession = async (input, deps2) => {
 var STATES = ["needs-triage", "needs-info", "ready-for-agent", "ready-for-human", "wontfix", "done"];
 var InvalidRequest = class extends Error {
 };
-var invalid = (message2) => {
-  throw new InvalidRequest(message2);
+var invalid = (message3) => {
+  throw new InvalidRequest(message3);
 };
-var error = (status, code2, message2) => ({ status, json: { error: { code: code2, message: message2 } } });
+var error = (status, code2, message3) => ({ status, json: { error: { code: code2, message: message3 } } });
 var isObject = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
 var optional = (body, key) => {
   const v = body[key];
@@ -1495,7 +1539,7 @@ var start = async (dir, input, deps2) => {
   }
 };
 var liveLinks = async (dir, deps2) => withStatus(await listLinks(linksFile(deps2), dir), deps2.sessions);
-var ERROR_MAX = 500;
+var ERROR_MAX2 = 500;
 var drainProject = async (dir, deps2) => {
   const { taken } = await takeFromQueue(queueFile(deps2), dir, { links: () => liveLinks(dir, deps2) });
   const log = deps2.log ?? ((m) => console.error(m));
@@ -1505,7 +1549,7 @@ var drainProject = async (dir, deps2) => {
         await start(dir, { taskId: e.taskId, title: e.title, prompt: e.prompt, model: e.model, agent: e.agent, location: e.location }, deps2);
         forgetRemoval(queueFile(deps2), dir, e.taskId);
       } catch (err) {
-        const why = (err instanceof Error ? err.message : String(err)).slice(0, ERROR_MAX);
+        const why = (err instanceof Error ? err.message : String(err)).slice(0, ERROR_MAX2);
         log(`icf-kanban: could not start the queued task ${e.taskId}: ${why}`);
         await requeueFailed(queueFile(deps2), dir, e, why).catch(
           (w) => log(`icf-kanban: could not put ${e.taskId} back in the queue: ${w instanceof Error ? w.message : String(w)}`)
@@ -1524,6 +1568,16 @@ var onSessionEvent = async (req, deps2) => {
     const ours = links.some((l) => l.sessionId === event.session.id) || dir !== null && (isInside(dir, project) || isInside(dir, worktreesRoot(project)) || links.some((l) => isInside(dir, l.directory)));
     if (ours) await drainProject(project, deps2);
   }
+};
+var modelLists = /* @__PURE__ */ new WeakMap();
+var modelList = (deps2) => {
+  if (deps2.models !== void 0) return deps2.models;
+  let list = modelLists.get(deps2.exec);
+  if (list === void 0) {
+    list = createModelList(deps2.exec);
+    modelLists.set(deps2.exec, list);
+  }
+  return list;
 };
 var tracker = (dir, deps2) => openTracker(dir, deps2.exec);
 var existingConfig = async (dir) => {
@@ -1631,6 +1685,8 @@ var POST = {
     release(queueFile(deps2), dir, taskId);
     return {};
   },
+  /** `{ models: ['provider/model', …] }`; a failure is `{ models: [], error }`, never an error status. */
+  "/models/list": async (_body, dir, deps2) => modelList(deps2)(dir),
   "/queue/list": async (_body, dir, deps2) => ({ queue: await listQueue(queueFile(deps2), dir) }),
   "/queue/add": async (body, dir, deps2) => ({ queue: await addToQueue(queueFile(deps2), dir, queueEntry(body.entry), maxParallelOf(body)) }),
   "/queue/remove": async (body, dir, deps2) => ({ queue: await removeFromQueue(queueFile(deps2), dir, str(body, "taskId")) }),

@@ -51,7 +51,7 @@ OpenChamber asks you to approve the permissions below. The board opens from the 
 | `prompt` | Starts an agent session from a card (path A, see [Starting agents](#starting-agents)). |
 | `model` | Writes the card summaries with your model (`generate`). |
 | Service (`service/main.js`, runs on your machine) | Reads and writes the project's tracker files: `docs/agents/issue-tracker.md` and `.scratch/**`. Keeps its own files in `~/.icf-kanban/`: `links.json` (which session works on which card) and `queue.json` (the start queue). |
-| Service programs: `git`, `gh` | `git remote -v` to suggest GitHub in the wizard (and to refuse GitHub setup without a github.com remote); `git worktree add` for path B starts, which creates a `<parent>/<repo>-worktrees/` folder next to the project and `icf/*` branches in the repository (a start that fails removes its worktree and branch again with `git worktree remove` and `git branch -D`). `gh` for everything on GitHub Issues: issues, labels, sub-issues, dependencies. |
+| Service programs: `git`, `gh`, `opencode` | `git remote -v` to suggest GitHub in the wizard (and to refuse GitHub setup without a github.com remote); `git worktree add` for path B starts, which creates a `<parent>/<repo>-worktrees/` folder next to the project and `icf/*` branches in the repository (a start that fails removes its worktree and branch again with `git worktree remove` and `git branch -D`). `gh` for everything on GitHub Issues: issues, labels, sub-issues, dependencies. `opencode models` (read only) to list the models the model pickers offer. |
 | Session control (`sessionControl`) | The service starts sessions itself (path B) and reads their status, also while the board is closed. |
 | Session events (`turn-finished`, `turn-failed`) | When a session finishes or fails a turn, the service starts the next queued card. |
 | Instructions | One paragraph added to every agent session: where the `task-board` CLI is and its main commands. |
@@ -130,6 +130,8 @@ Three layers, each overriding the one before, field by field:
 3. **The card** (its detail sheet, Start options): preset, location, model, agent and summary language for that card.
 
 All of them are per user and stored in the extension's storage.
+
+**Model** is picked from a list, not typed: the models `opencode models` reports for the project (fetched the first time a picker opens, kept for the panel session; the service caches it for 10 minutes). Type to filter, arrows and Enter to pick. The first entry, **Default (…)**, means "not set here" and names what it falls back to; at the end that is your current selection in OpenChamber. A stored model that is no longer listed still shows, marked "not in the list". If the list cannot be loaded, the picker says why and tries again the next time it opens.
 
 | Setting | Default |
 |---|---|

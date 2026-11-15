@@ -16,6 +16,11 @@ test('realExec does not throw on a non-zero exit and keeps stderr', async () => 
   assert.equal(r.stderr, 'bad');
 });
 
+test('realExec stops a program that runs past timeoutMs and reports a failure', async () => {
+  const r = await realExec(process.execPath, ['-e', 'setTimeout(() => {}, 10000)'], { cwd, timeoutMs: 200 });
+  assert.notEqual(r.code, 0);
+});
+
 test('realExec maps a missing program to 127', async () => {
   const r = await realExec('icf-kanban-no-such-program', [], { cwd });
   assert.equal(r.code, 127);
