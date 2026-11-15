@@ -28,7 +28,7 @@ import {
   withDetach,
 } from './settings.ts';
 import { defaultChoice, loadNotice, setupOutcome, type ApiFailure, type NoticeModel, type TrackerChoice } from './setup.ts';
-import { createModelLoader } from './models.ts';
+import { createAgentLoader, createModelLoader, type StartLists } from './models.ts';
 import { createStarter } from './starter.ts';
 import { createSummaries } from './summaries.ts';
 import { createBoard, type Board } from './ui/board.ts';
@@ -164,11 +164,17 @@ let generation = 0;
 
 const project = (): GuestProject | null => state.projects.find((p) => p.id === state.projectId) ?? null;
 
-/** `opencode models` through the service, fetched the first time a model picker opens in a project, then kept per project directory. */
-const loadModels = createModelLoader(
-  (directory) => createApi(host, directory).listModels(),
-  () => project()?.directory ?? null,
-);
+/** The project's models and agents through the service, fetched the first time a picker needs them in a project, then kept per project directory. */
+const lists: StartLists = {
+  models: createModelLoader(
+    (directory) => createApi(host, directory).listModels(),
+    () => project()?.directory ?? null,
+  ),
+  agents: createAgentLoader(
+    (directory) => createApi(host, directory).listAgents(),
+    () => project()?.directory ?? null,
+  ),
+};
 
 /** The settings in force for the shown project (global only until its layer has loaded). */
 const settings = (): Settings => {
@@ -277,7 +283,7 @@ const showSettings = (): void => {
         editor.refresh();
       },
       onDismiss: closeSettings,
-      loadModels,
+      lists,
     },
   );
 };
@@ -608,7 +614,7 @@ const starter = createStarter({
   detached,
   archived,
   draw: () => draw(),
-  loadModels,
+  lists,
 });
 
 /**
@@ -795,7 +801,7 @@ const start = (ctx: HostReadyContext): void => {
     reload: load,
     redraw: draw,
     onStart: (task) => void starter.onStart(task),
-    loadModels,
+    lists,
     beforeMove: (task) => starter.leaveQueue(task.id),
     afterSetState: detach,
     session: {

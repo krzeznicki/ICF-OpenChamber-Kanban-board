@@ -387,7 +387,7 @@
     if (!isNonEmptyString(wire.id))
       return null;
     if (wire.ok === true) {
-      const message = {
+      const message2 = {
         channel: OPENCHAMBER_SDK_CHANNEL,
         v: OPENCHAMBER_SDK_API_VERSION,
         type: "result",
@@ -395,9 +395,9 @@
         ok: true
       };
       if (Object(wire.payload) === wire.payload) {
-        message.payload = wire.payload;
+        message2.payload = wire.payload;
       }
-      return message;
+      return message2;
     }
     if (wire.ok === false && isNonEmptyString(wire.error)) {
       return {
@@ -428,8 +428,8 @@
   var isSaveShortcut = (event) => (event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "s";
   var HostRequestError = class extends Error {
     code;
-    constructor(code2, message) {
-      super(message);
+    constructor(code2, message2) {
+      super(message2);
       this.name = "HostRequestError";
       this.code = code2;
     }
@@ -493,8 +493,8 @@
         phase: session.busy ? "started" : "completed"
       };
     };
-    const post = (message) => {
-      target.parent.postMessage(message, "*");
+    const post = (message2) => {
+      target.parent.postMessage(message2, "*");
     };
     const listenForLateGenerate = () => {
       if (disposed || target.parent === target || lateGenerateListeners.size === 0 || lastReady?.features?.lateGenerateResults !== true)
@@ -515,110 +515,110 @@
         return;
       if (!acceptSource(event.source))
         return;
-      const message = readHostMessage(event.data);
-      if (!message)
+      const message2 = readHostMessage(event.data);
+      if (!message2)
         return;
-      if (message.type === "workspace") {
-        const listener = workspaceListeners.get(message.payload.subscriptionId);
+      if (message2.type === "workspace") {
+        const listener = workspaceListeners.get(message2.payload.subscriptionId);
         if (listener)
-          emit([listener], message.payload.snapshot);
+          emit([listener], message2.payload.snapshot);
         return;
       }
-      if (message.type === "shells") {
-        const listener = shellsListeners.get(message.payload.subscriptionId);
+      if (message2.type === "shells") {
+        const listener = shellsListeners.get(message2.payload.subscriptionId);
         if (listener)
-          emit([listener], message.payload.snapshot);
+          emit([listener], message2.payload.snapshot);
         return;
       }
-      if (message.type === "ready") {
-        lastReady = message.payload;
-        lastLifecycle = lifecycleFromSession(message.payload.session);
-        emit(readyListeners, message.payload);
-        emit(directoryListeners, message.payload.directory);
-        emit(sessionListeners, message.payload.session);
+      if (message2.type === "ready") {
+        lastReady = message2.payload;
+        lastLifecycle = lifecycleFromSession(message2.payload.session);
+        emit(readyListeners, message2.payload);
+        emit(directoryListeners, message2.payload.directory);
+        emit(sessionListeners, message2.payload.session);
         if (lastLifecycle) {
           emit(lifecycleListeners, lastLifecycle);
         }
-        emit(connectionListeners, message.payload.connection);
-        emit(settingsListeners, message.payload.settings);
-        emit(itemListeners, message.payload.item);
-        if (message.payload.block)
-          emit(blockListeners, message.payload.block);
+        emit(connectionListeners, message2.payload.connection);
+        emit(settingsListeners, message2.payload.settings);
+        emit(itemListeners, message2.payload.item);
+        if (message2.payload.block)
+          emit(blockListeners, message2.payload.block);
         listenForLateGenerate();
         return;
       }
-      if (message.type === "service-event") {
-        emit(serviceEventListeners, message.payload);
+      if (message2.type === "service-event") {
+        emit(serviceEventListeners, message2.payload);
         return;
       }
-      if (message.type === "generate-late") {
+      if (message2.type === "generate-late") {
         if (lateGenerateListeners.size === 0)
-          unclaimedLateGenerate.push(message.payload);
+          unclaimedLateGenerate.push(message2.payload);
         else
-          emit(lateGenerateListeners, message.payload);
+          emit(lateGenerateListeners, message2.payload);
         return;
       }
-      if (message.type === "directory") {
+      if (message2.type === "directory") {
         if (lastReady) {
-          lastReady = { ...lastReady, directory: message.payload.directory };
+          lastReady = { ...lastReady, directory: message2.payload.directory };
         }
-        emit(directoryListeners, message.payload.directory);
+        emit(directoryListeners, message2.payload.directory);
         return;
       }
-      if (message.type === "session") {
+      if (message2.type === "session") {
         if (lastReady) {
-          lastReady = { ...lastReady, session: message.payload.session };
+          lastReady = { ...lastReady, session: message2.payload.session };
         }
-        if (!message.payload.session) {
+        if (!message2.payload.session) {
           lastLifecycle = null;
-        } else if (lastLifecycle?.sessionId !== message.payload.session.id) {
-          lastLifecycle = lifecycleFromSession(message.payload.session);
+        } else if (lastLifecycle?.sessionId !== message2.payload.session.id) {
+          lastLifecycle = lifecycleFromSession(message2.payload.session);
         }
-        emit(sessionListeners, message.payload.session);
+        emit(sessionListeners, message2.payload.session);
         return;
       }
-      if (message.type === "session-lifecycle") {
-        lastLifecycle = message.payload;
-        emit(lifecycleListeners, message.payload);
+      if (message2.type === "session-lifecycle") {
+        lastLifecycle = message2.payload;
+        emit(lifecycleListeners, message2.payload);
         return;
       }
-      if (message.type === "connection") {
+      if (message2.type === "connection") {
         if (lastReady) {
-          lastReady = { ...lastReady, connection: message.payload.connection };
+          lastReady = { ...lastReady, connection: message2.payload.connection };
         }
-        emit(connectionListeners, message.payload.connection);
+        emit(connectionListeners, message2.payload.connection);
         return;
       }
-      if (message.type === "settings") {
+      if (message2.type === "settings") {
         if (lastReady) {
-          lastReady = { ...lastReady, settings: message.payload.settings };
+          lastReady = { ...lastReady, settings: message2.payload.settings };
         }
-        emit(settingsListeners, message.payload.settings);
+        emit(settingsListeners, message2.payload.settings);
         return;
       }
-      if (message.type === "item") {
+      if (message2.type === "item") {
         if (lastReady) {
-          lastReady = { ...lastReady, item: message.payload.item };
+          lastReady = { ...lastReady, item: message2.payload.item };
         }
-        emit(itemListeners, message.payload.item);
+        emit(itemListeners, message2.payload.item);
         return;
       }
-      if (message.type === "status-control-event") {
-        emit(statusControlListeners, message.payload);
+      if (message2.type === "status-control-event") {
+        emit(statusControlListeners, message2.payload);
         return;
       }
-      if (message.type === "popover-closed") {
-        emit(popoverClosedListeners, message.payload);
+      if (message2.type === "popover-closed") {
+        emit(popoverClosedListeners, message2.payload);
         return;
       }
-      if (message.type === "action") {
+      if (message2.type === "action") {
         const answer = (payload) => {
           if (!disposed)
             post({
               channel: OPENCHAMBER_SDK_CHANNEL,
               v: OPENCHAMBER_SDK_API_VERSION,
               type: "action-result",
-              id: message.id,
+              id: message2.id,
               payload
             });
         };
@@ -627,32 +627,32 @@
           answer({ ok: false, error: "This extension does not handle background actions." });
           return;
         }
-        Promise.resolve().then(() => handler(message.payload)).then(() => answer({ ok: true }), (error2) => {
+        Promise.resolve().then(() => handler(message2.payload)).then(() => answer({ ok: true }), (error2) => {
           const text3 = (error2 instanceof Error ? error2.message : String(error2)).trim();
           answer({ ok: false, error: (text3 || "Action failed.").slice(0, GUEST_RESOLVE_ERROR_MAX) });
         });
         return;
       }
-      if (message.type === "file-open") {
-        const next = message.payload;
+      if (message2.type === "file-open") {
+        const next = message2.payload;
         if (lastFile && sameFileEditorDocument(lastFile, next))
           return;
         lastFile = next;
-        emit(fileOpenListeners, message.payload);
+        emit(fileOpenListeners, message2.payload);
         return;
       }
-      if (message.type === "file-saved") {
-        emit(fileSavedListeners, message.payload.version);
+      if (message2.type === "file-saved") {
+        emit(fileSavedListeners, message2.payload.version);
         return;
       }
-      if (message.type === "file-snapshot") {
+      if (message2.type === "file-snapshot") {
         const answer = (payload) => {
           if (!disposed)
             post({
               channel: OPENCHAMBER_SDK_CHANNEL,
               v: OPENCHAMBER_SDK_API_VERSION,
               type: "file-snapshot-result",
-              id: message.id,
+              id: message2.id,
               payload
             });
         };
@@ -662,7 +662,7 @@
           fail2("This extension does not edit files.");
           return;
         }
-        Promise.resolve().then(() => handler(message.payload.purpose)).then((snapshot) => {
+        Promise.resolve().then(() => handler(message2.payload.purpose)).then((snapshot) => {
           if (fileEditorPayloadSize(snapshot) > GUEST_FILE_EDITOR_CONTENT_MAX) {
             fail2(`The file is over ${GUEST_FILE_EDITOR_CONTENT_MAX} ${"bytes" in snapshot ? "bytes" : "characters"}.`);
             return;
@@ -675,13 +675,13 @@
         }, (error2) => fail2(error2 instanceof Error ? error2.message : String(error2)));
         return;
       }
-      if (message.type === "resolve") {
+      if (message2.type === "resolve") {
         const answer = (payload) => {
           post({
             channel: OPENCHAMBER_SDK_CHANNEL,
             v: OPENCHAMBER_SDK_API_VERSION,
             type: "resolve-result",
-            id: message.id,
+            id: message2.id,
             payload
           });
         };
@@ -690,22 +690,22 @@
           answer({ error: "This extension does not resolve commands." });
           return;
         }
-        Promise.resolve().then(() => handler(message.payload)).then((item) => answer({ item: item ? clampAttachRequest(item) : null }), (error2) => {
+        Promise.resolve().then(() => handler(message2.payload)).then((item) => answer({ item: item ? clampAttachRequest(item) : null }), (error2) => {
           const text3 = (error2 instanceof Error ? error2.message : String(error2)).trim();
           answer({ error: (text3 || "Command failed.").slice(0, GUEST_RESOLVE_ERROR_MAX) });
         });
         return;
       }
-      const waiter = pending.get(message.id);
+      const waiter = pending.get(message2.id);
       if (!waiter)
         return;
       clearTimeout(waiter.timer);
-      pending.delete(message.id);
-      if (message.ok) {
-        waiter.resolve(message.payload);
+      pending.delete(message2.id);
+      if (message2.ok) {
+        waiter.resolve(message2.payload);
         return;
       }
-      waiter.reject(new HostRequestError(message.code, message.error));
+      waiter.reject(new HostRequestError(message2.code, message2.error));
     };
     target.addEventListener("message", onMessage);
     post({
@@ -713,24 +713,24 @@
       v: OPENCHAMBER_SDK_API_VERSION,
       type: "hello"
     });
-    const send = (message, timeoutMs = requestTimeoutMs) => {
+    const send = (message2, timeoutMs = requestTimeoutMs) => {
       if (disposed || target.parent === target) {
         return Promise.reject(new HostRequestError("HOST_UNAVAILABLE", "No host frame. This page is not in an iframe."));
       }
       return new Promise((resolve2, reject) => {
         const timer = setTimeout(() => {
-          pending.delete(message.id);
+          pending.delete(message2.id);
           reject(new HostRequestError("HOST_TIMEOUT", "Host did not answer in time."));
         }, timeoutMs);
-        pending.set(message.id, { resolve: resolve2, reject, timer });
-        post(message);
+        pending.set(message2.id, { resolve: resolve2, reject, timer });
+        post(message2);
       });
     };
-    const request = (message) => send(message).then(() => void 0);
+    const request = (message2) => send(message2).then(() => void 0);
     const envelope = { channel: OPENCHAMBER_SDK_CHANNEL, v: OPENCHAMBER_SDK_API_VERSION };
-    const notify = (message) => {
+    const notify = (message2) => {
       if (!disposed && target.parent !== target)
-        post(message);
+        post(message2);
     };
     const requestFileSave = () => notify({ ...envelope, type: "file-save" });
     const onSaveShortcut = (event) => {
@@ -1069,8 +1069,8 @@
         };
       },
       toast: (payload) => {
-        const message = payload.message.trim();
-        if (!message || message.length > GUEST_TOAST_MAX) {
+        const message2 = payload.message.trim();
+        if (!message2 || message2.length > GUEST_TOAST_MAX) {
           return Promise.reject(new HostRequestError("HOST_REJECTED", `Toast message must contain 1 to ${GUEST_TOAST_MAX} characters.`));
         }
         if (payload.copy && payload.copy !== true && (!payload.copy.text.length || payload.copy.text.length > GUEST_CLIPBOARD_TEXT_MAX)) {
@@ -1081,7 +1081,7 @@
           v: OPENCHAMBER_SDK_API_VERSION,
           type: "toast",
           id: nextId(ids),
-          payload: { ...payload, message }
+          payload: { ...payload, message: message2 }
         });
       },
       openUrl: (url) => request({
@@ -2773,9 +2773,9 @@ ${GUEST_UI_LOOK_CSS}`;
   };
   var archivedShown = (tasks, marks) => tasks.filter((t) => t.state === "done" && marks.has(t.id)).length;
   var isArchived = (task, marks) => task.state === "done" && marks.has(task.id);
-  var mergeArchived = (mine, stored, removed = /* @__PURE__ */ new Map()) => {
+  var mergeArchived = (mine, stored2, removed = /* @__PURE__ */ new Map()) => {
     const out = /* @__PURE__ */ new Map();
-    for (const source of [mine, stored]) {
+    for (const source of [mine, stored2]) {
       for (const [id, at] of source) {
         if (at <= (removed.get(id) ?? 0)) continue;
         if (at > (out.get(id) ?? 0)) out.set(id, at);
@@ -2798,8 +2798,8 @@ ${GUEST_UI_LOOK_CSS}`;
     };
   };
   var archiveWriteJob = (snap, io, onWritten) => async () => {
-    const stored = await io.load().catch(() => null);
-    const merged = stored === null ? new Map(snap.marks) : mergeArchived(snap.marks, stored, snap.removed);
+    const stored2 = await io.load().catch(() => null);
+    const merged = stored2 === null ? new Map(snap.marks) : mergeArchived(snap.marks, stored2, snap.removed);
     const next = snap.tasks === null ? merged : reconcileArchived(merged, snap.tasks).marks;
     await io.save(next);
     onWritten(next);
@@ -2823,8 +2823,8 @@ ${GUEST_UI_LOOK_CSS}`;
   // src/panel/api.ts
   var ApiError = class extends Error {
     code;
-    constructor(code2, message) {
-      super(message);
+    constructor(code2, message2) {
+      super(message2);
       this.name = "ApiError";
       this.code = code2;
     }
@@ -2839,8 +2839,8 @@ ${GUEST_UI_LOOK_CSS}`;
   var errorOf = (json, status) => {
     const e = json?.error;
     const code2 = typeof e?.code === "string" ? e.code : "FAILED";
-    const message = typeof e?.message === "string" ? e.message : `The service answered ${status}`;
-    return new ApiError(code2, message);
+    const message2 = typeof e?.message === "string" ? e.message : `The service answered ${status}`;
+    return new ApiError(code2, message2);
   };
   var createApi = (host2, directory) => {
     const call = async (method, path, body) => {
@@ -2872,14 +2872,16 @@ ${GUEST_UI_LOOK_CSS}`;
       setType: (id, type) => call("POST", "/tasks/type", { id, type }).then((r) => r.task),
       close: (id, withChildren = false) => call("POST", "/tasks/close", { id, withChildren }).then((r) => r.tasks),
       cliPath: () => call("GET", "/cli").then((r) => r.path),
-      /** Path B: the service makes the worktree (if asked) and starts the session with this model/agent. */
+      /** Path B: the service makes the worktree (if asked) and starts the session with this model, agent and thinking level. */
       startSession: (input) => call("POST", "/sessions/start", input),
       /** Sessions linked to this project's tasks (path B, and path A the panel recorded), with their live status. */
       listLinks: () => call("POST", "/links/list").then((r) => r.links),
       /** Records a session the panel started (path A), so the queue counts it while it runs. */
       addLink: (taskId, sessionId, sessionDirectory) => call("POST", "/links/add", { taskId, sessionId, sessionDirectory }).then(() => void 0),
-      /** `opencode models` (cached by the service); a failure comes back as `{ models: [], error }`. */
+      /** The project's models with names and thinking levels (cached by the service); a failure comes back as `{ models: [], error }`. */
       listModels: () => call("POST", "/models/list"),
+      /** The project's session agents (cached by the service); a failure comes back as `{ agents: [], error }`. */
+      listAgents: () => call("POST", "/agents/list"),
       /** Which of Matt Pocock's skills are installed for this project, and each one's SKILL.md (cached by the service). */
       detectSkills: () => call("POST", "/skills/detect"),
       listQueue: () => call("POST", "/queue/list").then((r) => r.queue),
@@ -3315,44 +3317,44 @@ ${GUEST_UI_LOOK_CSS}`;
     }
     return { builtin, custom };
   };
-  var listPresets = (stored, skills = NO_SKILLS) => [
-    ...BUILTIN_PRESETS.map((p) => resolve(p, stored.builtin[p.id], skills)),
-    ...stored.custom.map((c) => ({ ...c, builtin: false }))
+  var listPresets = (stored2, skills = NO_SKILLS) => [
+    ...BUILTIN_PRESETS.map((p) => resolve(p, stored2.builtin[p.id], skills)),
+    ...stored2.custom.map((c) => ({ ...c, builtin: false }))
   ];
-  var isEdited = (stored, id) => Object.hasOwn(stored.builtin, id);
-  var isPristine = (stored) => Object.keys(stored.builtin).length === 0 && stored.custom.length === 0;
-  var setPresetText = (stored, id, text3) => {
+  var isEdited = (stored2, id) => Object.hasOwn(stored2.builtin, id);
+  var isPristine = (stored2) => Object.keys(stored2.builtin).length === 0 && stored2.custom.length === 0;
+  var setPresetText = (stored2, id, text3) => {
     const original = shipped(id);
     if (original !== void 0) {
-      const builtin = { ...stored.builtin };
+      const builtin = { ...stored2.builtin };
       if (text3 === original.text || text3 === original.mattText) delete builtin[id];
       else builtin[id] = text3;
-      return { ...stored, builtin };
+      return { ...stored2, builtin };
     }
-    return { ...stored, custom: stored.custom.map((c) => c.id === id ? { ...c, text: text3 } : c) };
+    return { ...stored2, custom: stored2.custom.map((c) => c.id === id ? { ...c, text: text3 } : c) };
   };
-  var resetPreset = (stored, id) => {
-    if (!isEdited(stored, id)) return stored;
-    const builtin = { ...stored.builtin };
+  var resetPreset = (stored2, id) => {
+    if (!isEdited(stored2, id)) return stored2;
+    const builtin = { ...stored2.builtin };
     delete builtin[id];
-    return { ...stored, builtin };
+    return { ...stored2, builtin };
   };
   var UNTITLED = "Untitled preset";
   var slug = (name) => name.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "preset";
-  var addPreset = (stored, name) => {
+  var addPreset = (stored2, name) => {
     const trimmed = name.trim();
     const base2 = `custom-${slug(trimmed)}`;
-    const taken = new Set(stored.custom.map((c) => c.id));
+    const taken = new Set(stored2.custom.map((c) => c.id));
     let id = base2;
     for (let n = 2; taken.has(id); n++) id = `${base2}-${n}`;
-    return { id, stored: { ...stored, custom: [...stored.custom, { id, name: trimmed === "" ? UNTITLED : trimmed, text: "" }] } };
+    return { id, stored: { ...stored2, custom: [...stored2.custom, { id, name: trimmed === "" ? UNTITLED : trimmed, text: "" }] } };
   };
-  var renamePreset = (stored, id, name) => {
-    if (BUILTIN_IDS.has(id)) return stored;
+  var renamePreset = (stored2, id, name) => {
+    if (BUILTIN_IDS.has(id)) return stored2;
     const trimmed = name.trim();
-    return { ...stored, custom: stored.custom.map((c) => c.id === id ? { ...c, name: trimmed === "" ? UNTITLED : trimmed } : c) };
+    return { ...stored2, custom: stored2.custom.map((c) => c.id === id ? { ...c, name: trimmed === "" ? UNTITLED : trimmed } : c) };
   };
-  var deletePreset = (stored, id) => BUILTIN_IDS.has(id) ? stored : { ...stored, custom: stored.custom.filter((c) => c.id !== id) };
+  var deletePreset = (stored2, id) => BUILTIN_IDS.has(id) ? stored2 : { ...stored2, custom: stored2.custom.filter((c) => c.id !== id) };
 
   // src/panel/summaries.ts
   var DEFAULT_SUMMARY_PROMPT = `Summarise this task for me in {language}, in 2 to 4 plain sentences: what changes for the user, why it matters, and what "done" means. No headings, no lists, no markdown. Write only the summary.
@@ -3460,13 +3462,13 @@ Title: {title}
       if (p === void 0) {
         p = (async () => {
           try {
-            const stored = parseStored(await deps.storage.get(key));
-            if (stored !== null) {
+            const stored2 = parseStored(await deps.storage.get(key));
+            if (stored2 !== null) {
               if (!texts.has(key)) {
-                texts.set(key, stored.text);
+                texts.set(key, stored2.text);
                 changed(taskId);
               }
-              return texts.get(key) ?? stored.text;
+              return texts.get(key) ?? stored2.text;
             }
           } catch {
           }
@@ -3533,8 +3535,8 @@ ${ref}`,
     const ensure = async (task, force = false) => {
       const r = await resolve2(task);
       if (r === null) return null;
-      const stored = await readStored(r.key, task.id);
-      if (stored !== null) return stored;
+      const stored2 = await readStored(r.key, task.id);
+      if (stored2 !== null) return stored2;
       const running = gens.get(r.key);
       if (running !== void 0) return running;
       if (!force && (failed.has(r.key) || unavailable)) return null;
@@ -3617,7 +3619,7 @@ ${ref}`,
   var DEFAULT_SETTINGS = {
     autoStart: true,
     maxParallel: 3,
-    defaults: { presetId: "implement", model: null, agent: null, location: "worktree" },
+    defaults: { presetId: "implement", model: null, agent: null, variant: null, location: "worktree" },
     presetByType: { enhancement: "implement", bug: "implement", research: "plan" },
     summary: { auto: true, language: "Polish", prompt: DEFAULT_SUMMARY_PROMPT },
     hideChildren: false,
@@ -3634,9 +3636,11 @@ ${ref}`,
     const presetId = text(r.presetId);
     const model = text(r.model);
     const agent = text(r.agent);
+    const variant = text(r.variant);
     if (presetId !== void 0) out.presetId = presetId;
     if (model !== void 0) out.model = model;
     if (agent !== void 0) out.agent = agent;
+    if (variant !== void 0) out.variant = variant;
     if (r.location === "worktree" || r.location === "project") out.location = r.location;
     return out;
   };
@@ -3705,13 +3709,18 @@ ${ref}`,
     const byKind = task.kind === "parent" ? ORCHESTRATE_PRESET_ID : void 0;
     const byType = task.type !== null ? s.presetByType[task.type] : void 0;
     const wanted = c.presetId ?? byKind ?? byType ?? s.defaults.presetId;
+    const model = c.model ?? s.defaults.model;
     return {
       presetId: presets2.some((p) => p.id === wanted) ? wanted : FALLBACK_PRESET_ID,
-      model: c.model ?? s.defaults.model,
+      model,
       agent: c.agent ?? s.defaults.agent,
+      // A thinking level belongs to a model: without one it is dropped (the session would start on
+      // OpenChamber's selection, whose levels are unknown here).
+      variant: model === null ? null : c.variant ?? s.defaults.variant,
       location: c.location ?? s.defaults.location
     };
   };
+  var startsFromExtension = (opts) => opts.model !== null || opts.agent !== null || opts.variant !== null;
   var MAX_KEY2 = 128;
   var fnv2 = (s) => {
     let h = 2166136261;
@@ -3778,8 +3787,8 @@ ${ref}`,
       loadProject: async (projectId) => parseSettings(await storage.get(STORAGE_KEYS.project(projectId))),
       saveProject: (projectId, layer) => saveLayer(STORAGE_KEYS.project(projectId), layer),
       loadPresets: async () => parseStoredPresets(await storage.get(STORAGE_KEYS.presets)),
-      savePresets: (stored) => {
-        const clean2 = parseStoredPresets(stored);
+      savePresets: (stored2) => {
+        const clean2 = parseStoredPresets(stored2);
         return put(STORAGE_KEYS.presets, clean2, isPristine(clean2));
       },
       loadCard: async (projectId, taskId) => parseCardOptions(await storage.get(STORAGE_KEYS.card(projectId, taskId))),
@@ -3941,37 +3950,67 @@ ${ref}`,
 
   // src/panel/models.ts
   var DEFAULT_MODEL_ID = "";
-  var STATUS_ID = "status:models";
+  var STATUS_ID = "status:list";
   var HINT_MAX = 80;
-  var defaultModelLabel = (inherited, word = "Default") => `${word} (${inherited ?? "current selection"})`;
+  var defaultLabel = (inherited, word = "Default") => inherited === null ? `${word} \u2014 OpenChamber's current selection` : `${word} (${inherited})`;
+  var thinkingDefaultLabel = (inherited, hasModel, word = "Default") => inherited !== null ? `${word} (${inherited})` : hasModel ? `${word} \u2014 the model\u2019s default` : defaultLabel(null, word);
+  var START_PATH_NOTE = "With a model, agent or thinking level set, the extension starts the session itself, in its own worktree (or the project folder). With none set, OpenChamber starts it with its current selection.";
   var clip = (s) => s.length <= HINT_MAX ? s : `${s.slice(0, HINT_MAX - 1)}\u2026`;
+  var statusRow = (what, error2) => error2 === void 0 ? { id: STATUS_ID, label: `Loading ${what}\u2026` } : { id: STATUS_ID, label: `Couldn\u2019t load ${what} \u2014 try again`, hint: clip(error2) };
+  var stored = (value, known, missing) => value === null || value === DEFAULT_MODEL_ID || (known ?? []).includes(value) ? [] : [known === null ? { id: value, label: value } : { id: value, label: value, hint: missing }];
+  var byLabel = (a, b) => {
+    const x = a.label.toLowerCase();
+    const y = b.label.toLowerCase();
+    return x < y ? -1 : x > y ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+  };
   var modelOptions = (input) => {
     const { models, value } = input;
     const out = [{ id: DEFAULT_MODEL_ID, label: input.defaultLabel }];
-    if (value !== null && value !== DEFAULT_MODEL_ID && !(models ?? []).includes(value)) {
-      out.push(models === null ? { id: value, label: value } : { id: value, label: value, hint: "not in the list" });
+    out.push(...stored(value, models === null ? null : models.map((m) => m.id), "not in the list"));
+    if (models === null) return [...out, statusRow("models", input.error)];
+    const seen = /* @__PURE__ */ new Set();
+    const list3 = [];
+    for (const m of models) {
+      if (seen.has(m.id)) continue;
+      seen.add(m.id);
+      list3.push(m.name === m.id ? { id: m.id, label: m.id } : { id: m.id, label: m.name, hint: m.id });
     }
-    if (models === null) {
-      out.push(
-        input.error === void 0 ? { id: STATUS_ID, label: "Loading models\u2026" } : { id: STATUS_ID, label: "Couldn\u2019t load models \u2014 try again", hint: clip(input.error) }
-      );
-      return out;
-    }
-    const sorted = [...new Set(models)].sort((a, b) => a < b ? -1 : a > b ? 1 : 0);
-    for (const m of sorted) out.push({ id: m, label: m });
-    return out;
+    return [...out, ...list3.sort(byLabel)];
   };
   var pickedModel = (id) => id === STATUS_ID ? null : { value: id === DEFAULT_MODEL_ID ? null : id };
-  var createModelLoader = (fetchModels, directory = () => "") => {
+  var agentOptions = (input) => {
+    const { agents, value } = input;
+    const out = [{ id: DEFAULT_MODEL_ID, label: input.defaultLabel }];
+    out.push(...stored(value, agents === null ? null : agents.map((a) => a.id), "not in the list"));
+    if (agents === null) return [...out, statusRow("agents", input.error)];
+    for (const a of agents) out.push(a.description === "" ? { id: a.id, label: a.name } : { id: a.id, label: a.name, hint: clip(a.description) });
+    return out;
+  };
+  var thinkingField = (input) => {
+    const first = { id: DEFAULT_MODEL_ID, label: input.defaultLabel };
+    const keep = (known, missing = "not offered by this model") => stored(input.value, known, missing);
+    if (input.model === null) return { options: [first, ...keep([])], disabled: input.value === null, reason: "Pick a model first" };
+    if (input.models === null) return { options: [first, ...keep(null), statusRow("thinking levels", input.error)], disabled: false };
+    const model = input.models.find((m) => m.id === input.model);
+    if (model === void 0) return { options: [first, ...keep(null)], disabled: input.value === null, reason: "Thinking levels unknown for this model" };
+    if (model.variants.length === 0) return { options: [first, ...keep([])], disabled: input.value === null, reason: "This model has no thinking levels" };
+    return { options: [first, ...keep(model.variants), ...model.variants.map((v2) => ({ id: v2, label: v2 }))], disabled: false };
+  };
+  var keptVariant = (variant, model, models) => {
+    if (variant === null || model === null || models === null) return variant;
+    const m = models.find((x) => x.id === model);
+    return m === void 0 || m.variants.includes(variant) ? variant : null;
+  };
+  var createDirectoryLoader = (fetch2, directory) => {
     const kept = /* @__PURE__ */ new Map();
     return () => {
       const dir = directory();
-      if (dir === null) return Promise.reject(new Error("Open a project to list the models"));
+      if (dir === null) return Promise.reject(new Error("Open a project to load the list"));
       let p = kept.get(dir);
       if (p === void 0) {
-        const fresh = fetchModels(dir).then((r) => {
+        const fresh = fetch2(dir).then((r) => {
           if (r.error !== void 0) throw new Error(r.error);
-          return r.models;
+          return r.list;
         });
         fresh.catch(() => {
           if (kept.get(dir) === fresh) kept.delete(dir);
@@ -3982,62 +4021,177 @@ ${ref}`,
       return p;
     };
   };
+  var createModelLoader = (fetchModels, directory = () => "") => createDirectoryLoader(
+    (d) => fetchModels(d).then((r) => ({ list: r.models, ...r.error !== void 0 ? { error: r.error } : {} })),
+    directory
+  );
+  var createAgentLoader = (fetchAgents, directory = () => "") => createDirectoryLoader(
+    (d) => fetchAgents(d).then((r) => ({ list: r.agents, ...r.error !== void 0 ? { error: r.error } : {} })),
+    directory
+  );
 
-  // src/panel/ui/modelPicker.ts
-  var mountModelPicker = (root, props) => {
-    let value = props.value === DEFAULT_MODEL_ID ? null : props.value;
+  // src/panel/ui/startTarget.ts
+  var message = (e) => e instanceof Error ? e.message : String(e);
+  var mountStartTarget = (cells, props) => {
+    const word = props.inheritWord ?? "Default";
+    const value = { ...props.value };
+    const { inherited } = props;
     let models = null;
-    let error2;
-    let loading = false;
+    let modelError;
+    let modelsLoading = false;
+    let agents = null;
+    let agentError;
+    let agentsLoading = false;
     let disposed = false;
-    const defaultLabel = props.defaultLabel ?? defaultModelLabel(null);
-    const options = () => modelOptions({ models, value, defaultLabel, ...error2 !== void 0 ? { error: error2 } : {} });
-    const load2 = () => {
-      if (models !== null || loading) return;
-      loading = true;
-      error2 = void 0;
-      select.update({ options: options() });
-      props.loadModels().then(
+    const effectiveModel = () => value.model ?? inherited.model;
+    const modelName = (id) => models?.find((m) => m.id === id)?.name ?? id;
+    const agentName = (id) => agents?.find((a) => a.id === id)?.name ?? id;
+    const inheritedVariant = () => effectiveModel() === null ? null : inherited.variant;
+    const err = (e) => e !== void 0 ? { error: e } : {};
+    const modelOpts = () => modelOptions({
+      models,
+      value: value.model,
+      defaultLabel: defaultLabel(inherited.model === null ? null : modelName(inherited.model), word),
+      ...err(modelError)
+    });
+    const thinkingOpts = () => thinkingField({
+      model: effectiveModel(),
+      models,
+      value: value.variant,
+      defaultLabel: thinkingDefaultLabel(inheritedVariant(), effectiveModel() !== null, word),
+      ...err(modelError)
+    });
+    const agentOpts = () => agentOptions({
+      agents,
+      value: value.agent,
+      defaultLabel: defaultLabel(inherited.agent === null ? null : agentName(inherited.agent), word),
+      ...err(agentError)
+    });
+    const drawThinking = () => {
+      const f = thinkingOpts();
+      thinking.update({ value: value.variant ?? DEFAULT_MODEL_ID, options: f.options, disabled: f.disabled });
+      if (f.reason !== void 0 && f.disabled) cells.thinking.title = f.reason;
+      else cells.thinking.removeAttribute("title");
+    };
+    const drawModels = () => {
+      model.update({ value: value.model ?? DEFAULT_MODEL_ID, options: modelOpts() });
+      drawThinking();
+    };
+    const drawAgents = () => agent.update({ value: value.agent ?? DEFAULT_MODEL_ID, options: agentOpts() });
+    const loadModels = () => {
+      if (models !== null || modelsLoading) return;
+      modelsLoading = true;
+      modelError = void 0;
+      props.lists.models().then(
         (list3) => {
-          loading = false;
+          modelsLoading = false;
           if (disposed) return;
           models = list3;
-          select.update({ options: options() });
+          drawModels();
         },
         (e) => {
-          loading = false;
+          modelsLoading = false;
           if (disposed) return;
-          error2 = e instanceof Error ? e.message : String(e);
-          select.update({ options: options() });
+          modelError = message(e);
+          drawModels();
         }
       );
+      drawModels();
     };
-    const select = mountSelect(root, {
-      ...props.label !== void 0 ? { label: props.label } : {},
-      value: value ?? DEFAULT_MODEL_ID,
-      options: options(),
+    const loadAgents = () => {
+      if (agents !== null || agentsLoading) return;
+      agentsLoading = true;
+      agentError = void 0;
+      props.lists.agents().then(
+        (list3) => {
+          agentsLoading = false;
+          if (disposed) return;
+          agents = list3;
+          drawAgents();
+        },
+        (e) => {
+          agentsLoading = false;
+          if (disposed) return;
+          agentError = message(e);
+          drawAgents();
+        }
+      );
+      drawAgents();
+    };
+    const emit = () => props.onChange({ ...value });
+    const model = mountSelect(cells.model, {
+      label: "Model",
+      value: value.model ?? DEFAULT_MODEL_ID,
+      options: modelOpts(),
       searchable: true,
       searchPlaceholder: "Filter models",
       onChange: (id) => {
         const picked = pickedModel(id);
         if (picked === null) {
-          select.update({ value: value ?? DEFAULT_MODEL_ID });
-          load2();
+          drawModels();
+          loadModels();
           return;
         }
-        value = picked.value;
-        select.update({ value: value ?? DEFAULT_MODEL_ID, options: options() });
-        props.onChange(value);
+        value.model = picked.value;
+        value.variant = effectiveModel() === null ? null : keptVariant(value.variant, value.model, models);
+        drawModels();
+        emit();
       }
     });
-    const onFirstUse = () => load2();
-    root.addEventListener("pointerdown", onFirstUse, true);
-    root.addEventListener("keydown", onFirstUse, true);
+    const thinkingInit = thinkingOpts();
+    const thinking = mountSelect(cells.thinking, {
+      label: "Thinking",
+      value: value.variant ?? DEFAULT_MODEL_ID,
+      options: thinkingInit.options,
+      disabled: thinkingInit.disabled,
+      onChange: (id) => {
+        const picked = pickedModel(id);
+        if (picked === null) {
+          drawThinking();
+          loadModels();
+          return;
+        }
+        value.variant = picked.value;
+        drawThinking();
+        emit();
+      }
+    });
+    const agent = mountSelect(cells.agent, {
+      label: "Agent",
+      value: value.agent ?? DEFAULT_MODEL_ID,
+      options: agentOpts(),
+      onChange: (id) => {
+        const picked = pickedModel(id);
+        if (picked === null) {
+          drawAgents();
+          loadAgents();
+          return;
+        }
+        value.agent = picked.value;
+        drawAgents();
+        emit();
+      }
+    });
+    drawThinking();
+    const onModelUse = () => loadModels();
+    const onAgentUse = () => loadAgents();
+    const listen = (root, fn) => {
+      root.addEventListener("pointerdown", fn, true);
+      root.addEventListener("keydown", fn, true);
+      return () => {
+        root.removeEventListener("pointerdown", fn, true);
+        root.removeEventListener("keydown", fn, true);
+      };
+    };
+    const unlisten = [listen(cells.model, onModelUse), listen(cells.thinking, onModelUse), listen(cells.agent, onAgentUse)];
+    if (effectiveModel() !== null) loadModels();
+    if (value.agent !== null || inherited.agent !== null) loadAgents();
     return () => {
       disposed = true;
-      root.removeEventListener("pointerdown", onFirstUse, true);
-      root.removeEventListener("keydown", onFirstUse, true);
-      select.dispose();
+      for (const u of unlisten) u();
+      model.dispose();
+      thinking.dispose();
+      agent.dispose();
     };
   };
 
@@ -4169,30 +4323,27 @@ ${ref}`,
       }
     });
     const r3 = row(start2);
+    const modelCell = cell(r3);
+    const thinkingCell = cell(r3);
+    const agentCell = cell(row(start2));
     disposers.push(
-      mountModelPicker(cell(r3), {
-        label: "Model",
-        value: layer.defaults?.model ?? null,
-        defaultLabel: defaultModelLabel(base2.defaults.model, inheritWord),
-        loadModels: opts.loadModels,
-        onChange: (v2) => {
-          defaults().model = v2;
-          emit();
+      mountStartTarget(
+        { model: modelCell, thinking: thinkingCell, agent: agentCell },
+        {
+          value: { model: layer.defaults?.model ?? null, variant: layer.defaults?.variant ?? null, agent: layer.defaults?.agent ?? null },
+          inherited: { model: base2.defaults.model, variant: base2.defaults.variant, agent: base2.defaults.agent },
+          inheritWord,
+          lists: opts.lists,
+          onChange: (v2) => {
+            defaults().model = v2.model;
+            defaults().variant = v2.variant;
+            defaults().agent = v2.agent;
+            emit();
+          }
         }
-      })
+      )
     );
-    mountInheritText(cell(r3), disposers, {
-      label: "Agent",
-      value: layer.defaults?.agent ?? void 0,
-      placeholder: base2.defaults.agent ?? "Your current agent",
-      resetLabel: inheritWord,
-      helper: "e.g. build or plan",
-      mono: true,
-      onChange: (v2) => {
-        defaults().agent = v2 ?? null;
-        emit();
-      }
-    });
+    start2.append(el2("p", "kb-settings-hint", START_PATH_NOTE));
     if (opts.skillsLine !== void 0) {
       const skills = section(
         "Matt Pocock's skills",
@@ -4388,7 +4539,7 @@ ${ref}`,
           base: resolveSettings({ useMattSkills: m.global.useMattSkills ?? DEFAULT_SETTINGS.useMattSkills }, {}, found),
           inheritWord: "Default",
           presets: presets2,
-          loadModels: callbacks.loadModels,
+          lists: callbacks.lists,
           skillsLine,
           onChange: (layer) => {
             const toggled = (layer.useMattSkills ?? DEFAULT_SETTINGS.useMattSkills) !== (m.global.useMattSkills ?? DEFAULT_SETTINGS.useMattSkills);
@@ -4408,7 +4559,7 @@ ${ref}`,
             base: resolveSettings(m.global, {}, found),
             inheritWord: "Use global",
             presets: presets2,
-            loadModels: callbacks.loadModels,
+            lists: callbacks.lists,
             onChange: (layer) => {
               project2.layer = layer;
               callbacks.onProject(layer);
@@ -4477,11 +4628,13 @@ ${ref}`,
     const row1 = div("kb-fields");
     const row2 = div("kb-fields");
     const row3 = div("kb-fields");
-    const cells = [0, 1, 2, 3, 4].map(() => div("kb-field"));
+    const cells = [0, 1, 2, 3, 4, 5].map(() => div("kb-field"));
     row1.append(cells[0], cells[1]);
     row2.append(cells[2], cells[3]);
-    row3.append(cells[4]);
-    box.append(row1, row2, row3);
+    row3.append(cells[4], cells[5]);
+    const note = div("kb-muted kb-start-note");
+    note.textContent = START_PATH_NOTE;
+    box.append(row1, row2, row3, note);
     mountInheritSelect(cells[0], disposers, {
       label: "Preset",
       value: card.presetId,
@@ -4503,29 +4656,22 @@ ${ref}`,
       }
     });
     disposers.push(
-      mountModelPicker(cells[2], {
-        label: "Model",
-        value: card.model ?? null,
-        defaultLabel: defaultModelLabel(props.inherited.model),
-        loadModels: props.loadModels,
-        onChange: (v2) => {
-          card.model = v2;
-          emit();
+      mountStartTarget(
+        { model: cells[2], thinking: cells[3], agent: cells[4] },
+        {
+          value: { model: card.model ?? null, variant: card.variant ?? null, agent: card.agent ?? null },
+          inherited: { model: props.inherited.model, variant: props.inherited.variant, agent: props.inherited.agent },
+          lists: props.lists,
+          onChange: (v2) => {
+            card.model = v2.model;
+            card.variant = v2.variant;
+            card.agent = v2.agent;
+            emit();
+          }
         }
-      })
+      )
     );
-    mountInheritText(cells[3], disposers, {
-      label: "Agent",
-      value: card.agent ?? void 0,
-      placeholder: props.inherited.agent ?? "Your current agent",
-      resetLabel: "Default",
-      mono: true,
-      onChange: (v2) => {
-        card.agent = v2 ?? null;
-        emit();
-      }
-    });
-    mountInheritText(cells[4], disposers, {
+    mountInheritText(cells[5], disposers, {
       label: "Summary language",
       value: card.summaryLanguage,
       placeholder: props.summaryLanguage,
@@ -4818,7 +4964,7 @@ ${ref}`,
         card: d.start,
         inherited,
         summaryLanguage: s.summaryLanguage,
-        loadModels: model.loadModels,
+        lists: model.lists,
         onChange: (card) => {
           d.start = card;
         }
@@ -10771,7 +10917,7 @@ ${ref}`,
           card: start2.card,
           inherited: start2.inherited,
           summaryLanguage: start2.summaryLanguage,
-          loadModels: callbacks.loadModels,
+          lists: callbacks.lists,
           onChange: callbacks.onStartOptions
         })
       );
@@ -11027,10 +11173,10 @@ ${ref}`,
       }
     });
     const add2 = mountButton(buttonSlot, { label: "Add", size: "sm", variant: "outline", onClick: () => submit() });
-    const showError = (message) => {
+    const showError = (message2) => {
       errorDispose?.();
       errorDispose = null;
-      if (message !== null) errorDispose = mountBanner(errorSlot, { tone: "error", title: "Could not add the sub-task", body: message }).dispose;
+      if (message2 !== null) errorDispose = mountBanner(errorSlot, { tone: "error", title: "Could not add the sub-task", body: message2 }).dispose;
     };
     const setBusy = (next) => {
       busy = next;
@@ -11265,9 +11411,9 @@ ${ref}`,
     let card = null;
     let lookup = null;
     const find = (id) => deps.tasks().find((t) => t.id === id) ?? null;
-    const info2 = (message) => void deps.host.toast({ kind: "info", message }).catch(() => {
+    const info2 = (message2) => void deps.host.toast({ kind: "info", message: message2 }).catch(() => {
     });
-    const fail2 = (message) => void deps.host.toast({ kind: "error", message }).catch(() => {
+    const fail2 = (message2) => void deps.host.toast({ kind: "error", message: message2 }).catch(() => {
     });
     const runLookup = (id) => {
       const mine = { id, result: "pending", inflight: true };
@@ -11452,7 +11598,7 @@ ${ref}`,
           deps.archive.unarchive(id);
           refreshDetail();
         },
-        loadModels: deps.loadModels,
+        lists: deps.lists,
         onStartOptions: (options) => {
           if (card === null || card.taskId !== id) return;
           const languageChanged = options.summaryLanguage !== card.options.summaryLanguage;
@@ -11549,7 +11695,7 @@ ${ref}`,
           tasks,
           labels: deps.labels(),
           start: addStart(),
-          loadModels: deps.loadModels
+          lists: deps.lists
         },
         { onSubmit: submitAdd, onDismiss: closeAdd }
       );
@@ -11753,21 +11899,22 @@ ${note}` : note;
     if (text3 !== void 0) node.textContent = text3;
     return node;
   };
-  var askStart = (title, initial, presets2, loadModels2) => new Promise((resolve2) => {
+  var askStart = (title, initial, presets2, lists2) => new Promise((resolve2) => {
     const options = { ...initial };
     const backdrop = el6("div", "kb-backdrop kb-confirm-backdrop");
     const box = el6("div", "kb-confirm");
     box.setAttribute("role", "dialog");
     box.setAttribute("aria-modal", "true");
     box.append(el6("h2", "kb-confirm-title", `Start an agent on \u201C${title}\u201D`));
-    box.append(el6("p", "kb-confirm-body", "A default model or an empty agent uses your current selection in OpenChamber."));
     const row1 = el6("div", "kb-fields");
     const row2 = el6("div", "kb-fields");
-    const cells = [0, 1, 2, 3].map(() => el6("div", "kb-field"));
+    const row3 = el6("div", "kb-fields");
+    const cells = [0, 1, 2, 3, 4].map(() => el6("div", "kb-field"));
     row1.append(cells[0], cells[1]);
     row2.append(cells[2], cells[3]);
+    row3.append(cells[4]);
     const actions = el6("div", "kb-actions");
-    box.append(row1, row2, actions);
+    box.append(row1, row2, row3, el6("p", "kb-muted kb-start-note", START_PATH_NOTE), actions);
     backdrop.append(box);
     const disposers = [];
     const preset = mountSelect(cells[0], {
@@ -11788,30 +11935,22 @@ ${note}` : note;
         location.update({ value: id });
       }
     });
-    const text3 = (slot, label, key, placeholder) => {
-      const field2 = mountTextField(slot, {
-        label,
-        value: options[key] ?? "",
-        placeholder,
-        mono: true,
-        onChange: (v2) => {
-          field2.update({ value: v2 });
-          options[key] = v2.trim() === "" ? null : v2.trim();
-        }
-      });
-      disposers.push(field2.dispose);
-    };
     disposers.push(
-      mountModelPicker(cells[2], {
-        label: "Model",
-        value: options.model,
-        loadModels: loadModels2,
-        onChange: (v2) => {
-          options.model = v2;
+      mountStartTarget(
+        { model: cells[2], thinking: cells[3], agent: cells[4] },
+        {
+          value: { model: options.model, variant: options.variant, agent: options.agent },
+          // This start only: a default here is OpenChamber's current selection.
+          inherited: { model: null, variant: null, agent: null },
+          lists: lists2,
+          onChange: (v2) => {
+            options.model = v2.model;
+            options.variant = v2.variant;
+            options.agent = v2.agent;
+          }
         }
-      })
+      )
     );
-    text3(cells[3], "Agent", "agent", "Your current agent");
     disposers.push(preset.dispose, location.dispose);
     const done = (answer) => {
       document.removeEventListener("keydown", onKey);
@@ -11843,9 +11982,9 @@ ${note}` : note;
   var errorText3 = (e) => e instanceof Error ? e.message : String(e);
   var createStarter = (deps) => {
     const { host: host2 } = deps;
-    const fail2 = (message) => void host2.toast({ kind: "error", message }).catch(() => {
+    const fail2 = (message2) => void host2.toast({ kind: "error", message: message2 }).catch(() => {
     });
-    const info2 = (message) => void host2.toast({ kind: "info", message }).catch(() => {
+    const info2 = (message2) => void host2.toast({ kind: "info", message: message2 }).catch(() => {
     });
     let links = [];
     let queue = [];
@@ -11884,7 +12023,7 @@ ${note}` : note;
       const p = deps.project();
       if (p === null) throw new Error("No project is open");
       const api = createApi(host2, p.directory);
-      if (opts.model !== null || opts.agent !== null || task.id.length > GUEST_ATTACH_ID_MAX) {
+      if (startsFromExtension(opts) || task.id.length > GUEST_ATTACH_ID_MAX) {
         try {
           const r = await api.startSession({
             taskId: task.id,
@@ -11892,6 +12031,7 @@ ${note}` : note;
             prompt,
             model: opts.model,
             agent: opts.agent,
+            variant: opts.variant,
             location: opts.location
           });
           if (r.linkError !== void 0) fail2(r.linkError);
@@ -11997,7 +12137,7 @@ ${note}` : note;
           });
           continue;
         }
-        const opts = { presetId: "", model: e.model, agent: e.agent, location: e.location };
+        const opts = { presetId: "", model: e.model, agent: e.agent, variant: e.variant ?? null, location: e.location };
         void launcher.launch(task, opts, e.prompt).then((result) => {
           if (result === "failed" || result === "already") void api.removeFromQueue(e.taskId).catch(() => {
           });
@@ -12038,6 +12178,7 @@ ${note}` : note;
         prompt,
         model: opts.model,
         agent: opts.agent,
+        variant: opts.variant,
         location: opts.location,
         queuedAt: Date.now()
       };
@@ -12083,7 +12224,7 @@ ${note}` : note;
       }
       let opts = resolveStart(ctx.settings, task, card, ctx.presets);
       if (!ctx.settings.autoStart) {
-        const picked = await askStart(task.title, opts, ctx.presets, deps.loadModels);
+        const picked = await askStart(task.title, opts, ctx.presets, deps.lists);
         if (picked === null) return;
         opts = picked;
       }
@@ -12450,6 +12591,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
 .kb-summary-text { margin: 0; line-height: 1.5; overflow-wrap: anywhere; white-space: pre-wrap; }
 .kb-summary-note { margin: 0; color: var(--oc-muted); font-size: 0.85em; display: flex; align-items: center; gap: 0.5rem; }
 .kb-muted { margin: 0; color: var(--oc-muted); font-size: 0.85em; }
+.kb-start-note { margin-top: 0.5em; }
 .kb-modal-backdrop { justify-content: center; align-items: flex-start; padding: 2rem 1rem; overflow-y: auto; }
 .kb-modal { width: min(900px, 100%); max-height: calc(100vh - 4rem); overflow-y: auto; display: flex; flex-direction: column;
   gap: 0.25rem; padding: 0 1.25rem 1.25rem; background: var(--oc-bg); color: var(--oc-fg); border: 1px solid var(--oc-border);
@@ -12623,9 +12765,9 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     showArchived: false
   };
   var store = createSettingsStore(host.storage);
-  var fail = (message) => void host.toast({ kind: "error", message }).catch(() => {
+  var fail = (message2) => void host.toast({ kind: "error", message: message2 }).catch(() => {
   });
-  var info = (message) => void host.toast({ kind: "info", message }).catch(() => {
+  var info = (message2) => void host.toast({ kind: "info", message: message2 }).catch(() => {
   });
   var detached = () => state.detachedFor === state.projectId ? state.detached : /* @__PURE__ */ new Map();
   var archived = () => state.archivedFor === state.projectId ? state.archived : /* @__PURE__ */ new Set();
@@ -12664,10 +12806,16 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
   var unsubscribeSessions = null;
   var generation = 0;
   var project = () => state.projects.find((p) => p.id === state.projectId) ?? null;
-  var loadModels = createModelLoader(
-    (directory) => createApi(host, directory).listModels(),
-    () => project()?.directory ?? null
-  );
+  var lists = {
+    models: createModelLoader(
+      (directory) => createApi(host, directory).listModels(),
+      () => project()?.directory ?? null
+    ),
+    agents: createAgentLoader(
+      (directory) => createApi(host, directory).listAgents(),
+      () => project()?.directory ?? null
+    )
+  };
   var settings = () => {
     const loaded = state.settingsFor !== null && state.settingsFor === state.projectId;
     return resolveSettings(state.globalSettings, loaded ? state.projectSettings : {}, loaded ? state.skills?.found ?? [] : []);
@@ -12754,13 +12902,13 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
           saveProjectSettings(id, layer);
           applySettings();
         },
-        onPresets: (stored) => {
-          state.presets = stored;
-          saver.save("presets", () => store.savePresets(stored));
+        onPresets: (stored2) => {
+          state.presets = stored2;
+          saver.save("presets", () => store.savePresets(stored2));
           editor.refresh();
         },
         onDismiss: closeSettings,
-        loadModels
+        lists
       }
     );
   };
@@ -13040,7 +13188,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     detached,
     archived,
     draw: () => draw(),
-    loadModels
+    lists
   });
   var detach = async (task, from) => {
     const id = state.projectId;
@@ -13106,8 +13254,8 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
   };
   var checkSessions = async (sessionIds) => {
     const projectId = state.projectId;
-    const lists = await Promise.allSettled(state.projects.map((p) => host.listSessions(p.id)));
-    const snapshots = lists.flatMap((r) => r.status === "fulfilled" ? [r.value] : []);
+    const lists2 = await Promise.allSettled(state.projects.map((p) => host.listSessions(p.id)));
+    const snapshots = lists2.flatMap((r) => r.status === "fulfilled" ? [r.value] : []);
     const out = new Map(sessionIds.map((id) => [id, resolveSession(id, snapshots)]));
     const gone = [...out].filter(([, r]) => r === "archived").map(([id]) => id);
     if (gone.length > 0 && projectId !== null && projectId === state.projectId) noteArchived(projectId, gone);
@@ -13181,7 +13329,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
       reload: load,
       redraw: draw,
       onStart: (task) => void starter.onStart(task),
-      loadModels,
+      lists,
       beforeMove: (task) => starter.leaveQueue(task.id),
       afterSetState: detach,
       session: {

@@ -10,6 +10,8 @@ export type QueueEntry = {
   prompt: string;
   model: string | null;
   agent: string | null;
+  /** The thinking level (OpenCode variant); absent in entries queued before 0.3. */
+  variant?: string | null;
   location: 'worktree' | 'project';
   queuedAt: number;
   /** Why the service's last start of this entry failed; it was put back at the front. */

@@ -31,10 +31,10 @@ import {
   type Settings,
   type SettingsLayer,
 } from '../settings.ts';
-import { defaultModelLabel } from '../models.ts';
+import { START_PATH_NOTE, type StartLists } from '../models.ts';
 import { mountCloseButton } from './closeButton.ts';
-import { mountModelPicker } from './modelPicker.ts';
 import { askChoice } from './confirm.ts';
+import { mountStartTarget } from './startTarget.ts';
 
 export type SettingsTab = 'global' | 'project' | 'presets';
 
@@ -53,8 +53,8 @@ export type SettingsCallbacks = {
   onProject: (layer: SettingsLayer) => void;
   onPresets: (stored: StoredPresets) => void;
   onDismiss: () => void;
-  /** The model picker's list (loaded once per panel session). */
-  loadModels: () => Promise<string[]>;
+  /** The model and agent lists of the start pickers (loaded once per project). */
+  lists: StartLists;
 };
 
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, className: string, text?: string): HTMLElementTagNameMap[K] => {
@@ -145,7 +145,7 @@ const drawLayerForm = (
     /** "Default" for the global layer, "Use global" for a project. */
     inheritWord: string;
     presets: readonly Preset[];
-    loadModels: () => Promise<string[]>;
+    lists: StartLists;
     /** Global only: the "Use Matt Pocock's skills" toggle, with this line saying what was found. */
     skillsLine?: string;
     onChange: (layer: SettingsLayer) => void;
@@ -228,30 +228,27 @@ const drawLayerForm = (
     },
   });
   const r3 = row(start);
+  const modelCell = cell(r3);
+  const thinkingCell = cell(r3);
+  const agentCell = cell(row(start));
   disposers.push(
-    mountModelPicker(cell(r3), {
-      label: 'Model',
-      value: layer.defaults?.model ?? null,
-      defaultLabel: defaultModelLabel(base.defaults.model, inheritWord),
-      loadModels: opts.loadModels,
-      onChange: (v) => {
-        defaults().model = v;
-        emit();
+    mountStartTarget(
+      { model: modelCell, thinking: thinkingCell, agent: agentCell },
+      {
+        value: { model: layer.defaults?.model ?? null, variant: layer.defaults?.variant ?? null, agent: layer.defaults?.agent ?? null },
+        inherited: { model: base.defaults.model, variant: base.defaults.variant, agent: base.defaults.agent },
+        inheritWord,
+        lists: opts.lists,
+        onChange: (v) => {
+          defaults().model = v.model;
+          defaults().variant = v.variant;
+          defaults().agent = v.agent;
+          emit();
+        },
       },
-    }),
+    ),
   );
-  mountInheritText(cell(r3), disposers, {
-    label: 'Agent',
-    value: layer.defaults?.agent ?? undefined,
-    placeholder: base.defaults.agent ?? 'Your current agent',
-    resetLabel: inheritWord,
-    helper: 'e.g. build or plan',
-    mono: true,
-    onChange: (v) => {
-      defaults().agent = v ?? null;
-      emit();
-    },
-  });
+  start.append(el('p', 'kb-settings-hint', START_PATH_NOTE));
 
   if (opts.skillsLine !== undefined) {
     const skills = section(
@@ -465,7 +462,7 @@ export const openSettings = (initial: SettingsModel, callbacks: SettingsCallback
         base: resolveSettings({ useMattSkills: m.global.useMattSkills ?? DEFAULT_SETTINGS.useMattSkills }, {}, found),
         inheritWord: 'Default',
         presets,
-        loadModels: callbacks.loadModels,
+        lists: callbacks.lists,
         skillsLine,
         onChange: (layer) => {
           const toggled = (layer.useMattSkills ?? DEFAULT_SETTINGS.useMattSkills) !== (m.global.useMattSkills ?? DEFAULT_SETTINGS.useMattSkills);
@@ -486,7 +483,7 @@ export const openSettings = (initial: SettingsModel, callbacks: SettingsCallback
           base: resolveSettings(m.global, {}, found),
           inheritWord: 'Use global',
           presets,
-          loadModels: callbacks.loadModels,
+          lists: callbacks.lists,
           onChange: (layer) => {
             project.layer = layer;
             callbacks.onProject(layer);

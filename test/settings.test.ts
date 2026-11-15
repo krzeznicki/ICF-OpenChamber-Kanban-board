@@ -11,6 +11,7 @@ import {
   parseSettings,
   resolveSettings,
   resolveStart,
+  startsFromExtension,
   type SettingsStorage,
 } from '../src/panel/settings.ts';
 import {
@@ -51,7 +52,7 @@ test('defaults when nothing is stored', () => {
   assert.deepEqual(s, DEFAULT_SETTINGS);
   assert.equal(s.autoStart, true);
   assert.equal(s.maxParallel, 3);
-  assert.deepEqual(s.defaults, { presetId: 'implement', model: null, agent: null, location: 'worktree' });
+  assert.deepEqual(s.defaults, { presetId: 'implement', model: null, agent: null, variant: null, location: 'worktree' });
   assert.deepEqual(s.presetByType, { enhancement: 'implement', bug: 'implement', research: 'plan' });
   assert.deepEqual(s.summary, { auto: true, language: 'Polish', prompt: DEFAULT_SUMMARY_PROMPT });
   assert.equal(s.hideChildren, false);
@@ -77,7 +78,7 @@ test('project overrides global field by field, nested fields included', () => {
   );
   assert.equal(s.autoStart, false); // global, project unset
   assert.equal(s.maxParallel, 2); // project wins
-  assert.deepEqual(s.defaults, { presetId: 'plan', model: 'anthropic/claude-sonnet-5-5', agent: 'plan', location: 'project' });
+  assert.deepEqual(s.defaults, { presetId: 'plan', model: 'anthropic/claude-sonnet-5-5', agent: 'plan', variant: null, location: 'project' });
   assert.deepEqual(s.summary, { auto: false, language: 'English', prompt: DEFAULT_SUMMARY_PROMPT });
   assert.deepEqual(s.presetByType, { enhancement: 'implement', bug: 'prototype', research: 'implement' });
 });
@@ -109,7 +110,7 @@ test('parseSettings keeps valid fields and drops junk from storage', () => {
       maxParallel: '4',
       hideChildren: true,
       types: ['bug', 3, ' ', 'docs'],
-      defaults: { presetId: 'plan', model: 7, agent: '', location: 'moon' },
+      defaults: { presetId: 'plan', model: 7, agent: '', variant: 3, location: 'moon' },
       presetByType: { bug: 'plan', x: 1 },
       summary: { auto: false, language: 9 },
       extra: 1,
@@ -126,16 +127,46 @@ test('parseSettings keeps valid fields and drops junk from storage', () => {
 
 // --- resolveStart ---
 
+test('variant (thinking level): stored per layer and per card, resolved like the model; old values without it read as null', () => {
+  assert.deepEqual(parseSettings({ defaults: { variant: ' high ' } }), { defaults: { variant: 'high' } });
+  assert.deepEqual(parseCardOptions({ model: 'a/m', variant: 'max' }), { model: 'a/m', variant: 'max' });
+  assert.deepEqual(parseCardOptions({ model: 'a/m', variant: '' }), { model: 'a/m' });
+  const s = resolveSettings({ defaults: { model: 'a/global', variant: 'low' } }, { defaults: { variant: 'high' } });
+  assert.equal(s.defaults.variant, 'high');
+  assert.equal(resolveStart(s, task('chore'), {}).variant, 'high');
+  assert.equal(resolveStart(s, task('chore'), { variant: 'max' }).variant, 'max');
+  // Stored before 0.3: no variant anywhere.
+  const old = resolveSettings({ defaults: { model: 'a/m', agent: 'build' } }, {});
+  assert.deepEqual(resolveStart(old, task('chore'), { model: 'a/card' }), { presetId: 'implement', model: 'a/card', agent: 'build', variant: null, location: 'worktree' });
+});
+
+test('a thinking level needs a model: with no model resolved the variant is dropped', () => {
+  const s = resolveSettings({ defaults: { variant: 'high' } }, {});
+  assert.equal(resolveStart(s, task('chore'), {}).variant, null);
+  assert.equal(resolveStart(s, task('chore'), { variant: 'max' }).variant, null);
+  assert.equal(resolveStart(s, task('chore'), { model: 'a/m' }).variant, 'high');
+});
+
+test('startsFromExtension: path B when a model, an agent or a thinking level is set; path A when none is', () => {
+  const base = { presetId: 'implement', model: null, agent: null, variant: null, location: 'worktree' as const };
+  assert.equal(startsFromExtension(base), false);
+  assert.equal(startsFromExtension({ ...base, location: 'project' }), false);
+  assert.equal(startsFromExtension({ ...base, model: 'a/m' }), true);
+  assert.equal(startsFromExtension({ ...base, agent: 'plan' }), true);
+  assert.equal(startsFromExtension({ ...base, variant: 'high' }), true);
+});
+
 test('card overrides project and global', () => {
   const s = resolveSettings(
     { defaults: { presetId: 'plan', model: 'a/global', agent: 'build', location: 'worktree' } },
     { defaults: { model: 'a/project' } },
   );
-  assert.deepEqual(resolveStart(s, task('chore'), {}), { presetId: 'plan', model: 'a/project', agent: 'build', location: 'worktree' });
+  assert.deepEqual(resolveStart(s, task('chore'), {}), { presetId: 'plan', model: 'a/project', agent: 'build', variant: null, location: 'worktree' });
   assert.deepEqual(resolveStart(s, task('chore'), { presetId: 'prototype', model: 'a/card', agent: 'plan', location: 'project' }), {
     presetId: 'prototype',
     model: 'a/card',
     agent: 'plan',
+    variant: null,
     location: 'project',
   });
 });
@@ -176,7 +207,7 @@ test('empty card model or agent inherits; card null presetId is ignored', () => 
   const s = resolveSettings({ defaults: { model: 'a/m', agent: 'build' } }, {});
   const card = parseCardOptions({ model: '', agent: null, presetId: null, location: 'nowhere' });
   assert.deepEqual(card, {});
-  assert.deepEqual(resolveStart(s, task('bug'), card), { presetId: 'implement', model: 'a/m', agent: 'build', location: 'worktree' });
+  assert.deepEqual(resolveStart(s, task('bug'), card), { presetId: 'implement', model: 'a/m', agent: 'build', variant: null, location: 'worktree' });
 });
 
 // --- presets ---

@@ -20,6 +20,7 @@ import {
   type TrackerKind,
 } from '../addTask.ts';
 import type { Preset } from '../presets.ts';
+import type { StartLists } from '../models.ts';
 import type { StartOptions } from '../settings.ts';
 import { mountCloseButton } from './closeButton.ts';
 import { askChoice } from './confirm.ts';
@@ -37,7 +38,8 @@ export type AddModalModel = {
   labels: Record<string, string>;
   /** Null while the project's settings are loading (a muted line says so; setStart fills it in). */
   start: AddModalStart | null;
-  loadModels: () => Promise<string[]>;
+  /** The model and agent lists of the start pickers. */
+  lists: StartLists;
 };
 
 export type AddModalStart = {
@@ -362,7 +364,7 @@ export const openAddModal = (
       card: d.start,
       inherited,
       summaryLanguage: s.summaryLanguage,
-      loadModels: model.loadModels,
+      lists: model.lists,
       onChange: (card) => {
         d.start = card;
       },

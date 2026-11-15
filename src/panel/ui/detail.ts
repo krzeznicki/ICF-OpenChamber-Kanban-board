@@ -15,6 +15,7 @@ import type { Tone } from '@openchamber/sdk/ui';
 import type { Task, TaskState } from '../../core/types.ts';
 import type { Column } from '../columns.ts';
 import type { Preset } from '../presets.ts';
+import type { StartLists } from '../models.ts';
 import type { CardOptions, Sections, StartOptions } from '../settings.ts';
 import type { SummaryStatus } from '../summaries.ts';
 import { mountCloseButton } from './closeButton.ts';
@@ -80,7 +81,8 @@ export type StartModel = {
 export type DetailCallbacks = {
   onStartOptions: (card: CardOptions) => void;
   /** The model picker's list (loaded once per panel session). */
-  loadModels: () => Promise<string[]>;
+  /** The model and agent lists of the start pickers. */
+  lists: StartLists;
   /** The Summarise button. */
   onSummarise: () => void;
   onMove: (to: Column) => void;
@@ -184,7 +186,7 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
         card: start.card,
         inherited: start.inherited,
         summaryLanguage: start.summaryLanguage,
-        loadModels: callbacks.loadModels,
+        lists: callbacks.lists,
         onChange: callbacks.onStartOptions,
       }),
     );

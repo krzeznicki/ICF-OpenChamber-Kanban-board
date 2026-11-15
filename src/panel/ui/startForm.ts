@@ -1,12 +1,13 @@
 // The start form shown on a drop on In Progress when "Start automatically" is off: preset, location,
-// model and agent, prefilled with what the card resolves to, and Start / Cancel. Drawn in the panel
+// model, thinking and agent, prefilled with what the card resolves to, and Start / Cancel. Drawn in the panel
 // like ui/confirm.ts. Resolves to the chosen options, or null on Cancel, Escape or a backdrop click.
 // What is picked here is used for this start only; the card's stored options are not changed.
-import { mountButton, mountSelect, mountTextField } from '@openchamber/sdk/ui';
+import { mountButton, mountSelect } from '@openchamber/sdk/ui';
 import type { Preset } from '../presets.ts';
 import type { Location, StartOptions } from '../settings.ts';
-import { mountModelPicker } from './modelPicker.ts';
+import { START_PATH_NOTE, type StartLists } from '../models.ts';
 import { LOCATION_LABELS } from './settingsView.ts';
+import { mountStartTarget } from './startTarget.ts';
 
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, className: string, text?: string): HTMLElementTagNameMap[K] => {
   const node = document.createElement(tag);
@@ -19,7 +20,7 @@ export const askStart = (
   title: string,
   initial: StartOptions,
   presets: readonly Preset[],
-  loadModels: () => Promise<string[]>,
+  lists: StartLists,
 ): Promise<StartOptions | null> =>
   new Promise((resolve) => {
     const options: StartOptions = { ...initial };
@@ -28,14 +29,15 @@ export const askStart = (
     box.setAttribute('role', 'dialog');
     box.setAttribute('aria-modal', 'true');
     box.append(el('h2', 'kb-confirm-title', `Start an agent on “${title}”`));
-    box.append(el('p', 'kb-confirm-body', 'A default model or an empty agent uses your current selection in OpenChamber.'));
     const row1 = el('div', 'kb-fields');
     const row2 = el('div', 'kb-fields');
-    const cells = [0, 1, 2, 3].map(() => el('div', 'kb-field'));
+    const row3 = el('div', 'kb-fields');
+    const cells = [0, 1, 2, 3, 4].map(() => el('div', 'kb-field'));
     row1.append(cells[0]!, cells[1]!);
     row2.append(cells[2]!, cells[3]!);
+    row3.append(cells[4]!);
     const actions = el('div', 'kb-actions');
-    box.append(row1, row2, actions);
+    box.append(row1, row2, row3, el('p', 'kb-muted kb-start-note', START_PATH_NOTE), actions);
     backdrop.append(box);
 
     const disposers: Array<() => void> = [];
@@ -57,30 +59,22 @@ export const askStart = (
         location.update({ value: id });
       },
     });
-    const text = (slot: HTMLElement, label: string, key: 'agent', placeholder: string): void => {
-      const field = mountTextField(slot, {
-        label,
-        value: options[key] ?? '',
-        placeholder,
-        mono: true,
-        onChange: (v) => {
-          field.update({ value: v });
-          options[key] = v.trim() === '' ? null : v.trim();
-        },
-      });
-      disposers.push(field.dispose);
-    };
     disposers.push(
-      mountModelPicker(cells[2]!, {
-        label: 'Model',
-        value: options.model,
-        loadModels,
-        onChange: (v) => {
-          options.model = v;
+      mountStartTarget(
+        { model: cells[2]!, thinking: cells[3]!, agent: cells[4]! },
+        {
+          value: { model: options.model, variant: options.variant, agent: options.agent },
+          // This start only: a default here is OpenChamber's current selection.
+          inherited: { model: null, variant: null, agent: null },
+          lists,
+          onChange: (v) => {
+            options.model = v.model;
+            options.variant = v.variant;
+            options.agent = v.agent;
+          },
         },
-      }),
+      ),
     );
-    text(cells[3]!, 'Agent', 'agent', 'Your current agent');
     disposers.push(preset.dispose, location.dispose);
 
     const done = (answer: StartOptions | null): void => {

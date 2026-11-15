@@ -3,7 +3,7 @@
 A Kanban board for [OpenChamber](https://github.com/openchamber/openchamber) over your project's own task files. It reads and writes the format used by Matt Pocock's agent skills: local Markdown files in `.scratch/`, or GitHub Issues. You and your agents work on the same tasks.
 
 - One source of truth per project: the tracker. The board keeps no task data of its own.
-- Drag a card to **In Progress** and an agent session starts with the card's preset, model and location. No dialog unless you want one.
+- Drag a card to **In Progress** and an agent session starts with the card's preset, model, thinking level, agent and location. No dialog unless you want one.
 - Parents (features) start one orchestrator session that works through their sub-tasks.
 - A limit on agents running at once, with a queue that keeps draining while the board is closed.
 - A short personal summary at the top of each card, in your language (default Polish).
@@ -51,7 +51,7 @@ OpenChamber asks you to approve the permissions below. The board opens from the 
 | `prompt` | Starts an agent session from a card (path A, see [Starting agents](#starting-agents)). |
 | `model` | Writes the card summaries with your model (`generate`). |
 | Service (`service/main.js`, runs on your machine) | Reads and writes the project's tracker files: `docs/agents/issue-tracker.md` and `.scratch/**`. Keeps its own files in `~/.icf-kanban/`: `links.json` (which session works on which card) and `queue.json` (the start queue). |
-| Service programs: `git`, `gh`, `opencode` | `git remote -v` to suggest GitHub in the wizard (and to refuse GitHub setup without a github.com remote); `git worktree add` for path B starts, which creates a `<parent>/<repo>-worktrees/` folder next to the project and `icf/*` branches in the repository (a start that fails removes its worktree and branch again with `git worktree remove` and `git branch -D`). `gh` for everything on GitHub Issues: issues, labels, sub-issues, dependencies. `opencode models` (read only) to list the models the model pickers offer. |
+| Service programs: `git`, `gh`, `opencode` | `git remote -v` to suggest GitHub in the wizard (and to refuse GitHub setup without a github.com remote); `git worktree add` for path B starts, which creates a `<parent>/<repo>-worktrees/` folder next to the project and `icf/*` branches in the repository (a start that fails removes its worktree and branch again with `git worktree remove` and `git branch -D`). `gh` for everything on GitHub Issues: issues, labels, sub-issues, dependencies. `opencode api GET /api/model` and `GET /api/agent` (read only; `opencode models` as a fallback) to list the models, thinking levels and agents the pickers offer. |
 | Session control (`sessionControl`) | The service starts sessions itself (path B) and reads their status, also while the board is closed. |
 | Session events (`turn-finished`, `turn-failed`) | When a session finishes or fails a turn, the service starts the next queued card. |
 | Instructions | One paragraph added to every agent session: where the `task-board` CLI is and its main commands. |
@@ -103,7 +103,7 @@ Types: `bug` and `enhancement` (a feature), plus your own (`chore` and `research
 - **Title** (required), **Type**, **State** (`needs-triage` by default; the open states only) and **Parent** (none, or an open parent). Locally, no parent creates a feature (`.scratch/<feature>/spec.md`); a parent creates a ticket under it.
 - **Blocked by**: tick the tasks it waits for. Locally only open tickets of the chosen feature are offered (the format resolves blockers within a feature), so a new feature takes none; on GitHub any open issue except the chosen parent. A filter appears when the list is long.
 - **Description**: markdown.
-- **Start options**: preset, model, agent, location and summary language for this card, each showing what it would inherit. They are stored with the card (`card:<projectId>:<taskId>`) as soon as the task exists, as if set in its modal. They appear once the project's settings have loaded.
+- **Start options**: preset, location, model, thinking, agent and summary language for this card, each showing what it would inherit. They are stored with the card (`card:<projectId>:<taskId>`) as soon as the task exists, as if set in its modal. They appear once the project's settings have loaded.
 - **Sub-tasks**: rows of titles (Enter adds the next row), created in order under the new task right after it: tickets of the new feature locally, sub-issues on GitHub. Locally the list is hidden when a parent is chosen, because a ticket cannot have sub-tasks.
 
 The service's error shows inside the modal and nothing is lost. If the task was created but some sub-tasks were not, the modal names the ones that failed (with the reason) and offers only Close; add them later from the task's **Sub-tasks** section. The board reloads once at the end.
@@ -133,10 +133,10 @@ Dragging a parent to In Progress starts one orchestrator session with the **Brea
 
 ## Starting agents
 
-A card starts with its **preset**, **model**, **agent** and **location** (a new worktree, the default, or the project folder). There are two ways the start happens:
+A card starts with its **preset**, **model**, **thinking** level, **agent** and **location** (a new worktree, the default, or the project folder). There are two ways the start happens:
 
-- **Path A** (a card with no model and no agent set): the board calls OpenChamber's own start. OpenChamber makes the worktree (when the location is a new worktree), the session is linked to the card, and it runs on the model and agent currently selected in your composer.
-- **Path B** (a card with a model or agent set, and every queued card the service starts; also a task whose id is longer than 128 characters, too long to link to the session the path A way): when the location is a new worktree, the service creates it itself with `git worktree add -b icf/<slug> <parent>/<repo>-worktrees/<slug>` (with the project folder it makes none); it then starts the session with that model and agent, and records the link in `~/.icf-kanban/links.json`. If the session cannot be started, the new worktree and branch are removed again.
+- **Path A** (no model, thinking level or agent set, on the card or in the settings): the board calls OpenChamber's own start. OpenChamber makes the worktree (when the location is a new worktree), the session is linked to the card, and it runs on the model, thinking level and agent currently selected in your composer. That is what the pickers' **Default — OpenChamber's current selection** means.
+- **Path B** (any of model, thinking level or agent set, and every queued card the service starts; also a task whose id is longer than 128 characters, too long to link to the session the path A way): when the location is a new worktree, the service creates it itself with `git worktree add -b icf/<slug> <parent>/<repo>-worktrees/<slug>` (with the project folder it makes none); it then starts the session with that model, thinking level (OpenCode's `variant`) and agent, and records the link in `~/.icf-kanban/links.json`. If the session cannot be started, the new worktree and branch are removed again.
 
 The first message tells the agent how to move the task with the `task-board` CLI, always with `--dir <project root>`: the agent usually works in its own worktree, where the CLI would otherwise not find the tracker (GitHub) or would write to a copy of `.scratch/` the board never reads (local). A ticket started from the board does not need to be claimed; an orchestrator claims each sub-task it takes, which needs the sub-task to be `ready-for-agent`.
 
@@ -174,11 +174,17 @@ Three layers, each overriding the one before, field by field:
 
 1. **Global** (Settings → Global): your defaults for every project.
 2. **This project** (Settings → This project): overrides for the open project; a field left at **Use global** inherits.
-3. **The card** (its modal, Settings → Start options): preset, location, model, agent and summary language for that card.
+3. **The card** (its modal, Settings → Start options): preset, location, model, thinking, agent and summary language for that card.
 
 All of them are per user and stored in the extension's storage.
 
-**Model** is picked from a list, not typed: the models `opencode models` reports for the project (fetched the first time a picker opens in that project, then kept for the panel session, one list per project; the service caches it for 10 minutes). Type to filter, arrows and Enter to pick. The first entry, **Default (…)**, means "not set here" and names what it falls back to; at the end that is your current selection in OpenChamber. A stored model that is no longer listed still shows, marked "not in the list". If the list cannot be loaded, the picker says why and tries again the next time it opens.
+**Model**, **Thinking** and **Agent** are picked from lists, not typed, in every place start options are set (the card, Add task, the start form, Settings → Global and This project). The lists are what OpenCode's server reports for the project (`opencode api GET /api/model` and `GET /api/agent`; when the model request fails, `opencode models`, which has no names or thinking levels). Each list is fetched the first time a picker needs it in that project, then kept for the panel session, one list per project; the service caches it for 10 minutes.
+
+- **Model** shows the models by name (the `provider/model` id beside it); type to filter by name or id, arrows and Enter to pick.
+- **Thinking** offers the chosen model's thinking levels (OpenCode's variants, e.g. low, high, max). It is disabled until a model is set here or inherited, and for a model without levels. Changing the model drops a level the new model does not offer; a level without any model is ignored.
+- **Agent** offers the session agents (primary, not hidden, e.g. Build and Plan).
+
+The first entry of each, **Default (…)**, means "not set here" and names what it falls back to; when nothing is set anywhere it reads **Default — OpenChamber's current selection** (for Thinking with a model set: the model's default). A line under the start options says it: a set model, thinking level or agent makes the extension start the session itself (path B, its own worktree), none set leaves it to OpenChamber (path A). To use a model or agent for one project only, set it in **This project**. A stored value that is no longer listed still shows, marked "not in the list" (a thinking level the model lacks: "not offered by this model"). If a list cannot be loaded, the picker says why and tries again the next time it opens.
 
 | Setting | Default |
 |---|---|
@@ -186,7 +192,7 @@ All of them are per user and stored in the extension's storage.
 | Sessions at a time | 3 (1 to 10) |
 | Default preset | Implement |
 | Location | New worktree |
-| Model / Agent | your current model / agent |
+| Model / Thinking / Agent | OpenChamber's current selection (path A) |
 | Preset per type | `enhancement` → Implement, `bug` → Diagnose with Matt's skills (else Implement), `research` → Plan |
 | Use Matt Pocock's skills when installed (Global only) | on |
 | Hide sub-tasks | off |
@@ -252,9 +258,9 @@ Ids are paths locally (`.scratch/login/issues/01-empty-password.md`, `.scratch/l
 
 Found while building it (see [the session-start findings](docs/superpowers/specs/2026-11-15-session-start-findings.md)):
 
-- **Path A uses your current model.** OpenChamber's own start has no model or agent field: a card without a model or agent runs on whatever your composer has selected when it starts.
-- **Path B makes its own worktree.** A card with a model or agent set (and every card the service starts from the queue) whose location is a new worktree gets a worktree made with `git` under `<parent>/<repo>-worktrees/`, on a branch `icf/<slug>`, not by OpenChamber's Quick worktree. Such sessions may look different in the sidebar.
-- **With the board closed, the queue drains only by path B.** Queued cards then run with the model and agent stored on the card, or the session default when none is set.
+- **Path A uses your current model.** OpenChamber's own start has no model, thinking or agent field: a card with none of them set runs on whatever your composer has selected when it starts.
+- **Path B makes its own worktree.** A card with a model, thinking level or agent set (and every card the service starts from the queue) whose location is a new worktree gets a worktree made with `git` under `<parent>/<repo>-worktrees/`, on a branch `icf/<slug>`, not by OpenChamber's Quick worktree. Such sessions may look different in the sidebar.
+- **With the board closed, the queue drains only by path B.** Queued cards then run with the model, thinking level and agent they were queued with, or OpenCode's default when none is set.
 - Worktrees of started sessions are never merged or removed for you (only the worktree of a path B start that failed is removed).
 - The open live checks below have not been done yet.
 

@@ -6,6 +6,7 @@ import type { NewTask, Task, TaskState } from '../core/types.ts';
 import { canAddSubtask, createWithSubtasks, parentChoices, partialMessage, subtasksToCreate, toNewTask, type AddDraft } from './addTask.ts';
 import type { Api } from './api.ts';
 import type { Preset } from './presets.ts';
+import type { StartLists } from './models.ts';
 import { resolveStart, type CardOptions, type Sections, type Settings } from './settings.ts';
 import { COLUMNS, type Column, type SessionLookup, type SessionTarget } from './columns.ts';
 import { openChildren, planMove, taskTypes, type Move } from './moves.ts';
@@ -32,7 +33,8 @@ export type EditorDeps = {
   /** Dropping on In Progress (also "Move to In Progress" in the detail): starts an agent. */
   onStart: (task: Task) => void;
   /** The model picker's list (loaded once per panel session). */
-  loadModels: () => Promise<string[]>;
+  /** The model and agent lists of the start pickers. */
+  lists: StartLists;
   /** Before a move that writes (Backlog, Ready, Done): e.g. leave the start queue. False cancels the move. */
   beforeMove?: (task: Task) => Promise<boolean>;
   /** A move to Backlog or Ready was written, before the reload (e.g. detach the card from its session). */
@@ -312,7 +314,7 @@ export const createEditor = (deps: EditorDeps) => {
         deps.archive.unarchive(id);
         refreshDetail();
       },
-      loadModels: deps.loadModels,
+      lists: deps.lists,
       onStartOptions: (options) => {
         if (card === null || card.taskId !== id) return;
         const languageChanged = options.summaryLanguage !== card.options.summaryLanguage;
@@ -420,7 +422,7 @@ export const createEditor = (deps: EditorDeps) => {
         tasks,
         labels: deps.labels(),
         start: addStart(),
-        loadModels: deps.loadModels,
+        lists: deps.lists,
       },
       { onSubmit: submitAdd, onDismiss: closeAdd },
     );

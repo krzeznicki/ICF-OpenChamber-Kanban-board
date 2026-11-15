@@ -1,11 +1,11 @@
-// A card's start options (preset, location, model, agent, summary language), each unset field
+// A card's start options (preset, location, model, thinking, agent, summary language), each unset field
 // showing what it inherits. Used in the task modal's Settings and in the Add task modal; it reports
 // the whole CardOptions on every change.
 import type { Preset } from '../presets.ts';
 import type { CardOptions, Location, StartOptions } from '../settings.ts';
-import { defaultModelLabel } from '../models.ts';
-import { mountModelPicker } from './modelPicker.ts';
+import { START_PATH_NOTE, type StartLists } from '../models.ts';
 import { LOCATION_LABELS, mountInheritSelect, mountInheritText } from './settingsView.ts';
+import { mountStartTarget } from './startTarget.ts';
 
 export type StartOptionsProps = {
   presets: readonly Preset[];
@@ -14,7 +14,7 @@ export type StartOptionsProps = {
   inherited: StartOptions;
   /** The summary language from the settings, shown when the card sets none. */
   summaryLanguage: string;
-  loadModels: () => Promise<string[]>;
+  lists: StartLists;
   onChange: (card: CardOptions) => void;
 };
 
@@ -33,11 +33,13 @@ export const mountStartOptions = (box: HTMLElement, props: StartOptionsProps): (
   const row1 = div('kb-fields');
   const row2 = div('kb-fields');
   const row3 = div('kb-fields');
-  const cells = [0, 1, 2, 3, 4].map(() => div('kb-field'));
+  const cells = [0, 1, 2, 3, 4, 5].map(() => div('kb-field'));
   row1.append(cells[0]!, cells[1]!);
   row2.append(cells[2]!, cells[3]!);
-  row3.append(cells[4]!);
-  box.append(row1, row2, row3);
+  row3.append(cells[4]!, cells[5]!);
+  const note = div('kb-muted kb-start-note');
+  note.textContent = START_PATH_NOTE;
+  box.append(row1, row2, row3, note);
   mountInheritSelect(cells[0]!, disposers, {
     label: 'Preset',
     value: card.presetId,
@@ -59,29 +61,22 @@ export const mountStartOptions = (box: HTMLElement, props: StartOptionsProps): (
     },
   });
   disposers.push(
-    mountModelPicker(cells[2]!, {
-      label: 'Model',
-      value: card.model ?? null,
-      defaultLabel: defaultModelLabel(props.inherited.model),
-      loadModels: props.loadModels,
-      onChange: (v) => {
-        card.model = v;
-        emit();
+    mountStartTarget(
+      { model: cells[2]!, thinking: cells[3]!, agent: cells[4]! },
+      {
+        value: { model: card.model ?? null, variant: card.variant ?? null, agent: card.agent ?? null },
+        inherited: { model: props.inherited.model, variant: props.inherited.variant, agent: props.inherited.agent },
+        lists: props.lists,
+        onChange: (v) => {
+          card.model = v.model;
+          card.variant = v.variant;
+          card.agent = v.agent;
+          emit();
+        },
       },
-    }),
+    ),
   );
-  mountInheritText(cells[3]!, disposers, {
-    label: 'Agent',
-    value: card.agent ?? undefined,
-    placeholder: props.inherited.agent ?? 'Your current agent',
-    resetLabel: 'Default',
-    mono: true,
-    onChange: (v) => {
-      card.agent = v ?? null;
-      emit();
-    },
-  });
-  mountInheritText(cells[4]!, disposers, {
+  mountInheritText(cells[5]!, disposers, {
     label: 'Summary language',
     value: card.summaryLanguage,
     placeholder: props.summaryLanguage,

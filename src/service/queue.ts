@@ -32,6 +32,7 @@ const isEntry = (v: unknown): v is QueueEntry => {
     typeof e.prompt === 'string' &&
     (e.model === null || typeof e.model === 'string') &&
     (e.agent === null || typeof e.agent === 'string') &&
+    (e.variant === undefined || e.variant === null || typeof e.variant === 'string') &&
     (e.location === 'worktree' || e.location === 'project') &&
     typeof e.queuedAt === 'number' &&
     (e.lastError === undefined || typeof e.lastError === 'string') &&

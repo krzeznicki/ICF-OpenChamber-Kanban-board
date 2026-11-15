@@ -56,6 +56,7 @@ const entry = (taskId: string, extra: Partial<QueueEntry> = {}): QueueEntry => (
   prompt: `Do ${taskId}`,
   model: null,
   agent: null,
+  variant: null,
   location: 'project',
   queuedAt: 1,
   ...extra,
@@ -139,12 +140,25 @@ test('queue routes reject bad input with 400', async (t) => {
     ['/queue/add', { entry: { ...entry('a'), location: 'moon' } }],
     ['/queue/add', { entry: { ...entry('a'), prompt: '' } }],
     ['/queue/add', { entry: entry('a'), maxParallel: 'three' }],
+    ['/queue/add', { entry: { ...entry('a'), variant: 5 } }],
     ['/queue/remove', {}],
     ['/queue/take', { starting: 'a' }],
     ['/links/add', { taskId: 'a' }],
     ['/links/add', { taskId: 'a', sessionId: 's', sessionDirectory: 'relative' }],
   ] as const;
   for (const [path, body] of bad) assert.equal((await handle('POST', path, { directory, ...body }, deps)).status, 400, path);
+});
+
+test('an entry keeps its variant; one stored before 0.3 (no variant) is still read and starts with none', async (t) => {
+  const { directory, queueFile, deps } = await setup(t);
+  await post(deps, '/queue/add', { directory, entry: entry('a', { variant: 'high' }) });
+  assert.equal((await post(deps, '/queue/list', { directory })).queue[0]!.variant, 'high');
+  const old: Record<string, unknown> = { ...entry('b') };
+  delete old.variant;
+  await writeFile(queueFile, JSON.stringify({ version: 1, projects: { [directory]: { maxParallel: 3, entries: [old] } } }));
+  const listed = (await post(deps, '/queue/list', { directory })).queue;
+  assert.deepEqual(ids(listed), ['b']);
+  assert.equal(listed[0]!.variant ?? null, null);
 });
 
 test('a corrupt queue.json is set aside and read as empty', async (t) => {
@@ -192,14 +206,14 @@ const deliver = async (deps: Deps, body: unknown) => {
 test('a turn-finished event in the project drains its queue by path B; the link frees the slot', async (t) => {
   const { directory, deps, status, starts, running, linksFile } = await setup(t);
   await running('x', 'ses_x', 'busy');
-  await post(deps, '/queue/add', { directory, entry: entry('a', { model: 'p/m', agent: 'build' }), maxParallel: 1 });
+  await post(deps, '/queue/add', { directory, entry: entry('a', { model: 'p/m', agent: 'build', variant: 'max' }), maxParallel: 1 });
   await post(deps, '/queue/add', { directory, entry: entry('b') });
   // Still busy: nothing starts.
   await deliver(deps, event('turn-finished', 'ses_x', directory));
   assert.equal(starts.length, 0);
   status.set('ses_x', 'idle');
   await deliver(deps, event('turn-finished', 'ses_x', directory));
-  assert.deepEqual(starts, [{ prompt: 'Do a', directory, title: 'Task a', model: 'p/m', agent: 'build' }]);
+  assert.deepEqual(starts, [{ prompt: 'Do a', directory, title: 'Task a', model: 'p/m', agent: 'build', variant: 'max' }]);
   assert.deepEqual(ids((await post(deps, '/queue/list', { directory })).queue), ['b']);
   const links = JSON.parse(await readFile(linksFile, 'utf8')).projects[directory] as Array<{ taskId: string }>;
   assert.deepEqual(links.map((l) => l.taskId), ['x', 'a']);

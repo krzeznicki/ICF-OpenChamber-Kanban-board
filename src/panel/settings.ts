@@ -9,7 +9,12 @@ import { DEFAULT_SUMMARY_PROMPT } from './summaries.ts';
 export type { Preset } from './presets.ts';
 
 export type Location = 'worktree' | 'project';
-export type StartOptions = { presetId: string; model: string | null; agent: string | null; location: Location };
+/**
+ * How a session starts. `model` is `provider/model`, `variant` its thinking level (an OpenCode
+ * variant), `agent` a session agent's id; null means OpenChamber's current selection (path A) or,
+ * when the extension starts the session (path B), OpenCode's default.
+ */
+export type StartOptions = { presetId: string; model: string | null; agent: string | null; variant: string | null; location: Location };
 export type SummarySettings = { auto: boolean; language: string; prompt: string };
 /** What a card stores under card:<projectId>:<taskId>: its start options and its own summary language. */
 export type CardOptions = Partial<StartOptions> & { summaryLanguage?: string };
@@ -49,7 +54,7 @@ export const LOCATIONS: readonly Location[] = ['worktree', 'project'];
 export const DEFAULT_SETTINGS: Settings = {
   autoStart: true,
   maxParallel: 3,
-  defaults: { presetId: 'implement', model: null, agent: null, location: 'worktree' },
+  defaults: { presetId: 'implement', model: null, agent: null, variant: null, location: 'worktree' },
   presetByType: { enhancement: 'implement', bug: 'implement', research: 'plan' },
   summary: { auto: true, language: 'Polish', prompt: DEFAULT_SUMMARY_PROMPT },
   hideChildren: false,
@@ -72,9 +77,11 @@ const startPatch = (raw: unknown): Partial<StartOptions> => {
   const presetId = text(r.presetId);
   const model = text(r.model);
   const agent = text(r.agent);
+  const variant = text(r.variant);
   if (presetId !== undefined) out.presetId = presetId;
   if (model !== undefined) out.model = model;
   if (agent !== undefined) out.agent = agent;
+  if (variant !== undefined) out.variant = variant;
   if (r.location === 'worktree' || r.location === 'project') out.location = r.location;
   return out;
 };
@@ -170,13 +177,25 @@ export const resolveStart = (
   const byKind = task.kind === 'parent' ? ORCHESTRATE_PRESET_ID : undefined;
   const byType = task.type !== null ? s.presetByType[task.type] : undefined;
   const wanted = c.presetId ?? byKind ?? byType ?? s.defaults.presetId;
+  const model = c.model ?? s.defaults.model;
   return {
     presetId: presets.some((p) => p.id === wanted) ? wanted : FALLBACK_PRESET_ID,
-    model: c.model ?? s.defaults.model,
+    model,
     agent: c.agent ?? s.defaults.agent,
+    // A thinking level belongs to a model: without one it is dropped (the session would start on
+    // OpenChamber's selection, whose levels are unknown here).
+    variant: model === null ? null : (c.variant ?? s.defaults.variant),
     location: c.location ?? s.defaults.location,
   };
 };
+
+/**
+ * Path B (the extension starts the session through the service, with its own worktree) when a
+ * model, an agent or a thinking level is set: OpenChamber's start (path A) can set none of them and
+ * uses its current composer selection.
+ */
+export const startsFromExtension = (opts: StartOptions): boolean =>
+  opts.model !== null || opts.agent !== null || opts.variant !== null;
 
 // --- storage ---
 

@@ -3,6 +3,7 @@
 ## 0.3.0 (unreleased)
 
 - The task modal shows **State**, **Type** and **Move to** in a compact row right under the header, above Summary and Task, instead of inside the collapsed Settings section. Settings keeps Open on GitHub and the card's start options (still collapsed by default) and hides when it would be empty.
+- **Agent** and **Thinking** (the model's thinking level, OpenCode's `variant`) are picked from lists next to **Model** wherever start options are set: the card, Add task, the start form, Settings → Global and This project. The service's `/models/list` now asks OpenCode's server (`opencode api GET /api/model`, falling back to `opencode models`) and answers `{ models: [{ id, name, variants }] }`, so the model picker shows names; the new `/agents/list` (`GET /api/agent`) lists the session agents (primary, not hidden). Both are cached 10 minutes per project and answer a failure as `{ …: [], error }`. The pickers' default reads **Default — OpenChamber's current selection** when nothing is inherited, and a muted line under the start options explains that a set model, thinking level or agent starts the session from the extension (path B, its own worktree). A thinking level counts like a model or agent for the path choice, is passed to `sessions.start` and is kept in queued entries; it is dropped when no model is in force. Stored settings and cards without a thinking level read as none; queue entries from 0.2 still start.
 
 ## 0.2.0 (unreleased)
 
