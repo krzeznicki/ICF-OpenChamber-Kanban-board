@@ -180,6 +180,20 @@ const start = async (dir: string, input: Omit<Parameters<typeof startSession>[0]
   }
 };
 
+/** Where background failures go: `deps.log`, else stderr. */
+const logOf = (deps: Deps): ((message: string) => void) => deps.log ?? ((m: string) => console.error(m));
+
+const errorText = (e: unknown): string => (e instanceof Error ? e.message : String(e));
+
+/** Runs a cleanup after a change that already happened: a failure is logged as `message: why`, never thrown. */
+const bestEffort = async (deps: Deps, message: string, action: () => Promise<unknown>): Promise<void> => {
+  try {
+    await action();
+  } catch (e) {
+    logOf(deps)(`${message}: ${errorText(e)}`);
+  }
+};
+
 const liveLinks = async (dir: string, deps: Deps) => withStatus(await listLinks(linksFile(deps), dir), deps.sessions);
 
 const ERROR_MAX = 500;
@@ -193,7 +207,7 @@ const ERROR_MAX = 500;
  */
 export const drainProject = async (dir: string, deps: Deps): Promise<void> => {
   const { taken } = await takeFromQueue(queueFile(deps), dir, { links: () => liveLinks(dir, deps) });
-  const log = deps.log ?? ((m: string) => console.error(m));
+  const log = logOf(deps);
   await Promise.all(
     taken.map(async (e) => {
       try {
@@ -264,14 +278,8 @@ const tracker = (dir: string, deps: Deps): Promise<Tracker> => openTracker(dir, 
  */
 const followMove = async (id: string, task: Task, dir: string, deps: Deps): Promise<void> => {
   if (task.id === id) return;
-  const log = deps.log ?? ((m: string) => console.error(m));
-  const rekey = async (what: string, action: () => Promise<unknown>): Promise<void> => {
-    try {
-      await action();
-    } catch (e) {
-      log(`icf-kanban: ${id} is now ${task.id}, but its ${what} could not follow: ${e instanceof Error ? e.message : String(e)}`);
-    }
-  };
+  const rekey = (what: string, action: () => Promise<unknown>): Promise<void> =>
+    bestEffort(deps, `icf-kanban: ${id} is now ${task.id}, but its ${what} could not follow`, action);
   await rekey('session links', () => renameLinks(linksFile(deps), dir, id, task.id));
   await rekey('queue entry', () => renameInQueue(queueFile(deps), dir, id, task.id));
 };
@@ -401,25 +409,20 @@ const POST: Record<string, Route> = {
   },
   '/tasks/close': async (body, dir, deps) => {
     const id = str(body, 'id');
-    const w = body.withChildren;
-    const withChildren = w === undefined ? false : typeof w === 'boolean' ? w : invalid('"withChildren" must be a boolean');
-    return { tasks: await (await tracker(dir, deps)).close(id, { withChildren }) };
+    return { tasks: await (await tracker(dir, deps)).close(id, { withChildren: withChildrenOf(body) }) };
   },
   /**
    * Deletes the task (and with `withChildren` its sub-tasks); answers every deleted id. Their session
-   * links and queue entries go too. The delete is done by then, so a failing cleanup is only logged.
+   * links and queue entries go too. The delete is done by then, so a failing cleanup is only logged,
+   * each on its own (a broken links file does not keep the queue entry).
    */
   '/tasks/delete': async (body, dir, deps) => {
     const id = str(body, 'id');
     const deleted = await (await tracker(dir, deps)).remove(id, { withChildren: withChildrenOf(body) });
-    const log = deps.log ?? ((m: string) => console.error(m));
     for (const taskId of deleted) {
-      try {
-        await removeLinks(linksFile(deps), dir, taskId);
-        await removeFromQueue(queueFile(deps), dir, taskId);
-      } catch (e) {
-        log(`icf-kanban: ${taskId} was deleted, but its session links or queue entry could not be removed: ${e instanceof Error ? e.message : String(e)}`);
-      }
+      const why = (what: string): string => `icf-kanban: ${taskId} was deleted, but its ${what} could not be removed`;
+      await bestEffort(deps, why('session links'), () => removeLinks(linksFile(deps), dir, taskId));
+      await bestEffort(deps, why('queue entry'), () => removeFromQueue(queueFile(deps), dir, taskId));
     }
     return { deleted };
   },
@@ -501,6 +504,6 @@ export const handle = async (method: string, path: string, body: unknown, deps: 
   } catch (e) {
     if (e instanceof InvalidRequest) return error(400, 'INVALID', e.message);
     if (e instanceof TrackerError) return error(422, e.code, e.message);
-    return error(500, 'FAILED', e instanceof Error ? e.message : String(e));
+    return error(500, 'FAILED', errorText(e));
   }
 };
