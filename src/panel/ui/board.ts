@@ -1,6 +1,7 @@
-// The board shell: a toolbar (project switcher, "Hide sub-tasks", Refresh), a status slot for
-// banners, spinner and empty states, and the five columns. It draws what main.ts hands it and
-// reports clicks back; it holds no data of its own.
+// The board shell: a toolbar (project switcher, "Hide sub-tasks", Add task, Refresh), a slot for
+// the Add task form, a status slot for banners, spinner and empty states, and the five columns.
+// It draws what main.ts hands it and reports clicks back; it holds no data of its own. Dragging
+// is attached to `columns` by the editor (ui/dnd.ts).
 import { mountBanner, mountButton, mountEmpty, mountSelect, mountSpinner, mountSwitch } from '@openchamber/sdk/ui';
 import type { BannerTone, SelectOption } from '@openchamber/sdk/ui';
 import { COLUMNS, type BoardModel } from '../columns.ts';
@@ -10,6 +11,7 @@ export type BoardCallbacks = {
   onProject: (projectId: string) => void;
   onHideSubtasks: (hide: boolean) => void;
   onRefresh: () => void;
+  onAdd: () => void;
 };
 
 export type BoardStatus =
@@ -32,11 +34,13 @@ export const createBoard = (root: HTMLElement, callbacks: BoardCallbacks) => {
   const projectSlot = div('kb-project');
   const switchSlot = div('kb-hide');
   const spacer = div('kb-spacer');
+  const addSlot = div('kb-add-button');
   const refreshSlot = div('kb-refresh');
-  toolbar.append(projectSlot, switchSlot, spacer, refreshSlot);
+  toolbar.append(projectSlot, switchSlot, spacer, addSlot, refreshSlot);
+  const addForm = div('kb-add-slot');
   const status = div('kb-status');
   const columns = div('kb-columns');
-  shell.append(toolbar, status, columns);
+  shell.append(toolbar, addForm, status, columns);
   root.replaceChildren(shell);
 
   const project = mountSelect(projectSlot, {
@@ -58,12 +62,19 @@ export const createBoard = (root: HTMLElement, callbacks: BoardCallbacks) => {
       callbacks.onHideSubtasks(checked);
     },
   });
+  const add = mountButton(addSlot, { label: 'Add task', size: 'sm', disabled: true, onClick: callbacks.onAdd });
   const refresh = mountButton(refreshSlot, { label: 'Refresh', variant: 'outline', size: 'sm', onClick: callbacks.onRefresh });
 
   let statusDispose: (() => void) | null = null;
   let cardDisposers: Array<() => void> = [];
 
   return {
+    /** The persistent container the cards are drawn in; drag listeners live here. */
+    columns,
+    /** Where the Add task form is mounted; empty when closed. */
+    addForm,
+    /** "Add task" works only while a board is shown. */
+    setCanAdd: (enabled: boolean) => add.update({ disabled: !enabled }),
     setProjects: (options: SelectOption[], value: string | null) => {
       project.update({
         options,
@@ -94,7 +105,7 @@ export const createBoard = (root: HTMLElement, callbacks: BoardCallbacks) => {
       }
     },
     /** Draws the columns; null hides them (no project, no tracker, or an error). */
-    render: (board: BoardModel | null) => {
+    render: (board: BoardModel | null, busy: ReadonlySet<string> = new Set()) => {
       for (const d of cardDisposers) d();
       cardDisposers = [];
       columns.replaceChildren();
@@ -118,7 +129,7 @@ export const createBoard = (root: HTMLElement, callbacks: BoardCallbacks) => {
           list.append(none);
         }
         for (const model of cards) {
-          const card = renderCard(model);
+          const card = renderCard(model, busy.has(model.task.id));
           list.append(card.node);
           cardDisposers.push(card.dispose);
         }

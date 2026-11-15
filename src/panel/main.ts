@@ -1,12 +1,15 @@
 // Entry for both the rail panel (panel/index.html) and the full-screen page (panel/page.html).
 // The layout follows ctx.surface through the data-oc-surface attribute applyHostReady sets.
 // Data: projects and sessions from the host, tasks from our service via host.serviceRequest.
+// Writes (drag and drop, detail, Add task) live in edit.ts; onStart below is the one hook for
+// dropping a card on In Progress.
 import { connectHost } from '@openchamber/sdk';
 import type { GuestProject, GuestSessionRecord, HostReadyContext } from '@openchamber/sdk';
 import { applyHostReady } from '@openchamber/sdk/ui';
 import type { Task } from '../core/types.ts';
 import { ApiError, createApi, type Api, type ConfigResult, type ProjectConfig } from './api.ts';
-import { groupTasks } from './columns.ts';
+import { groupTasks, type Column } from './columns.ts';
+import { createEditor, type Editor } from './edit.ts';
 import { defaultChoice, loadNotice, setupOutcome, type ApiFailure, type NoticeModel, type TrackerChoice } from './setup.ts';
 import { createBoard, type Board } from './ui/board.ts';
 import { mountNotice } from './ui/notice.ts';
@@ -31,6 +34,8 @@ type State = {
   lastLoad: number;
   /** What the status slot shows; polling leaves the wizard alone so the user's pick survives. */
   view: 'none' | 'board' | 'wizard' | 'notice';
+  /** Where each drawn task sits, from the last draw. */
+  columns: Map<string, Column>;
 };
 
 const state: State = {
@@ -44,9 +49,11 @@ const state: State = {
   hideSubtasks: false,
   lastLoad: 0,
   view: 'none',
+  columns: new Map(),
 };
 
 let board: Board;
+let editor: Editor;
 let unsubscribeSessions: (() => void) | null = null;
 /** Bumped on every load and project switch; a stale answer is dropped. */
 let generation = 0;
@@ -65,11 +72,15 @@ const projectFor = (dir: string | null): GuestProject | null => {
 };
 
 const draw = (): void => {
+  board.setCanAdd(state.view === 'board' && state.config !== null);
+  state.columns = new Map();
   if (state.config === null || state.tasks === null) {
     board.render(null);
     return;
   }
-  board.render(groupTasks(state.tasks, state.sessions, new Set(), state.hideSubtasks));
+  const model = groupTasks(state.tasks, state.sessions, new Set(), state.hideSubtasks);
+  for (const [column, cards] of Object.entries(model)) for (const c of cards) state.columns.set(c.task.id, column as Column);
+  board.render(model, editor.busy);
   if (state.tasks.length === 0) {
     board.setStatus({
       kind: 'empty',
@@ -91,6 +102,7 @@ const failureOf = (e: unknown): ApiFailure => ({
 
 /** Clears the board and shows a notice whose button re-runs the load. */
 const showNotice = (notice: NoticeModel): void => {
+  editor.reset();
   state.config = null;
   state.tasks = null;
   state.view = 'notice';
@@ -99,6 +111,7 @@ const showNotice = (notice: NoticeModel): void => {
 };
 
 const showWizard = (api: Api, remote: string | null): void => {
+  editor.reset();
   state.config = null;
   state.tasks = null;
   state.view = 'wizard';
@@ -178,6 +191,7 @@ const load = async (): Promise<void> => {
     state.tasks = tasks;
     state.view = 'board';
     draw();
+    editor.refresh();
   } catch (e) {
     if (mine !== generation) return;
     showNotice(loadNotice(failureOf(e)));
@@ -194,6 +208,7 @@ const backgroundLoad = (): void => {
 const selectProject = async (id: string | null): Promise<void> => {
   if (id === state.projectId) return;
   state.projectId = id;
+  editor.reset();
   state.sessions = [];
   state.config = null;
   state.tasks = null;
@@ -225,6 +240,14 @@ const followHost = (): void => {
   void selectProject(next?.id ?? null);
 };
 
+/**
+ * Dropping a card on In Progress. Sessions are wired in Task 12: until then nothing is written
+ * and the card stays where it was.
+ */
+const onStart = (_task: Task): void => {
+  void host.toast({ kind: 'info', message: 'Starting agents is not wired yet' }).catch(() => {});
+};
+
 const start = (ctx: HostReadyContext): void => {
   injectStyles();
   const root = document.getElementById('root') ?? document.body;
@@ -239,6 +262,22 @@ const start = (ctx: HostReadyContext): void => {
       draw();
     },
     onRefresh: () => void load(),
+    onAdd: () => editor.showAdd(),
+  });
+  editor = createEditor({
+    host,
+    board,
+    api: () => {
+      const p = project();
+      return p === null || state.view !== 'board' ? null : createApi(host, p.directory);
+    },
+    tasks: () => state.tasks ?? [],
+    tracker: () => state.config?.tracker ?? 'local',
+    labels: () => state.config?.labels ?? {},
+    columnOf: (id) => state.columns.get(id) ?? null,
+    reload: load,
+    redraw: draw,
+    onStart,
   });
   board.setStatus({ kind: 'loading' });
 

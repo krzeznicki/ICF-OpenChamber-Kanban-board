@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 import { writeConfig } from '../src/core/config.ts';
@@ -294,4 +294,34 @@ test('/config/init github on a project already set up for local is 422 INVALID w
   assert.equal(r.status, 422);
   assert.equal((r.json as Err).error.code, 'INVALID');
   assert.match((r.json as Err).error.message, /local/);
+});
+
+test('POST /tasks/state changes exactly one line of a local issue file', async (t) => {
+  const directory = await local(t);
+  const id = '.scratch/feature/issues/01-thing.md';
+  const before = [
+    '# 01: Thing',
+    '',
+    '**What to build:** a thing, with *markdown* that must survive.',
+    '',
+    '**Blocked by:** None (can start immediately)',
+    '',
+    '**Status:** needs-triage',
+    '',
+    '- [ ] Criterion one',
+    '- [ ] Criterion two',
+    '',
+  ].join('\n');
+  await mkdir(join(directory, '.scratch', 'feature', 'issues'), { recursive: true });
+  await writeFile(join(directory, ...id.split('/')), before);
+
+  const moved = await handle('POST', '/tasks/state', { directory, id, state: 'ready-for-agent' }, deps);
+  assert.equal(moved.status, 200, JSON.stringify(moved.json));
+
+  const a = before.split('\n');
+  const b = (await readFile(join(directory, ...id.split('/')), 'utf8')).split('\n');
+  assert.equal(b.length, a.length);
+  const changed = a.map((line, i) => i).filter((i) => a[i] !== b[i]);
+  assert.deepEqual(changed, [6]);
+  assert.equal(b[6], '**Status:** ready-for-agent');
 });

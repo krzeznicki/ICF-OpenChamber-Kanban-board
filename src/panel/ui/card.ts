@@ -1,5 +1,6 @@
 // One task card: title, id, badges (type, ready-for-human, wontfix, blocked) and, for a parent,
-// its done/total sub-tasks with a progress bar. Read-only in this task.
+// its done/total sub-tasks with a progress bar. Focusable: Enter opens the detail, and a press
+// starts a drag (ui/dnd.ts). A card whose move is in flight is drawn busy.
 import { mountBadge, mountProgress } from '@openchamber/sdk/ui';
 import type { Tone } from '@openchamber/sdk/ui';
 import type { CardModel } from '../columns.ts';
@@ -8,12 +9,18 @@ const typeTone = (type: string): Tone => (type === 'bug' ? 'error' : type === 'e
 
 export type CardHandle = { node: HTMLElement; dispose: () => void };
 
-export const renderCard = (model: CardModel): CardHandle => {
+export const renderCard = (model: CardModel, busy = false): CardHandle => {
   const { task } = model;
   const disposers: Array<() => void> = [];
   const node = document.createElement('article');
   node.className = model.child ? 'kb-card is-child' : 'kb-card';
   node.dataset.taskId = task.id;
+  node.tabIndex = 0;
+  node.setAttribute('aria-label', `${task.title} (${task.id})`);
+  if (busy) {
+    node.classList.add('is-busy');
+    node.setAttribute('aria-busy', 'true');
+  }
 
   const title = document.createElement('div');
   title.className = 'kb-card-title';

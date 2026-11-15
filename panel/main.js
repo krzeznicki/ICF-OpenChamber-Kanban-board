@@ -1943,6 +1943,54 @@ ${GUEST_UI_LOOK_CSS}`;
     };
   };
 
+  // node_modules/@openchamber/sdk/dist/ui/field.js
+  var mountTextField = (root, initial) => {
+    ensureStyle(UI_CSS);
+    let props = initial;
+    const field2 = el("label", "oc-sdk oc-sdk-field");
+    const caption = el("span", "oc-sdk-field-label");
+    const input = props.multiline ? el("textarea", "oc-sdk-input") : el("input", "oc-sdk-input");
+    const note = el("span", "oc-sdk-field-note");
+    field2.append(caption, input, note);
+    root.append(field2);
+    const paint = () => {
+      setText(caption, props.label);
+      caption.hidden = !props.label;
+      if (input instanceof HTMLInputElement) {
+        input.type = props.password ? "password" : "text";
+      } else {
+        input.rows = props.rows ?? 3;
+      }
+      if (input.value !== props.value) {
+        input.value = props.value;
+      }
+      input.disabled = Boolean(props.disabled);
+      setAttr(input, "placeholder", props.placeholder);
+      input.dataset.mono = props.mono ? "true" : "false";
+      const invalid = Boolean(props.error);
+      field2.dataset.invalid = invalid ? "true" : "false";
+      input.setAttribute("aria-invalid", invalid ? "true" : "false");
+      const text = props.error ?? props.helper ?? "";
+      setText(note, text);
+      note.hidden = text === "";
+    };
+    const onInput = () => {
+      props.onChange(input.value);
+    };
+    input.addEventListener("input", onInput);
+    paint();
+    return {
+      update: (next) => {
+        props = { ...props, ...next };
+        paint();
+      },
+      dispose: () => {
+        input.removeEventListener("input", onInput);
+        field2.remove();
+      }
+    };
+  };
+
   // node_modules/@openchamber/sdk/dist/ui/icons.js
   var SVG_NS = "http://www.w3.org/2000/svg";
   var ICON_PATH = {
@@ -2694,6 +2742,637 @@ ${GUEST_UI_LOOK_CSS}`;
     return board2;
   };
 
+  // src/panel/moves.ts
+  var planMove = (task, from, to, openChildren2) => {
+    if (from === to) return { kind: "none", reason: "The task is already in this column" };
+    switch (to) {
+      case "backlog":
+        return { kind: "setState", state: "needs-triage" };
+      case "ready":
+        return { kind: "setState", state: "ready-for-agent" };
+      case "in_progress":
+        return task.state === "done" || from === "done" ? { kind: "none", reason: "Reopen the task (move it to Backlog or Ready) before starting it" } : { kind: "start" };
+      case "review":
+        return { kind: "none", reason: "Review is set by the agent's session" };
+      case "done":
+        return { kind: "close", askChildren: openChildren2 > 0 };
+    }
+  };
+  var openChildren = (task, tasks) => tasks.filter((t) => t.parentId === task.id && t.state !== "done").length;
+  var BASE_TYPES = ["enhancement", "bug", "chore", "research"];
+  var taskTypes = (tasks) => {
+    const used = /* @__PURE__ */ new Set();
+    for (const t of tasks) if (t.type !== null && t.type.trim() !== "" && !BASE_TYPES.includes(t.type)) used.add(t.type);
+    return [...BASE_TYPES, ...[...used].sort()];
+  };
+
+  // src/panel/ui/add.ts
+  var NONE = "";
+  var mountAddForm = (root, model, callbacks) => {
+    const form = document.createElement("form");
+    form.className = "kb-add";
+    form.noValidate = true;
+    const slot = (className) => {
+      const d = document.createElement("div");
+      d.className = className;
+      form.append(d);
+      return d;
+    };
+    const titleSlot = slot("kb-add-title");
+    const row = slot("kb-fields");
+    const typeSlot = document.createElement("div");
+    typeSlot.className = "kb-field";
+    const parentSlot = document.createElement("div");
+    parentSlot.className = "kb-field";
+    row.append(typeSlot, parentSlot);
+    const bodySlot = slot("kb-add-body");
+    const errorSlot = slot("kb-add-error");
+    const actions = slot("kb-actions");
+    root.replaceChildren(form);
+    let title = "";
+    let body = "";
+    let type = "enhancement";
+    let parent = NONE;
+    let busy = false;
+    let errorDispose = null;
+    const titleField = mountTextField(titleSlot, {
+      label: "Title",
+      value: "",
+      placeholder: "What should be done?",
+      onChange: (v2) => {
+        title = v2;
+        titleField.update({ value: v2, ...v2.trim() !== "" ? { error: void 0 } : {} });
+      }
+    });
+    const typeSelect = mountSelect(typeSlot, {
+      label: "Type",
+      value: type,
+      options: [{ id: NONE, label: "No type" }, ...model.types.map((t) => ({ id: t, label: t }))],
+      onChange: (id) => {
+        type = id;
+        typeSelect.update({ value: id });
+      }
+    });
+    const noParent = model.tracker === "local" ? "None (new feature)" : "None";
+    const parentSelect = mountSelect(parentSlot, {
+      label: "Parent",
+      value: parent,
+      options: [{ id: NONE, label: noParent }, ...model.parents],
+      searchable: model.parents.length > 8,
+      onChange: (id) => {
+        parent = id;
+        parentSelect.update({ value: id });
+      }
+    });
+    const bodyField = mountTextField(bodySlot, {
+      label: "Description",
+      value: "",
+      multiline: true,
+      rows: 3,
+      placeholder: "A few sentences: what and why.",
+      onChange: (v2) => {
+        body = v2;
+        bodyField.update({ value: v2 });
+      }
+    });
+    const create = mountButton(actions, { label: "Create in Backlog", size: "sm", onClick: () => submit() });
+    const cancel = mountButton(actions, { label: "Cancel", variant: "outline", size: "sm", onClick: () => callbacks.onCancel() });
+    const showError = (message) => {
+      errorDispose?.();
+      errorDispose = null;
+      if (message !== null) errorDispose = mountBanner(errorSlot, { tone: "error", title: "Could not create the task", body: message }).dispose;
+    };
+    const setBusy = (next) => {
+      busy = next;
+      create.update({ loading: next, disabled: next });
+      cancel.update({ disabled: next });
+      titleField.update({ disabled: next });
+      bodyField.update({ disabled: next });
+      typeSelect.update({ disabled: next });
+      parentSelect.update({ disabled: next });
+    };
+    const submit = () => {
+      if (busy) return;
+      const t = title.trim();
+      if (t === "") {
+        titleField.update({ error: "A title is required" });
+        form.querySelector(".kb-add-title input")?.focus();
+        return;
+      }
+      showError(null);
+      setBusy(true);
+      const input = {
+        title: t,
+        state: "needs-triage",
+        ...body.trim() !== "" ? { body: body.trim() } : {},
+        ...type !== NONE ? { type } : {},
+        ...parent !== NONE ? { parentId: parent } : {}
+      };
+      void callbacks.onSubmit(input).then((error) => {
+        if (!form.isConnected) return;
+        setBusy(false);
+        showError(error);
+      });
+    };
+    form.addEventListener("submit", (e) => {
+      e.preventDefault();
+      submit();
+    });
+    form.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && !e.defaultPrevented && !busy) callbacks.onCancel();
+    });
+    form.querySelector(".kb-add-title input")?.focus();
+    return () => {
+      errorDispose?.();
+      for (const h of [titleField, typeSelect, parentSelect, bodyField, create, cancel]) h.dispose();
+      form.remove();
+    };
+  };
+
+  // src/panel/ui/confirm.ts
+  var askChoice = (title, body, choices) => new Promise((resolve) => {
+    const backdrop = document.createElement("div");
+    backdrop.className = "kb-backdrop kb-confirm-backdrop";
+    const box = document.createElement("div");
+    box.className = "kb-confirm";
+    box.setAttribute("role", "alertdialog");
+    box.setAttribute("aria-modal", "true");
+    const head = document.createElement("h2");
+    head.className = "kb-confirm-title";
+    head.textContent = title;
+    const text = document.createElement("p");
+    text.className = "kb-confirm-body";
+    text.textContent = body;
+    const actions = document.createElement("div");
+    actions.className = "kb-actions";
+    box.append(head, text, actions);
+    backdrop.append(box);
+    const disposers = [];
+    const done = (answer) => {
+      document.removeEventListener("keydown", onKey, true);
+      for (const d of disposers) d();
+      backdrop.remove();
+      resolve(answer);
+    };
+    const onKey = (e) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      e.stopPropagation();
+      done(null);
+    };
+    for (const c of choices) {
+      disposers.push(mountButton(actions, { label: c.label, variant: c.variant ?? "default", size: "sm", onClick: () => done(c.id) }).dispose);
+    }
+    disposers.push(mountButton(actions, { label: "Cancel", variant: "outline", size: "sm", onClick: () => done(null) }).dispose);
+    backdrop.addEventListener("click", (e) => {
+      if (e.target === backdrop) done(null);
+    });
+    document.addEventListener("keydown", onKey, true);
+    document.body.append(backdrop);
+    actions.querySelector("button")?.focus();
+  });
+
+  // src/panel/ui/detail.ts
+  var STATES = ["needs-triage", "needs-info", "ready-for-agent", "ready-for-human", "wontfix", "done"];
+  var el2 = (tag, className, text) => {
+    const node = document.createElement(tag);
+    node.className = className;
+    if (text !== void 0) node.textContent = text;
+    return node;
+  };
+  var openDetail = (initial, callbacks) => {
+    const backdrop = el2("div", "kb-backdrop");
+    const sheet = el2("aside", "kb-sheet");
+    sheet.setAttribute("role", "dialog");
+    sheet.setAttribute("aria-modal", "true");
+    sheet.tabIndex = -1;
+    backdrop.append(sheet);
+    document.body.append(backdrop);
+    let disposers = [];
+    const clear = () => {
+      for (const d of disposers) d();
+      disposers = [];
+      sheet.replaceChildren();
+    };
+    const draw2 = (m) => {
+      clear();
+      const { task } = m;
+      sheet.setAttribute("aria-label", task.title);
+      sheet.setAttribute("aria-busy", String(m.busy));
+      const head = el2("div", "kb-sheet-head");
+      const titles = el2("div", "kb-sheet-titles");
+      titles.append(el2("h2", "kb-sheet-title", task.title), el2("div", "kb-card-id", task.id));
+      const closeSlot = el2("div", "kb-sheet-x");
+      head.append(titles, closeSlot);
+      disposers.push(mountButton(closeSlot, { label: "Done", variant: "ghost", size: "sm", onClick: callbacks.onDismiss }).dispose);
+      sheet.append(head);
+      const badges = el2("div", "kb-badges");
+      if (task.kind === "parent") disposers.push(mountBadge(badges, { label: "parent", tone: "primary" }).dispose);
+      if (m.busy) {
+        const spin = el2("span", "kb-inline-spin");
+        badges.append(spin);
+        disposers.push(mountSpinner(spin, { size: "sm", label: "Saving" }).dispose);
+      }
+      sheet.append(badges);
+      const meta = el2("dl", "kb-meta");
+      const row = (term, value) => {
+        meta.append(el2("dt", "", term), el2("dd", "", value));
+      };
+      if (task.parentId !== null) row("Parent", task.parentId);
+      if (task.blockedBy.length > 0) row("Blocked by", task.blockedBy.join(", "));
+      if (m.openChildren > 0) row("Open sub-tasks", String(m.openChildren));
+      if (meta.childElementCount > 0) sheet.append(meta);
+      const fields = el2("div", "kb-fields");
+      const stateSlot = el2("div", "kb-field");
+      const typeSlot = el2("div", "kb-field");
+      fields.append(stateSlot, typeSlot);
+      sheet.append(fields);
+      disposers.push(
+        mountSelect(stateSlot, {
+          label: "State",
+          value: task.state,
+          options: STATES.map((s) => {
+            const label = m.labels[s];
+            return { id: s, label: s, ...label !== void 0 && label !== s ? { hint: label } : {} };
+          }),
+          disabled: m.busy,
+          onChange: (id) => {
+            if (id !== task.state) callbacks.onState(id);
+          }
+        }).dispose
+      );
+      const types = task.type !== null && !m.types.includes(task.type) ? [...m.types, task.type] : m.types;
+      disposers.push(
+        mountSelect(typeSlot, {
+          label: "Type",
+          value: task.type,
+          placeholder: "No type",
+          options: types.map((t) => ({ id: t, label: t })),
+          disabled: m.busy,
+          onChange: (id) => {
+            if (id !== task.type) callbacks.onType(id);
+          }
+        }).dispose
+      );
+      if (m.moves.length > 0) {
+        const moveRow = el2("div", "kb-actions kb-actions-start");
+        moveRow.append(el2("span", "kb-actions-label", "Move to"));
+        for (const { to, label } of m.moves) {
+          disposers.push(
+            mountButton(moveRow, { label, variant: "outline", size: "xs", disabled: m.busy, onClick: () => callbacks.onMove(to) }).dispose
+          );
+        }
+        sheet.append(moveRow);
+      }
+      const actions = el2("div", "kb-actions kb-actions-start");
+      if (task.state !== "done") {
+        disposers.push(
+          mountButton(actions, { label: "Close", variant: "secondary", size: "sm", disabled: m.busy, onClick: () => callbacks.onClose(false) }).dispose
+        );
+        if (m.openChildren > 0) {
+          disposers.push(
+            mountButton(actions, {
+              label: "Close with sub-tasks",
+              variant: "destructive",
+              size: "sm",
+              disabled: m.busy,
+              onClick: () => callbacks.onClose(true)
+            }).dispose
+          );
+        }
+      }
+      const url = task.url;
+      if (url !== null) {
+        disposers.push(
+          mountButton(actions, { label: "Open on GitHub", variant: "ghost", size: "sm", onClick: () => callbacks.onOpenUrl(url) }).dispose
+        );
+      }
+      if (actions.childElementCount > 0) sheet.append(actions);
+      const body = el2("pre", "kb-detail-body", task.body.trim() === "" ? "No description." : task.body);
+      if (task.body.trim() === "") body.classList.add("is-empty");
+      sheet.append(body);
+    };
+    const onKey = (e) => {
+      if (e.key === "Escape" && !e.defaultPrevented) callbacks.onDismiss();
+    };
+    backdrop.addEventListener("click", (e) => {
+      if (e.target === backdrop) callbacks.onDismiss();
+    });
+    document.addEventListener("keydown", onKey);
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    draw2(initial);
+    sheet.focus();
+    return {
+      update: draw2,
+      dispose: () => {
+        document.removeEventListener("keydown", onKey);
+        clear();
+        backdrop.remove();
+        if (previous?.isConnected) previous.focus();
+      }
+    };
+  };
+
+  // src/panel/ui/dnd.ts
+  var THRESHOLD = 6;
+  var COLUMNS2 = ["backlog", "ready", "in_progress", "review", "done"];
+  var columnOf = (node) => {
+    const col = node?.closest(".kb-column") ?? null;
+    return col !== null && COLUMNS2.includes(col.dataset.column ?? "") ? col : null;
+  };
+  var interactive = (target, card) => {
+    const hit = target.closest('button, a, input, select, textarea, [role="button"]');
+    return hit !== null && hit !== card && card.contains(hit);
+  };
+  var attachDrag = (container, callbacks) => {
+    let press = null;
+    const setOver = (col) => {
+      if (press === null || press.over === col) return;
+      press.over?.classList.remove("is-drop-target");
+      press.over = col;
+      col?.classList.add("is-drop-target");
+    };
+    const finish = () => {
+      if (press === null) return;
+      press.over?.classList.remove("is-drop-target");
+      press.ghost?.remove();
+      press.card.classList.remove("is-dragging");
+      container.querySelector(`.kb-card[data-task-id="${CSS.escape(press.taskId)}"]`)?.classList.remove("is-dragging");
+      document.documentElement.classList.remove("kb-dragging");
+      if (container.hasPointerCapture(press.pointerId)) container.releasePointerCapture(press.pointerId);
+      press = null;
+    };
+    const onDown = (e) => {
+      if (press !== null && press.ghost === null) press = null;
+      if (press !== null || e.button !== 0 || !(e.target instanceof Element)) return;
+      const card = e.target.closest(".kb-card");
+      const taskId = card?.dataset.taskId;
+      const col = columnOf(card ?? null);
+      if (card == null || taskId === void 0 || col === null || interactive(e.target, card)) return;
+      const rect = card.getBoundingClientRect();
+      press = {
+        pointerId: e.pointerId,
+        taskId,
+        from: col.dataset.column,
+        card,
+        x: e.clientX,
+        y: e.clientY,
+        ghost: null,
+        dx: e.clientX - rect.left,
+        dy: e.clientY - rect.top,
+        width: rect.width,
+        over: null
+      };
+    };
+    const onMove = (e) => {
+      if (press === null || e.pointerId !== press.pointerId) return;
+      if (press.ghost === null) {
+        if (Math.hypot(e.clientX - press.x, e.clientY - press.y) < THRESHOLD) return;
+        if (!callbacks.canDrag(press.taskId)) {
+          press = null;
+          return;
+        }
+        const ghost = press.card.cloneNode(true);
+        ghost.classList.add("kb-ghost");
+        ghost.removeAttribute("tabindex");
+        ghost.setAttribute("aria-hidden", "true");
+        ghost.style.width = `${press.width}px`;
+        document.body.append(ghost);
+        press.ghost = ghost;
+        press.card.classList.add("is-dragging");
+        document.documentElement.classList.add("kb-dragging");
+        container.setPointerCapture(press.pointerId);
+      }
+      e.preventDefault();
+      press.ghost.style.transform = `translate(${e.clientX - press.dx}px, ${e.clientY - press.dy}px)`;
+      setOver(columnOf(document.elementFromPoint(e.clientX, e.clientY)));
+    };
+    const onUp = (e) => {
+      if (press === null || e.pointerId !== press.pointerId) return;
+      const { taskId, from, ghost } = press;
+      const target = ghost === null ? null : columnOf(document.elementFromPoint(e.clientX, e.clientY));
+      finish();
+      if (ghost === null) callbacks.onOpen(taskId);
+      else if (target !== null) callbacks.onDrop(taskId, from, target.dataset.column);
+    };
+    const onEscape = (e) => {
+      if (e.key === "Escape" && press !== null) finish();
+    };
+    const onKey = (e) => {
+      if (e.key !== "Enter" && e.key !== " ") return;
+      if (!(e.target instanceof HTMLElement) || !e.target.classList.contains("kb-card")) return;
+      const id = e.target.dataset.taskId;
+      if (id === void 0) return;
+      e.preventDefault();
+      callbacks.onOpen(id);
+    };
+    const onCancel = (e) => {
+      if (press !== null && e.pointerId === press.pointerId) finish();
+    };
+    container.addEventListener("pointerdown", onDown);
+    container.addEventListener("pointermove", onMove);
+    container.addEventListener("pointerup", onUp);
+    container.addEventListener("pointercancel", onCancel);
+    container.addEventListener("keydown", onKey);
+    document.addEventListener("keydown", onEscape);
+    return () => {
+      finish();
+      container.removeEventListener("pointerdown", onDown);
+      container.removeEventListener("pointermove", onMove);
+      container.removeEventListener("pointerup", onUp);
+      container.removeEventListener("pointercancel", onCancel);
+      container.removeEventListener("keydown", onKey);
+      document.removeEventListener("keydown", onEscape);
+    };
+  };
+
+  // src/panel/edit.ts
+  var errorText2 = (e) => e instanceof Error ? e.message : String(e);
+  var createEditor = (deps) => {
+    const moving = /* @__PURE__ */ new Set();
+    let detail = null;
+    let addDispose = null;
+    const find = (id) => deps.tasks().find((t) => t.id === id) ?? null;
+    const info = (message) => void deps.host.toast({ kind: "info", message }).catch(() => {
+    });
+    const fail = (message) => void deps.host.toast({ kind: "error", message }).catch(() => {
+    });
+    const detailModel = (task) => {
+      const tasks = deps.tasks();
+      const column = deps.columnOf(task.id) ?? (task.state === "done" ? "done" : task.state === "ready-for-agent" ? "ready" : "backlog");
+      const open = openChildren(task, tasks);
+      return {
+        task,
+        column,
+        openChildren: open,
+        types: taskTypes(tasks),
+        labels: deps.labels(),
+        moves: COLUMNS.filter(({ id }) => planMove(task, column, id, open).kind !== "none").map(({ id, title }) => ({ to: id, label: title })),
+        busy: moving.has(task.id)
+      };
+    };
+    const refreshDetail = () => {
+      if (detail === null) return;
+      const task = find(detail.id);
+      if (task === null) closeDetail();
+      else detail.handle.update(detailModel(task));
+    };
+    const run = async (id, action) => {
+      const api = deps.api();
+      if (api === null || moving.has(id)) return;
+      moving.add(id);
+      deps.redraw();
+      refreshDetail();
+      try {
+        await action(api);
+      } catch (e) {
+        fail(errorText2(e));
+      } finally {
+        moving.delete(id);
+        await deps.reload();
+        refreshDetail();
+      }
+    };
+    const close = async (task, askChildren) => {
+      let withChildren = false;
+      if (askChildren) {
+        const n = openChildren(task, deps.tasks());
+        const answer = await askChoice(
+          `Close \u201C${task.title}\u201D?`,
+          `It has ${n} open sub-task${n === 1 ? "" : "s"}.`,
+          [
+            { id: "all", label: "Close with sub-tasks", variant: "destructive" },
+            { id: "one", label: "Close only this task", variant: "secondary" }
+          ]
+        );
+        if (answer === null) return;
+        withChildren = answer === "all";
+      }
+      await run(task.id, (api) => api.close(task.id, withChildren));
+    };
+    const apply = (task, move2) => {
+      switch (move2.kind) {
+        case "none":
+          info(move2.reason);
+          return;
+        case "start":
+          deps.onStart(task);
+          return;
+        case "setState":
+          void run(task.id, (api) => api.setState(task.id, move2.state));
+          return;
+        case "close":
+          void close(task, move2.askChildren);
+          return;
+      }
+    };
+    const move = (id, from, to) => {
+      const task = find(id);
+      if (task === null || moving.has(id) || from === to) return;
+      apply(task, planMove(task, from, to, openChildren(task, deps.tasks())));
+    };
+    const closeDetail = () => {
+      const d = detail;
+      detail = null;
+      d?.handle.dispose();
+    };
+    const showDetail = (id) => {
+      const task = find(id);
+      if (task === null) return;
+      closeDetail();
+      const handle = openDetail(detailModel(task), {
+        onMove: (to) => {
+          const t = find(id);
+          if (t !== null) move(id, detailModel(t).column, to);
+        },
+        onState: (state2) => {
+          const t = find(id);
+          if (t === null) return;
+          if (state2 === "done") void close(t, openChildren(t, deps.tasks()) > 0);
+          else void run(id, (api) => api.setState(id, state2));
+          refreshDetail();
+        },
+        onType: (type) => void run(id, (api) => api.setType(id, type)),
+        onClose: (withChildren) => {
+          const t = find(id);
+          if (t === null) return;
+          if (!withChildren) {
+            void run(id, (api) => api.close(id, false));
+            return;
+          }
+          const n = openChildren(t, deps.tasks());
+          void askChoice(`Close \u201C${t.title}\u201D and its sub-tasks?`, `This closes the task and its ${n} open sub-task${n === 1 ? "" : "s"}.`, [
+            { id: "all", label: "Close with sub-tasks", variant: "destructive" }
+          ]).then((answer) => {
+            if (answer === "all") void run(id, (api) => api.close(id, true));
+          });
+        },
+        onOpenUrl: (url) => void deps.host.openUrl(url).catch((e) => fail(errorText2(e))),
+        onDismiss: closeDetail
+      });
+      detail = { id, handle };
+    };
+    const closeAdd = () => {
+      addDispose?.();
+      addDispose = null;
+      deps.board.addForm.replaceChildren();
+    };
+    const showAdd = () => {
+      if (addDispose !== null) {
+        deps.board.addForm.querySelector("input")?.focus();
+        return;
+      }
+      const tasks = deps.tasks();
+      addDispose = mountAddForm(
+        deps.board.addForm,
+        {
+          types: taskTypes(tasks),
+          parents: tasks.filter((t) => t.kind === "parent" && t.state !== "done").map((t) => ({ id: t.id, label: t.title, hint: t.id })),
+          tracker: deps.tracker()
+        },
+        {
+          onSubmit: async (input) => {
+            const api = deps.api();
+            if (api === null) return "No project is open.";
+            try {
+              const task = await api.create(input);
+              closeAdd();
+              void deps.host.toast({ kind: "success", message: `Created ${task.id}` }).catch(() => {
+              });
+              await deps.reload();
+              return null;
+            } catch (e) {
+              return errorText2(e);
+            }
+          },
+          onCancel: closeAdd
+        }
+      );
+    };
+    const detachDrag = attachDrag(deps.board.columns, {
+      canDrag: (id) => !moving.has(id),
+      onDrop: move,
+      onOpen: showDetail
+    });
+    return {
+      /** Ids whose write is in flight; the board draws them busy. */
+      busy: moving,
+      showAdd,
+      /** Project switch or the board went away: drop the sheet and the form. */
+      reset: () => {
+        closeDetail();
+        closeAdd();
+      },
+      /** After a reload from elsewhere (poll, Refresh): keep the open sheet current. */
+      refresh: refreshDetail,
+      dispose: () => {
+        detachDrag();
+        closeDetail();
+        closeAdd();
+      }
+    };
+  };
+
   // src/panel/setup.ts
   var TRACKER_NAMES = { local: "local Markdown files", github: "GitHub Issues" };
   var trackerName = (tracker) => TRACKER_NAMES[tracker];
@@ -2744,12 +3423,18 @@ ${GUEST_UI_LOOK_CSS}`;
 
   // src/panel/ui/card.ts
   var typeTone = (type) => type === "bug" ? "error" : type === "enhancement" ? "info" : "neutral";
-  var renderCard = (model) => {
+  var renderCard = (model, busy = false) => {
     const { task } = model;
     const disposers = [];
     const node = document.createElement("article");
     node.className = model.child ? "kb-card is-child" : "kb-card";
     node.dataset.taskId = task.id;
+    node.tabIndex = 0;
+    node.setAttribute("aria-label", `${task.title} (${task.id})`);
+    if (busy) {
+      node.classList.add("is-busy");
+      node.setAttribute("aria-busy", "true");
+    }
     const title = document.createElement("div");
     title.className = "kb-card-title";
     title.textContent = task.title;
@@ -2803,11 +3488,13 @@ ${GUEST_UI_LOOK_CSS}`;
     const projectSlot = div("kb-project");
     const switchSlot = div("kb-hide");
     const spacer = div("kb-spacer");
+    const addSlot = div("kb-add-button");
     const refreshSlot = div("kb-refresh");
-    toolbar.append(projectSlot, switchSlot, spacer, refreshSlot);
+    toolbar.append(projectSlot, switchSlot, spacer, addSlot, refreshSlot);
+    const addForm = div("kb-add-slot");
     const status = div("kb-status");
     const columns = div("kb-columns");
-    shell.append(toolbar, status, columns);
+    shell.append(toolbar, addForm, status, columns);
     root.replaceChildren(shell);
     const project2 = mountSelect(projectSlot, {
       value: null,
@@ -2828,10 +3515,17 @@ ${GUEST_UI_LOOK_CSS}`;
         callbacks.onHideSubtasks(checked);
       }
     });
+    const add = mountButton(addSlot, { label: "Add task", size: "sm", disabled: true, onClick: callbacks.onAdd });
     const refresh = mountButton(refreshSlot, { label: "Refresh", variant: "outline", size: "sm", onClick: callbacks.onRefresh });
     let statusDispose = null;
     let cardDisposers = [];
     return {
+      /** The persistent container the cards are drawn in; drag listeners live here. */
+      columns,
+      /** Where the Add task form is mounted; empty when closed. */
+      addForm,
+      /** "Add task" works only while a board is shown. */
+      setCanAdd: (enabled) => add.update({ disabled: !enabled }),
       setProjects: (options, value) => {
         project2.update({
           options,
@@ -2862,7 +3556,7 @@ ${GUEST_UI_LOOK_CSS}`;
         }
       },
       /** Draws the columns; null hides them (no project, no tracker, or an error). */
-      render: (board2) => {
+      render: (board2, busy = /* @__PURE__ */ new Set()) => {
         for (const d of cardDisposers) d();
         cardDisposers = [];
         columns.replaceChildren();
@@ -2886,7 +3580,7 @@ ${GUEST_UI_LOOK_CSS}`;
             list.append(none);
           }
           for (const model of cards) {
-            const card = renderCard(model);
+            const card = renderCard(model, busy.has(model.task.id));
             list.append(card.node);
             cardDisposers.push(card.dispose);
           }
@@ -2937,6 +3631,41 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
 .kb-wizard-body { margin: 0; color: var(--oc-muted); font-size: 0.9em; }
 .kb-wizard-actions { display: flex; justify-content: flex-end; }
 .kb-loading { display: flex; justify-content: center; padding: 2rem 0; }
+.kb-card { cursor: grab; user-select: none; -webkit-user-select: none; touch-action: none; }
+.kb-card:focus-visible { outline: 2px solid var(--oc-focus); outline-offset: 1px; }
+.kb-card.is-dragging { opacity: 0.4; }
+.kb-card.is-busy { opacity: 0.6; cursor: progress; }
+.kb-ghost { position: fixed; left: 0; top: 0; z-index: 60; pointer-events: none; margin: 0; cursor: grabbing;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.25); }
+:root.kb-dragging, :root.kb-dragging * { cursor: grabbing !important; }
+.kb-column.is-drop-target { border-color: var(--oc-primary); box-shadow: inset 0 0 0 1px var(--oc-primary); }
+.kb-add-slot:empty { display: none; }
+.kb-add { display: flex; flex-direction: column; gap: 0.5rem; max-width: 40rem; padding: 0.75rem;
+  background: var(--oc-elevated); color: var(--oc-elevated-fg); border: 1px solid var(--oc-border); border-radius: var(--oc-radius); }
+.kb-add-error:empty { display: none; }
+.kb-fields { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.kb-field { flex: 1 1 10rem; min-width: 0; }
+.kb-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 0.5rem; }
+.kb-actions-start { justify-content: flex-start; }
+.kb-actions-label { color: var(--oc-muted); font-size: 0.85em; }
+.kb-backdrop { position: fixed; inset: 0; z-index: 40; background: rgb(0 0 0 / 0.35); display: flex; justify-content: flex-end; }
+.kb-sheet { width: min(36rem, 100%); height: 100%; overflow-y: auto; display: flex; flex-direction: column; gap: 0.75rem;
+  padding: 1rem; background: var(--oc-bg); color: var(--oc-fg); border-left: 1px solid var(--oc-border); outline: none; }
+.kb-sheet-head { display: flex; align-items: flex-start; gap: 0.5rem; }
+.kb-sheet-titles { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 0.25rem; }
+.kb-sheet-title { margin: 0; font-size: 1.1em; font-weight: 600; overflow-wrap: anywhere; }
+.kb-inline-spin { display: inline-flex; align-items: center; }
+.kb-meta { display: grid; grid-template-columns: auto 1fr; gap: 0.25rem 0.75rem; margin: 0; font-size: 0.85em; }
+.kb-meta dt { color: var(--oc-muted); }
+.kb-meta dd { margin: 0; font-family: var(--oc-mono); overflow-wrap: anywhere; }
+.kb-detail-body { margin: 0; padding: 0.75rem; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--oc-mono); font-size: 0.85em;
+  background: var(--oc-muted-surface); border: 1px solid var(--oc-border); border-radius: var(--oc-radius); }
+.kb-detail-body.is-empty { color: var(--oc-muted); font-family: var(--oc-font); }
+.kb-confirm-backdrop { z-index: 70; justify-content: center; align-items: center; padding: 1rem; }
+.kb-confirm { width: min(26rem, 100%); display: flex; flex-direction: column; gap: 0.75rem; padding: 1rem;
+  background: var(--oc-elevated); color: var(--oc-elevated-fg); border: 1px solid var(--oc-border); border-radius: var(--oc-radius); }
+.kb-confirm-title { margin: 0; font-size: 1em; font-weight: 600; overflow-wrap: anywhere; }
+.kb-confirm-body { margin: 0; color: var(--oc-muted); font-size: 0.9em; }
 :root[data-oc-surface="panel"] .kb-columns { flex-direction: column; align-items: stretch; overflow-x: visible; }
 :root[data-oc-surface="panel"] .kb-column { flex: 0 0 auto; min-width: 0; }
 `;
@@ -3020,9 +3749,11 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     tasks: null,
     hideSubtasks: false,
     lastLoad: 0,
-    view: "none"
+    view: "none",
+    columns: /* @__PURE__ */ new Map()
   };
   var board;
+  var editor;
   var unsubscribeSessions = null;
   var generation = 0;
   var project = () => state.projects.find((p) => p.id === state.projectId) ?? null;
@@ -3036,11 +3767,15 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     return best;
   };
   var draw = () => {
+    board.setCanAdd(state.view === "board" && state.config !== null);
+    state.columns = /* @__PURE__ */ new Map();
     if (state.config === null || state.tasks === null) {
       board.render(null);
       return;
     }
-    board.render(groupTasks(state.tasks, state.sessions, /* @__PURE__ */ new Set(), state.hideSubtasks));
+    const model = groupTasks(state.tasks, state.sessions, /* @__PURE__ */ new Set(), state.hideSubtasks);
+    for (const [column, cards] of Object.entries(model)) for (const c of cards) state.columns.set(c.task.id, column);
+    board.render(model, editor.busy);
     if (state.tasks.length === 0) {
       board.setStatus({
         kind: "empty",
@@ -3056,6 +3791,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     message: e instanceof Error ? e.message : String(e)
   });
   var showNotice = (notice) => {
+    editor.reset();
     state.config = null;
     state.tasks = null;
     state.view = "notice";
@@ -3063,6 +3799,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     draw();
   };
   var showWizard = (api, remote) => {
+    editor.reset();
     state.config = null;
     state.tasks = null;
     state.view = "wizard";
@@ -3138,6 +3875,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
       state.tasks = tasks;
       state.view = "board";
       draw();
+      editor.refresh();
     } catch (e) {
       if (mine !== generation) return;
       showNotice(loadNotice(failureOf(e)));
@@ -3151,6 +3889,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
   var selectProject = async (id) => {
     if (id === state.projectId) return;
     state.projectId = id;
+    editor.reset();
     state.sessions = [];
     state.config = null;
     state.tasks = null;
@@ -3177,6 +3916,10 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     const next = projectFor(state.hostDirectory) ?? current ?? state.projects[0] ?? null;
     void selectProject(next?.id ?? null);
   };
+  var onStart = (_task) => {
+    void host.toast({ kind: "info", message: "Starting agents is not wired yet" }).catch(() => {
+    });
+  };
   var start = (ctx) => {
     injectStyles();
     const root = document.getElementById("root") ?? document.body;
@@ -3190,7 +3933,23 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
         state.hideSubtasks = hide;
         draw();
       },
-      onRefresh: () => void load()
+      onRefresh: () => void load(),
+      onAdd: () => editor.showAdd()
+    });
+    editor = createEditor({
+      host,
+      board,
+      api: () => {
+        const p = project();
+        return p === null || state.view !== "board" ? null : createApi(host, p.directory);
+      },
+      tasks: () => state.tasks ?? [],
+      tracker: () => state.config?.tracker ?? "local",
+      labels: () => state.config?.labels ?? {},
+      columnOf: (id) => state.columns.get(id) ?? null,
+      reload: load,
+      redraw: draw,
+      onStart
     });
     board.setStatus({ kind: "loading" });
     host.onDirectory((dir) => {
