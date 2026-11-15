@@ -1,8 +1,14 @@
-// The service's own JSON files under ~/.icf-kanban (links.json, queue.json): atomic writes, one
+// The service's own JSON files under ~/.icf-kanban (~/.icf-kanban-test for the test build;
+// links.json, queue.json): atomic writes, one
 // writer at a time per file, and a corrupt file set aside instead of silently overwritten.
 import { randomBytes } from 'node:crypto';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { homedir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { VARIANT, dataDirName, type Variant } from '../core/variant.ts';
+
+/** The service's data folder: ~/.icf-kanban (prod) or ~/.icf-kanban-test (test build). */
+export const dataDir = (variant: Variant = VARIANT, home: string = homedir()): string => join(home, dataDirName(variant));
 
 const code = (e: unknown): string | undefined => (e as { code?: unknown } | null)?.code as string | undefined;
 

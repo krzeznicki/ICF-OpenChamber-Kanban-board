@@ -1,14 +1,15 @@
 // Path B of the session start (see docs/superpowers/specs/2026-11-15-session-start-findings.md):
 // the service makes the worktree with git, starts the session through OpenChamber's service host
 // and remembers which session works on which task, because such a session carries no items.
-// The links live in ~/.icf-kanban/links.json, outside the package (a write inside it reloads the extension).
+// The links live in ~/.icf-kanban/links.json (~/.icf-kanban-test/ for the test build), outside the package (a write inside it reloads the extension).
 import { randomBytes } from 'node:crypto';
 import { homedir } from 'node:os';
 import { basename, dirname, join, sep } from 'node:path';
 import type { LinkStatus } from '../core/queue.ts';
 import type { Exec } from '../core/types.ts';
 import { TrackerError } from '../core/types.ts';
-import { readJson, serial, writeJson } from './store.ts';
+import { VARIANT, branchPrefix, type Variant } from '../core/variant.ts';
+import { dataDir, readJson, serial, writeJson } from './store.ts';
 
 export type Link = { taskId: string; sessionId: string; directory: string; createdAt: number };
 
@@ -44,7 +45,10 @@ export type StartInput = {
 /** Links kept per project; the oldest go first. */
 export const LINKS_PER_PROJECT = 500;
 
-export const defaultLinksFile = (): string => join(homedir(), '.icf-kanban', 'links.json');
+export const defaultLinksFile = (variant: Variant = VARIANT, home: string = homedir()): string => join(dataDir(variant, home), 'links.json');
+
+/** The branch a worktree start creates: icf/<slug>, icf-test/<slug> in the test build. */
+export const worktreeBranch = (slug: string, variant: Variant = VARIANT): string => `${branchPrefix(variant)}${slug}`;
 
 type LinksFile = { version: 1; projects: Record<string, Link[]> };
 
@@ -216,7 +220,7 @@ export const startSession = async (
   if (input.location === 'worktree') {
     const slug = worktreeSlug(input.taskId, input.title, deps.suffix?.());
     const path = join(worktreesRoot(input.directory), slug);
-    branch = `icf/${slug}`;
+    branch = worktreeBranch(slug);
     const r = await deps.exec('git', ['-C', input.directory, 'worktree', 'add', '-b', branch, path], { cwd: input.directory });
     if (r.code !== 0) {
       throw new TrackerError('FAILED', `Could not create the worktree ${path}: ${(r.stderr || r.stdout).trim() || `git exited ${r.code}`}`);

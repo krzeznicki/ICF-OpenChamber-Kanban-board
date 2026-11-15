@@ -10,9 +10,10 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { MAX_START_FAILURES, nextToStart, type LinkStatus, type QueueEntry } from '../core/queue.ts';
-import { readJson, serial, writeJson } from './store.ts';
+import { VARIANT, type Variant } from '../core/variant.ts';
+import { dataDir, readJson, serial, writeJson } from './store.ts';
 
-export const defaultQueueFile = (): string => join(homedir(), '.icf-kanban', 'queue.json');
+export const defaultQueueFile = (variant: Variant = VARIANT, home: string = homedir()): string => join(dataDir(variant, home), 'queue.json');
 
 export const DEFAULT_MAX_PARALLEL = 3;
 export const MAX_PARALLEL_LIMIT = 10;
