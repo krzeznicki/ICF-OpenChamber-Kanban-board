@@ -1158,12 +1158,17 @@ var update = (file, dir, fn) => serial(file, async () => {
 });
 var listQueue = async (file, dir) => (await readQueueFile(file)).projects[dir]?.entries ?? [];
 var queuedProjects = async (file) => Object.entries((await readQueueFile(file)).projects).filter(([, q]) => q.entries.length > 0).map(([dir]) => dir);
-var addToQueue = (file, dir, entry, maxParallel) => update(file, dir, (q) => {
-  if (maxParallel !== void 0) q.maxParallel = clampMax(maxParallel);
-  if (!q.entries.some((e) => e.taskId === entry.taskId)) q.entries.push(entry);
-  return [...q.entries];
-});
+var addToQueue = (file, dir, entry, maxParallel) => {
+  forgetRemoval(file, dir, entry.taskId);
+  return update(file, dir, (q) => {
+    if (maxParallel !== void 0) q.maxParallel = clampMax(maxParallel);
+    if (!q.entries.some((e) => e.taskId === entry.taskId)) q.entries.push(entry);
+    return [...q.entries];
+  });
+};
 var removeFromQueue = (file, dir, taskId) => {
+  const p = pendingFor(file, dir);
+  if (p.reserved.has(taskId) || p.inFlight.has(taskId)) p.removed.add(taskId);
   release(file, dir, taskId);
   return update(file, dir, (q) => {
     q.entries = q.entries.filter((e) => e.taskId !== taskId);
@@ -1172,6 +1177,7 @@ var removeFromQueue = (file, dir, taskId) => {
 };
 var requeueFailed = (file, dir, entry, error2) => {
   release(file, dir, entry.taskId);
+  if (forgetRemoval(file, dir, entry.taskId)) return listQueue(file, dir);
   return update(file, dir, (q) => {
     q.entries = q.entries.filter((e) => e.taskId !== entry.taskId);
     q.entries.unshift({ ...entry, lastError: error2 });
@@ -1183,7 +1189,7 @@ var pendingFor = (file, dir) => {
   const key = `${file}\0${dir}`;
   let p = pending.get(key);
   if (p === void 0) {
-    p = { reserved: /* @__PURE__ */ new Map(), inFlight: /* @__PURE__ */ new Map() };
+    p = { reserved: /* @__PURE__ */ new Map(), inFlight: /* @__PURE__ */ new Map(), removed: /* @__PURE__ */ new Set() };
     pending.set(key, p);
   }
   return p;
@@ -1191,6 +1197,7 @@ var pendingFor = (file, dir) => {
 var release = (file, dir, taskId) => {
   pendingFor(file, dir).reserved.delete(taskId);
 };
+var forgetRemoval = (file, dir, taskId) => pendingFor(file, dir).removed.delete(taskId);
 var inFlight = async (file, dir, taskId, fn) => {
   const p = pendingFor(file, dir);
   p.inFlight.set(taskId, (p.inFlight.get(taskId) ?? 0) + 1);
@@ -1256,8 +1263,12 @@ var addLink = (file, project, link) => serial(file, async () => {
 });
 var STATUS_CHECK_MAX = 50;
 var STATUS_CONCURRENCY = 8;
-var unknownSession = (e) => e?.status === 404;
-var linkStatuses = async (links, sessions) => {
+var unknownSession = (e) => {
+  const err = e;
+  return err?.status === 404 || err?.status === 410 || err?.code === "NOT_FOUND";
+};
+var STALE_LINK_MS = 24 * 60 * 60 * 1e3;
+var linkStatuses = async (links, sessions, now = Date.now()) => {
   const out = /* @__PURE__ */ new Map();
   const status = sessions?.status;
   const newest = /* @__PURE__ */ new Map();
@@ -1266,8 +1277,9 @@ var linkStatuses = async (links, sessions) => {
     if (n === void 0 || l.createdAt >= n.createdAt) newest.set(l.taskId, l);
   }
   const ask = [...newest.values()].sort((a, b) => b.createdAt - a.createdAt).slice(0, STATUS_CHECK_MAX);
+  const failed = (l) => now - l.createdAt >= STALE_LINK_MS ? "unknown" : "error";
   if (status === void 0) {
-    for (const l of ask) out.set(l.sessionId, "error");
+    for (const l of ask) out.set(l.sessionId, failed(l));
     return out;
   }
   let next = 0;
@@ -1277,7 +1289,7 @@ var linkStatuses = async (links, sessions) => {
       try {
         out.set(l.sessionId, await status(l.sessionId));
       } catch (e) {
-        out.set(l.sessionId, unknownSession(e) ? "unknown" : "error");
+        out.set(l.sessionId, unknownSession(e) ? "unknown" : failed(l));
       }
     }
   };
@@ -1420,6 +1432,7 @@ var drainProject = async (dir, deps2) => {
     taken.map(async (e) => {
       try {
         await start(dir, { taskId: e.taskId, title: e.title, prompt: e.prompt, model: e.model, agent: e.agent, location: e.location }, deps2);
+        forgetRemoval(queueFile(deps2), dir, e.taskId);
       } catch (err) {
         const why = (err instanceof Error ? err.message : String(err)).slice(0, ERROR_MAX);
         log(`icf-kanban: could not start the queued task ${e.taskId}: ${why}`);

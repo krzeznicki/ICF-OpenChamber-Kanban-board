@@ -17,6 +17,7 @@ import {
   inFlight,
   listQueue,
   queuedProjects,
+  forgetRemoval,
   release,
   removeFromQueue,
   requeueFailed,
@@ -171,6 +172,7 @@ export const drainProject = async (dir: string, deps: Deps): Promise<void> => {
     taken.map(async (e) => {
       try {
         await start(dir, { taskId: e.taskId, title: e.title, prompt: e.prompt, model: e.model, agent: e.agent, location: e.location }, deps);
+        forgetRemoval(queueFile(deps), dir, e.taskId);
       } catch (err) {
         const why = (err instanceof Error ? err.message : String(err)).slice(0, ERROR_MAX);
         log(`icf-kanban: could not start the queued task ${e.taskId}: ${why}`);

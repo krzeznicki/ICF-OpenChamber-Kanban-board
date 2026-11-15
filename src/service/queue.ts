@@ -78,14 +78,20 @@ export const queuedProjects = async (file: string): Promise<string[]> =>
     .map(([dir]) => dir);
 
 /** Appends the entry unless its task already waits (then only the limit is updated). */
-export const addToQueue = (file: string, dir: string, entry: QueueEntry, maxParallel?: number): Promise<QueueEntry[]> =>
-  update(file, dir, (q) => {
+export const addToQueue = (file: string, dir: string, entry: QueueEntry, maxParallel?: number): Promise<QueueEntry[]> => {
+  // Queued again by the user: an earlier removal no longer stands.
+  forgetRemoval(file, dir, entry.taskId);
+  return update(file, dir, (q) => {
     if (maxParallel !== undefined) q.maxParallel = clampMax(maxParallel);
     if (!q.entries.some((e) => e.taskId === entry.taskId)) q.entries.push(entry);
     return [...q.entries];
   });
+};
 
 export const removeFromQueue = (file: string, dir: string, taskId: string): Promise<QueueEntry[]> => {
+  const p = pendingFor(file, dir);
+  // Taken and still starting: remember the removal, so a failed start does not put it back.
+  if (p.reserved.has(taskId) || p.inFlight.has(taskId)) p.removed.add(taskId);
   release(file, dir, taskId);
   return update(file, dir, (q) => {
     q.entries = q.entries.filter((e) => e.taskId !== taskId);
@@ -94,11 +100,13 @@ export const removeFromQueue = (file: string, dir: string, taskId: string): Prom
 };
 
 /**
- * A taken entry whose start failed: back at the front of the queue (unless it was queued again
- * meanwhile) with the reason, and no longer reserved. It is retried on the next drain, not in a loop.
+ * A taken entry whose start failed: back at the front of the queue (replacing a copy queued again
+ * meanwhile) with the reason, and no longer reserved. It is retried on the next drain, not in a
+ * loop. An entry the user removed while it was starting stays removed.
  */
 export const requeueFailed = (file: string, dir: string, entry: QueueEntry, error: string): Promise<QueueEntry[]> => {
   release(file, dir, entry.taskId);
+  if (forgetRemoval(file, dir, entry.taskId)) return listQueue(file, dir);
   return update(file, dir, (q) => {
     q.entries = q.entries.filter((e) => e.taskId !== entry.taskId);
     q.entries.unshift({ ...entry, lastError: error });
@@ -108,13 +116,14 @@ export const requeueFailed = (file: string, dir: string, entry: QueueEntry, erro
 
 // --- tasks being started, in memory (a restarted service forgets them, which only frees slots) ---
 
-type Pending = { reserved: Map<string, number>; inFlight: Map<string, number> };
+/** `removed`: tombstones of taken entries the user removed while they were starting. */
+type Pending = { reserved: Map<string, number>; inFlight: Map<string, number>; removed: Set<string> };
 const pending = new Map<string, Pending>();
 const pendingFor = (file: string, dir: string): Pending => {
   const key = `${file}\0${dir}`;
   let p = pending.get(key);
   if (p === undefined) {
-    p = { reserved: new Map(), inFlight: new Map() };
+    p = { reserved: new Map(), inFlight: new Map(), removed: new Set() };
     pending.set(key, p);
   }
   return p;
@@ -124,6 +133,9 @@ const pendingFor = (file: string, dir: string): Pending => {
 export const release = (file: string, dir: string, taskId: string): void => {
   pendingFor(file, dir).reserved.delete(taskId);
 };
+
+/** Clears the task's removal tombstone; true when there was one. Called when its start ended. */
+export const forgetRemoval = (file: string, dir: string, taskId: string): boolean => pendingFor(file, dir).removed.delete(taskId);
 
 /** Counts a start the service runs from its start until it ends. */
 export const inFlight = async <T>(file: string, dir: string, taskId: string, fn: () => Promise<T>): Promise<T> => {

@@ -8,7 +8,7 @@ import type { QueueEntry } from '../src/core/queue.ts';
 import type { Exec } from '../src/core/types.ts';
 import { RESERVE_MS, takeFromQueue } from '../src/service/queue.ts';
 import { handle, type Deps } from '../src/service/routes.ts';
-import { addLink, type SessionHost } from '../src/service/sessions.ts';
+import { addLink, linkStatuses, STALE_LINK_MS, unknownSession, type SessionHost } from '../src/service/sessions.ts';
 
 type T = { after: (fn: () => Promise<void>) => void };
 type Status = 'idle' | 'busy' | 'waiting';
@@ -297,4 +297,82 @@ test('/session-events: a body that is not a session event is 400 and drains noth
   const { deps } = await setup(t);
   assert.equal((await handle('POST', '/session-events', { v: 99 }, deps)).status, 400);
   assert.equal((await handle('GET', '/session-events', undefined, deps)).status, 405);
+});
+
+test('unknownSession: 404, 410 or code NOT_FOUND mean a deleted session; other refusals do not', () => {
+  assert.equal(unknownSession({ status: 404, code: 'X' }), true);
+  assert.equal(unknownSession({ status: 410, code: 'GONE' }), true);
+  assert.equal(unknownSession({ status: 400, code: 'NOT_FOUND' }), true);
+  assert.equal(unknownSession({ status: 403, code: 'NOT_GRANTED' }), false);
+  assert.equal(unknownSession(new Error('boom')), false);
+  assert.equal(unknownSession(null), false);
+});
+
+test('a deleted linked session answered 410 / NOT_FOUND does not block the queue', async (t) => {
+  for (const refusal of [{ status: 410, code: 'GONE' }, { status: 400, code: 'NOT_FOUND' }]) {
+    const { directory, deps, linksFile } = await setup(t);
+    const gone: Deps = {
+      ...deps,
+      sessions: { ...deps.sessions!, status: async () => Promise.reject(Object.assign(new Error('gone'), refusal)) },
+    };
+    await addLink(linksFile, directory, { taskId: 'old', sessionId: 'ses_deleted', directory, createdAt: Date.now() });
+    await post(gone, '/queue/add', { directory, entry: entry('a') });
+    assert.deepEqual(ids((await post(gone, '/queue/take', { directory, maxParallel: 3 })).taken), ['a'], JSON.stringify(refusal));
+  }
+});
+
+test('a failed lookup blocks only for links younger than 24 h; an older link reads unknown', async (t) => {
+  const { directory, deps, linksFile, statusFails } = await setup(t);
+  statusFails.on = true;
+  await addLink(linksFile, directory, { taskId: 'old', sessionId: 'ses_old', directory, createdAt: Date.now() - STALE_LINK_MS - 1000 });
+  await post(deps, '/queue/add', { directory, entry: entry('a') });
+  assert.deepEqual(ids((await post(deps, '/queue/take', { directory, maxParallel: 3 })).taken), ['a']);
+  // A young link whose lookup fails still blocks.
+  await addLink(linksFile, directory, { taskId: 'new', sessionId: 'ses_new', directory, createdAt: Date.now() });
+  await post(deps, '/queue/add', { directory, entry: entry('b') });
+  assert.deepEqual((await post(deps, '/queue/take', { directory, maxParallel: 3 })).taken, []);
+  const at = Date.now();
+  const statuses = await linkStatuses(
+    [
+      { taskId: 'old', sessionId: 'ses_old', directory, createdAt: at - STALE_LINK_MS },
+      { taskId: 'new', sessionId: 'ses_new', directory, createdAt: at - STALE_LINK_MS + 1 },
+    ],
+    deps.sessions,
+    at,
+  );
+  assert.equal(statuses.get('ses_old'), 'unknown');
+  assert.equal(statuses.get('ses_new'), 'error');
+});
+
+test('take, then remove while the start is in flight, then the start fails: the entry stays removed', async (t) => {
+  const { directory, deps, logs } = await setup(t);
+  const rejects: Array<(e: Error) => void> = [];
+  let started: () => void = () => {};
+  const inStart = new Promise<void>((r) => (started = r));
+  const slow: Deps = {
+    ...deps,
+    sessions: {
+      ...deps.sessions!,
+      start: () =>
+        new Promise((_res, rej) => {
+          rejects.push(rej);
+          if (rejects.length === 2) started();
+        }),
+    },
+  };
+  await post(slow, '/queue/add', { directory, entry: entry('a') });
+  await post(slow, '/queue/add', { directory, entry: entry('b') });
+  const r = await handle('POST', '/session-events', event('turn-finished', 'ses_x', directory), slow);
+  const draining = r.after!();
+  await inStart;
+  // 'b' was taken too (limit 3); only 'a' is removed by the user.
+  assert.deepEqual(ids((await post(slow, '/queue/remove', { directory, taskId: 'a' })).queue), []);
+  for (const rej of rejects) rej(new Error('quota'));
+  await draining;
+  assert.equal(logs.filter((l) => l.includes('queued task a')).length, 1);
+  const left = (await post(deps, '/queue/list', { directory })).queue;
+  assert.deepEqual(ids(left), ['b'], 'a stays removed; b (not removed) is requeued');
+  // Queued again by the user: a later failure requeues it normally.
+  await post(deps, '/queue/add', { directory, entry: entry('a') });
+  assert.deepEqual(ids((await post(deps, '/queue/list', { directory })).queue), ['b', 'a']);
 });

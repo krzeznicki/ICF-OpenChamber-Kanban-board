@@ -84,15 +84,30 @@ export const addLink = (file: string, project: string, link: Link): Promise<void
 export const STATUS_CHECK_MAX = 50;
 const STATUS_CONCURRENCY = 8;
 
-/** A rejected status call that means "no such session" (HTTP 404), not a failed lookup. */
-const unknownSession = (e: unknown): boolean => (e as { status?: unknown } | null)?.status === 404;
+/**
+ * A rejected status call that means "no such session", not a failed lookup. The SDK does not say
+ * how the host answers for a deleted session, so ServiceHostError's `status` 404 or 410 and its
+ * `code` NOT_FOUND all count.
+ */
+export const unknownSession = (e: unknown): boolean => {
+  const err = e as { status?: unknown; code?: unknown } | null;
+  return err?.status === 404 || err?.status === 410 || err?.code === 'NOT_FOUND';
+};
+
+/** A link older than this cannot block the queue: a failed lookup of its session reads `unknown`. */
+export const STALE_LINK_MS = 24 * 60 * 60 * 1000;
 
 /**
  * The live status of each link's session: the newest link of each task (the newest
  * STATUS_CHECK_MAX tasks) is asked through sessions.status; the rest, and a session the host
- * does not know (404), are `unknown`. Any other rejection, or no status call at all, is `error`.
+ * does not know (unknownSession), are `unknown`. Any other rejection, or no status call at all, is
+ * `error`, except for a link older than STALE_LINK_MS, which cannot still be running and reads `unknown`.
  */
-export const linkStatuses = async (links: readonly Link[], sessions: SessionHost | undefined): Promise<Map<string, LinkStatus>> => {
+export const linkStatuses = async (
+  links: readonly Link[],
+  sessions: SessionHost | undefined,
+  now: number = Date.now(),
+): Promise<Map<string, LinkStatus>> => {
   const out = new Map<string, LinkStatus>();
   const status = sessions?.status;
   const newest = new Map<string, Link>();
@@ -101,8 +116,9 @@ export const linkStatuses = async (links: readonly Link[], sessions: SessionHost
     if (n === undefined || l.createdAt >= n.createdAt) newest.set(l.taskId, l);
   }
   const ask = [...newest.values()].sort((a, b) => b.createdAt - a.createdAt).slice(0, STATUS_CHECK_MAX);
+  const failed = (l: Link): LinkStatus => (now - l.createdAt >= STALE_LINK_MS ? 'unknown' : 'error');
   if (status === undefined) {
-    for (const l of ask) out.set(l.sessionId, 'error');
+    for (const l of ask) out.set(l.sessionId, failed(l));
     return out;
   }
   let next = 0;
@@ -112,7 +128,7 @@ export const linkStatuses = async (links: readonly Link[], sessions: SessionHost
       try {
         out.set(l.sessionId, await status(l.sessionId));
       } catch (e) {
-        out.set(l.sessionId, unknownSession(e) ? 'unknown' : 'error');
+        out.set(l.sessionId, unknownSession(e) ? 'unknown' : failed(l));
       }
     }
   };
