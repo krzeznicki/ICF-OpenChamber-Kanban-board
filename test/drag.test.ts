@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { step, THRESHOLD, type Press } from '../src/panel/drag.ts';
+import { insertionBefore, linksAt, step, THRESHOLD, type Press } from '../src/panel/drag.ts';
 
 const down = { type: 'down', pointerId: 1, button: 0, taskId: 't', from: 'backlog', x: 0, y: 0 } as const;
 const pressed: Press = { pointerId: 1, taskId: 't', from: 'backlog', x: 0, y: 0, dragging: false };
@@ -82,4 +82,43 @@ test('no accepting card under the pointer (or the card itself) falls back to the
 
 test('a click on a card still opens it, whatever is under the pointer', () => {
   assert.deepEqual(step(pressed, { type: 'up', pointerId: 1, to: null, onto: 'p' }).effect, { kind: 'open', taskId: 't' });
+});
+
+test('released in its own column at an insertion point: the card is reordered, not moved', () => {
+  assert.deepEqual(step(dragging, { type: 'up', pointerId: 1, to: 'backlog', before: 'u' }), {
+    press: null,
+    effect: { kind: 'reorder', taskId: 't', column: 'backlog', before: 'u' },
+  });
+  assert.deepEqual(step(dragging, { type: 'up', pointerId: 1, to: 'backlog', before: null }).effect, {
+    kind: 'reorder',
+    taskId: 't',
+    column: 'backlog',
+    before: null,
+  });
+  // Another column ignores the insertion point (the column move, as before); a link still wins.
+  assert.deepEqual(step(dragging, { type: 'up', pointerId: 1, to: 'ready', before: 'u' }).effect.kind, 'drop');
+  assert.deepEqual(step(dragging, { type: 'up', pointerId: 1, to: 'backlog', before: 'u', onto: 'p' }).effect.kind, 'link');
+});
+
+test('insertionBefore: the first other card whose middle is below the pointer; none: last', () => {
+  const cards = [
+    { id: 'a', top: 0, bottom: 40 },
+    { id: 't', top: 50, bottom: 90 },
+    { id: 'b', top: 100, bottom: 140 },
+  ];
+  assert.equal(insertionBefore(10, cards, 't'), 'a');
+  assert.equal(insertionBefore(30, cards, 't'), 'b');
+  // Over the dragged card itself: before the next one, i.e. where it already is.
+  assert.equal(insertionBefore(70, cards, 't'), 'b');
+  assert.equal(insertionBefore(130, cards, 't'), null);
+  assert.equal(insertionBefore(10, [], 't'), null);
+});
+
+test('linksAt: a card of another column links anywhere; in its own column only its middle half, the edges reorder', () => {
+  const card = { top: 100, bottom: 200 };
+  assert.equal(linksAt(105, card, false), true);
+  assert.equal(linksAt(105, card, true), false);
+  assert.equal(linksAt(150, card, true), true);
+  assert.equal(linksAt(130, card, true), true);
+  assert.equal(linksAt(190, card, true), false);
 });
