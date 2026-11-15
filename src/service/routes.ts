@@ -347,15 +347,24 @@ const POST: Record<string, Route> = {
   },
   /**
    * Links an existing task under an existing parent. The answer's task can have a new id (local:
-   * the file moved); the task's session links and queue entry are re-keyed to it first.
+   * the file moved); the task's session links and queue entry are re-keyed to it first. The move is
+   * done by then, so a failing re-key is logged and the answer is still the moved task.
    */
   '/tasks/parent': async (body, dir, deps) => {
     const id = str(body, 'id');
     const parentId = str(body, 'parentId');
     const task = await (await tracker(dir, deps)).setParent(id, parentId);
     if (task.id !== id) {
-      await renameLinks(linksFile(deps), dir, id, task.id);
-      await renameInQueue(queueFile(deps), dir, id, task.id);
+      const log = deps.log ?? ((m: string) => console.error(m));
+      const rekey = async (what: string, action: () => Promise<unknown>): Promise<void> => {
+        try {
+          await action();
+        } catch (e) {
+          log(`icf-kanban: ${id} is now ${task.id}, but its ${what} could not follow: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      };
+      await rekey('session links', () => renameLinks(linksFile(deps), dir, id, task.id));
+      await rekey('queue entry', () => renameInQueue(queueFile(deps), dir, id, task.id));
     }
     return { task };
   },

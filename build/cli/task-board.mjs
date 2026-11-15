@@ -400,6 +400,12 @@ var createGithubTracker = (root, exec, labels) => {
       const found = await graph([n, p], false);
       for (const k of [n, p]) if ((found.get(k) ?? null) === null) throw new TrackerError("NOT_FOUND", `Issue not found: #${k}`);
       if (relationsOf(found.get(n)).parent === p) throw new TrackerError("INVALID", `${idOf(n)} is already a sub-issue of ${idOf(p)}`);
+      const seen = /* @__PURE__ */ new Set([p]);
+      for (let up = relationsOf(found.get(p)).parent; up !== null && !seen.has(up); ) {
+        if (up === n) throw new TrackerError("INVALID", `${idOf(p)} is a descendant of ${idOf(n)}; linking would make a cycle`);
+        seen.add(up);
+        up = relationsOf((await graph([up], false)).get(up) ?? null).parent;
+      }
       await run(["issue", "edit", String(n), "--parent", String(p)]);
       return get(idOf(n));
     },
@@ -825,6 +831,26 @@ var createLocalTracker = (root) => {
       await writeFile2(join2(issuesDir(feature), file), patchLine(data.text, "Blocked by", blockersValue(rest)));
     }
   };
+  const extraFiles = async (feature) => {
+    const list = async (path) => {
+      try {
+        return await readdir(path, { withFileTypes: true });
+      } catch (e) {
+        if (isNotFound2(e)) return [];
+        throw e;
+      }
+    };
+    const out = [];
+    for (const d of await list(featureDir(feature))) {
+      if (d.name === "spec.md" && d.isFile()) continue;
+      if (d.name === "issues" && d.isDirectory()) {
+        for (const i of await list(issuesDir(feature))) out.push(`issues/${i.name}${i.isDirectory() ? "/" : ""}`);
+        continue;
+      }
+      out.push(`${d.name}${d.isDirectory() ? "/" : ""}`);
+    }
+    return out.sort();
+  };
   const removeIfEmpty = async (path) => {
     try {
       await rmdir(path);
@@ -843,6 +869,12 @@ var createLocalTracker = (root) => {
     if (ref.kind === "ticket" && ref.feature === to.feature) throw new TrackerError("INVALID", `${id} is already a ticket of ${parentId}`);
     if (ref.kind === "parent" && (await issueFiles(issuesDir(ref.feature))).length > 0) {
       throw new TrackerError("INVALID", `${id} has tickets of its own; a feature with tickets cannot become a ticket (two levels only)`);
+    }
+    if (ref.kind === "parent") {
+      const extra = await extraFiles(ref.feature);
+      if (extra.length > 0) {
+        throw new TrackerError("INVALID", `${id} cannot become a ticket: its folder also holds ${extra.join(", ")}; move or remove those first`);
+      }
     }
     const text = task.body === "" ? `# ${task.title}
 ` : task.body;

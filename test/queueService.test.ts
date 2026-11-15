@@ -469,3 +469,23 @@ test('/tasks/parent: missing ids are 400; a refused link is 422 and changes noth
   assert.equal(self.status, 422);
   assert.equal((self.json as { error: { code: string } }).error.code, 'INVALID');
 });
+
+test('/tasks/parent: once the task moved, a failing re-key of its links is logged and the answer is still the moved task', async (t) => {
+  const { directory, deps, logs, root } = await setup(t);
+  await writeConfig(directory, 'local');
+  const tracker = createLocalTracker(directory);
+  const a = (await tracker.create({ title: 'A' })).id;
+  const b = (await tracker.create({ title: 'B' })).id;
+  const ticket = (await tracker.create({ title: 'Move me', parentId: a })).id;
+  await post(deps, '/queue/add', { directory, entry: entry(ticket) });
+  const broken = join(root, 'links-is-a-folder');
+  await mkdir(broken);
+
+  const r = await handle('POST', '/tasks/parent', { directory, id: ticket, parentId: b }, { ...deps, linksFile: broken });
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  const task = (r.json as { task: Task }).task;
+  assert.equal(task.id, '.scratch/b/issues/01-move-me.md');
+  assert.ok(logs.some((m) => m.includes(ticket) && m.includes(task.id)), logs.join('\n'));
+  // The queue is re-keyed on its own, not skipped because the links failed.
+  assert.deepEqual(ids((await post(deps, '/queue/list', { directory })).queue), [task.id]);
+});
