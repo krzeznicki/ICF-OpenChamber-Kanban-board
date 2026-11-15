@@ -12373,6 +12373,11 @@ ${ref}`,
     return { kind: "board" };
   };
 
+  // src/core/variant.ts
+  var toVariant = (value) => value === "test" ? "test" : "prod";
+  var VARIANT = toVariant(false ? void 0 : "prod");
+  var panelId = (variant) => variant === "test" ? "icf-kanban-test" : "icf-kanban";
+
   // src/panel/launcher.ts
   var SETTLE_MS = 6e4;
   var createLauncher = (deps) => {
@@ -12640,7 +12645,7 @@ ${note}` : note;
       }
       const result = await host2.startSession(
         clampStartSessionRequest({
-          providerId: "icf-kanban",
+          providerId: panelId(VARIANT),
           id: task.id,
           title: task.title,
           url: task.url ?? `https://icf-kanban.local/t/${encodeURIComponent(task.id)}`,
@@ -12887,10 +12892,6 @@ ${note}` : note;
       reset
     };
   };
-
-  // src/core/variant.ts
-  var toVariant = (value) => value === "test" ? "test" : "prod";
-  var VARIANT = toVariant(false ? void 0 : "prod");
 
   // src/panel/ui/card.ts
   var typeTone = (type) => type === "bug" ? "error" : type === "enhancement" ? "info" : "neutral";

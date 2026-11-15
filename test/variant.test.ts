@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { SERVICE_INSTRUCTIONS_MAX } from '@openchamber/sdk';
-import { VARIANT, branchPrefix, toVariant } from '../src/core/variant.ts';
+import { VARIANT, branchPrefix, panelId, toVariant } from '../src/core/variant.ts';
 import { dataDir } from '../src/service/store.ts';
 import { defaultLinksFile, worktreeBranch } from '../src/service/sessions.ts';
 import { defaultQueueFile } from '../src/service/queue.ts';
@@ -55,4 +55,12 @@ test('test instructions: say TEST development build, name its own CLI, only when
   for (const cmd of ['list --ready', 'next', 'claim <id>', 'state <id>', 'create --title', '--dir <the project root']) assert.ok(text.includes(cmd), cmd);
   assert.ok(text.length <= SERVICE_INSTRUCTIONS_MAX && text.length < 900, `length ${text.length}`);
   assert.ok(!text.includes('\n'));
+});
+
+test('panel id (and session item providerId): prod icf-kanban, test icf-kanban-test, matching the manifests', async () => {
+  const { testManifest } = await import('../src/build/testBuild.ts');
+  const { readFileSync } = await import('node:fs');
+  const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+  assert.equal(panelId('prod'), pkg.openchamber.contributes.panel.id);
+  assert.equal(panelId('test'), (testManifest(pkg, 'abc1234') as any).openchamber.contributes.panel.id);
 });

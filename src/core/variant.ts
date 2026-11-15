@@ -17,3 +17,6 @@ export const dataDirName = (variant: Variant): string => (variant === 'test' ? '
 
 /** Prefix of the branch a worktree start creates: icf/<slug> or icf-test/<slug>. */
 export const branchPrefix = (variant: Variant): string => (variant === 'test' ? 'icf-test/' : 'icf/');
+
+/** The panel id (manifest contributes.panel.id), also the providerId of the session items it starts. */
+export const panelId = (variant: Variant): string => (variant === 'test' ? 'icf-kanban-test' : 'icf-kanban');
