@@ -204,7 +204,6 @@ Found while building it (see [the session-start findings](docs/superpowers/specs
 - **Path B makes its own worktree.** A card with a model or agent set (and every card the service starts from the queue) whose location is a new worktree gets a worktree made with `git` under `<parent>/<repo>-worktrees/`, on a branch `icf/<slug>`, not by OpenChamber's Quick worktree. Such sessions may look different in the sidebar.
 - **With the board closed, the queue drains only by path B.** Queued cards then run with the model and agent stored on the card, or the session default when none is set.
 - Worktrees of started sessions are never merged or removed for you (only the worktree of a path B start that failed is removed).
-- A card's "don't claim" rule is told to the agent in its first message; an agent already running keeps the prompt it got.
 - The open live checks below have not been done yet.
 
 ## Manual checks before first release
