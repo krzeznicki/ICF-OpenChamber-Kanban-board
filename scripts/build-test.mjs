@@ -11,11 +11,11 @@ import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { TEST_ICON, checkOutDir, prepareOutDir, testIcon, testManifest, testSkill, writeMarker } from '../src/build/testBuild.ts';
+import { TEST_ICON, checkOutDir, prepareOutDir, resolveOutDir, testIcon, testManifest, testSkill, writeMarker } from '../src/build/testBuild.ts';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const { values: args } = parseArgs({ options: { out: { type: 'string' } } });
-const out = resolve(args.out ?? process.env.KANBAN_TEST_OUT ?? join(homedir(), 'openchamber-extensions', 'icf-kanban-test'));
+const out = resolveOutDir(args.out, process.env.KANBAN_TEST_OUT, homedir());
 
 // Refuse a bad output folder before spending time on the build.
 checkOutDir(out, root);

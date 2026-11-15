@@ -18,7 +18,7 @@ const obj = (v: unknown, what: string): Json => {
 };
 
 /**
- * The test build's package.json: own id, name, icon and a prerelease version, plus
+ * The test build's package.json: own id, name, icon and a prerelease version (`<v>-test.g<sha>`), plus
  * `kanbanBuild.variant`. Development-only fields (scripts, devDependencies) are dropped.
  * The input is not modified.
  */
@@ -27,7 +27,8 @@ export const testManifest = (pkg: Json, sha: string): Json => {
   if (typeof out.version !== 'string' || out.version === '') throw new Error('build:test: package.json has no version');
   if (!/^[0-9a-f]{4,40}$/.test(sha)) throw new Error(`build:test: "${sha}" is not a git sha`);
   out.name = TEST_ID;
-  out.version = `${out.version}-test.${sha}`;
+  // `g` keeps the prerelease identifier alphanumeric: an all-digit sha with a leading 0 is not valid semver.
+  out.version = `${out.version}-test.g${sha}`;
   if (typeof out.description === 'string') out.description = `${TEST_NAME} (local development build). ${out.description}`;
   delete out.scripts;
   delete out.devDependencies;
@@ -47,7 +48,8 @@ const DESCRIPTION_PREFIX = 'Kanban TEST (development build) — only when the us
 
 /**
  * One SKILL.md of the test build: folder and `name` become kanban-test-<x>, the description
- * starts with the TEST notice, and mentions of the sibling skills point at their test names.
+ * starts with the TEST notice, mentions of the sibling skills point at their test names, and the
+ * CLI fallback names the Kanban TEST extension folder.
  */
 export const testSkill = (folder: string, text: string): { folder: string; text: string } => {
   if (!folder.startsWith(SKILL_PREFIX)) throw new Error(`build:test: skill folder "${folder}" does not start with ${SKILL_PREFIX}`);
@@ -62,7 +64,7 @@ export const testSkill = (folder: string, text: string): { folder: string; text:
   const siblings = (t: string): string => t.replace(/\bicf-kanban-(create|next|start|status)\b/g, `${TEST_SKILL_PREFIX}$1`);
   lines[nameAt] = `name: ${renamed}`;
   lines[descAt] = `description: ${DESCRIPTION_PREFIX} ${siblings(lines[descAt]!.slice('description:'.length).trim())}`;
-  const body = siblings(text.slice(front[0].length));
+  const body = siblings(text.slice(front[0].length)).replaceAll('ICF-kanban extension folder', 'Kanban TEST extension folder');
   return { folder: renamed, text: `---\n${lines.join('\n')}\n---\n${body}` };
 };
 
@@ -85,6 +87,17 @@ export const testIcon = (svg: string): string => {
     '<circle cx="18" cy="18" r="5.4" fill="currentColor" stroke="none" mask="url(#kt-t)"/>' +
     '</svg>\n'
   );
+};
+
+/**
+ * The output folder: --out, else $KANBAN_TEST_OUT (empty counts as unset), else
+ * ~/openchamber-extensions/icf-kanban-test. A leading `~/` (or a lone `~`) is the home folder.
+ */
+export const resolveOutDir = (argOut: string | undefined, envOut: string | undefined, home: string): string => {
+  const given = [argOut, envOut].find((v) => v !== undefined && v.trim() !== '');
+  if (given === undefined) return join(home, 'openchamber-extensions', TEST_ID);
+  const expanded = given === '~' ? home : given.startsWith('~/') ? join(home, given.slice(2)) : given;
+  return resolve(expanded);
 };
 
 const inside = (child: string, parent: string): boolean => {

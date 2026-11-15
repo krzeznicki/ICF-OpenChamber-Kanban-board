@@ -2,10 +2,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseManifestJson } from '@openchamber/sdk/schemas';
-import { MARKER, checkOutDir, prepareOutDir, testIcon, testManifest, testSkill, writeMarker } from '../src/build/testBuild.ts';
+import { MARKER, checkOutDir, prepareOutDir, resolveOutDir, testIcon, testManifest, testSkill, writeMarker } from '../src/build/testBuild.ts';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as Record<string, any>;
@@ -15,7 +15,7 @@ test('testManifest: own id, name, icon, prerelease version and variant; input un
   const out = testManifest(pkg, 'abc1234') as Record<string, any>;
   assert.equal(JSON.stringify(pkg), before);
   assert.equal(out.name, 'icf-kanban-test');
-  assert.equal(out.version, `${pkg.version}-test.abc1234`);
+  assert.equal(out.version, `${pkg.version}-test.gabc1234`);
   assert.equal(out.openchamber.contributes.panel.id, 'icf-kanban-test');
   assert.equal(out.openchamber.contributes.panel.name, 'Kanban TEST');
   assert.equal(out.openchamber.contributes.panel.icon, 'assets/kanban-test.svg');
@@ -48,6 +48,7 @@ description: Start work on a task. Use after icf-kanban-next picked one.
 # Start
 
 Run icf-kanban-status first; the folder icf-kanban-extension stays.
+Fallback: \`node <ICF-kanban extension folder>/build/cli/task-board.mjs\`.
 `;
 
 test('testSkill: renames folder and name, prefixes the description, points sibling skills at test names', () => {
@@ -63,6 +64,7 @@ description: Kanban TEST (development build) — only when the user asks for the
 # Start
 
 Run kanban-test-status first; the folder icf-kanban-extension stays.
+Fallback: \`node <Kanban TEST extension folder>/build/cli/task-board.mjs\`.
 `,
   );
 });
@@ -79,6 +81,8 @@ test('testSkill works on every real skill and keeps the frontmatter single-line'
     assert.match(renamed, /^kanban-test-(create|next|start|status)$/);
     assert.ok(text.startsWith(`---\nname: ${renamed}\ndescription: Kanban TEST (development build)`), renamed);
     assert.doesNotMatch(text, /icf-kanban-(create|next|start|status)/, renamed);
+    assert.doesNotMatch(text, /ICF-kanban extension folder/, renamed);
+    assert.match(text, /<Kanban TEST extension folder>\/build\/cli\/task-board\.mjs/, renamed);
   }
 });
 
@@ -144,4 +148,24 @@ test('checkOutDir reports missing, empty or marked without changing anything', (
   writeFileSync(join(dir, 'x'), 'x');
   assert.equal(checkOutDir(dir, '/nonexistent/repo'), 'marked');
   assert.deepEqual(readdirSync(dir).sort(), [MARKER, 'x']);
+});
+
+test('testManifest: an all-digit sha with a leading zero still gives a valid semver prerelease', () => {
+  const out = testManifest(pkg, '0123456') as Record<string, any>;
+  assert.equal(out.version, `${pkg.version}-test.g0123456`);
+  assert.match(out.version, /^\d+\.\d+\.\d+-test\.g[0-9a-f]+$/);
+  assert.ok(parseManifestJson(JSON.stringify(out)).ok);
+});
+
+test('resolveOutDir: --out, then KANBAN_TEST_OUT (empty is unset), then the default; ~/ is the home folder', () => {
+  const home = '/Users/u';
+  assert.equal(resolveOutDir(undefined, undefined, home), '/Users/u/openchamber-extensions/icf-kanban-test');
+  assert.equal(resolveOutDir(undefined, '', home), '/Users/u/openchamber-extensions/icf-kanban-test');
+  assert.equal(resolveOutDir(undefined, '  ', home), '/Users/u/openchamber-extensions/icf-kanban-test');
+  assert.equal(resolveOutDir(undefined, '~/x/kt', home), '/Users/u/x/kt');
+  assert.equal(resolveOutDir('~/a', '/env/b', home), '/Users/u/a');
+  assert.equal(resolveOutDir('/abs/a', '/env/b', home), '/abs/a');
+  assert.equal(resolveOutDir(undefined, '/env/b', home), '/env/b');
+  assert.equal(resolveOutDir(undefined, '~', home), '/Users/u');
+  assert.equal(resolveOutDir(undefined, '~other/x', home), resolve('~other/x'));
 });
