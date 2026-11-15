@@ -1,20 +1,10 @@
-// The task modal, opened by a click on any card: reading first. A header (title, id, state and type
-// badges, ×, and "Open session" when the task has a session that may be opened, or "Session
-// archived"; "Unarchive" for a task archived by "Archive done"), then a compact row (always shown,
-// under the header, not sticky): state and type selects and "Move to" buttons (the keyboard path
-// for drag and drop; Done asks about open sub-tasks). Then collapsible sections: Summary (the
-// personal summary or a Summarise button), Task (the body as formatted markdown,
-// ui/markdownView.ts), Sub-tasks (a parent's children, a click opens that task, "Unlink" removes
-// one; an "Add sub-task" button that opens, on demand, "New task" where addTask.ts allows it and
-// "Existing tasks" where link.ts offers some) and Settings, collapsed by default: Open on GitHub and the card's
-// start options (ui/startOptions.ts).
-// It sits on the shell it shares with Add task (ui/modal.ts). Which sections are open is
-// remembered (settings.ts Sections). It draws what it is given and reports choices; the editor
-// (edit.ts) runs them and asks to confirm. The compact row also has a "Parent" picker when the task
-// has a parent or may move under one (link.ts linkChoices); with a parent set, its "No parent"
-// unlinks the task, as does "Unlink" on a row of the parent's sub-task list. The header's "Edit"
-// turns the Task section into a title and description form (taskEdit.ts) until Save or Cancel;
-// "Delete" asks first (edit.ts, taskDelete.ts).
+// The task modal, opened by a click on any card. A header (title, id, badges, Edit, Delete, ×, and
+// the task's session: "Open session" or why not; "Unarchive" for an archived task), a compact row
+// (State, Type, Parent with "No parent", Move to), then collapsible sections whose open state is
+// remembered: Summary, Task (the body as markdown, or the Edit form, ui/editForm.ts), Sub-tasks
+// (rows with Unlink; "Add sub-task" opens New task / Existing tasks) and Settings (Open on GitHub,
+// start options, ui/startOptions.ts). It sits on the modal shell (ui/modal.ts), draws what it is
+// given and reports choices; the editor (edit.ts) runs them and asks to confirm.
 import { mountBadge, mountBanner, mountButton, mountList, mountSelect, mountSpinner, mountTabs, mountTextField } from '@openchamber/sdk/ui';
 import type { Tone } from '@openchamber/sdk/ui';
 import type { Task, TaskState } from '../../core/types.ts';
@@ -29,6 +19,7 @@ import type { EditText } from '../taskEdit.ts';
 import { mountCloseButton } from './closeButton.ts';
 import { renderMarkdown } from './markdownView.ts';
 import { FILTER_OVER, openModalShell } from './modal.ts';
+import { mountEditForm } from './editForm.ts';
 import { mountStartOptions } from './startOptions.ts';
 
 const NO_TYPE = '';
@@ -806,91 +797,5 @@ const mountAddSubtask = (
       typeSelect.dispose();
       add.dispose();
     },
-  };
-};
-
-/**
- * The Task section's Edit form: title, description (markdown), Save and Cancel. The service's
- * error shows in it; `onDone` runs after a successful save or Cancel (the section redraws).
- */
-const mountEditForm = (
-  box: HTMLElement,
-  initial: EditText,
-  onSave: (draft: EditText) => Promise<string | null>,
-  onDone: () => void,
-): (() => void) => {
-  const titleSlot = el('div', 'kb-field');
-  const bodySlot = el('div', 'kb-field');
-  const errorSlot = el('div', 'kb-add-error');
-  const actions = el('div', 'kb-actions kb-actions-start');
-  box.append(titleSlot, bodySlot, errorSlot, actions);
-
-  const draft: EditText = { ...initial };
-  let busy = false;
-  let disposed = false;
-  let errorDispose: (() => void) | null = null;
-  const titleField = mountTextField(titleSlot, {
-    label: 'Title',
-    value: draft.title,
-    onChange: (v) => {
-      draft.title = v;
-      titleField.update({ value: v, ...(v.trim() !== '' ? { error: undefined } : {}) });
-    },
-  });
-  const bodyField = mountTextField(bodySlot, {
-    label: 'Description',
-    value: draft.body,
-    multiline: true,
-    rows: 12,
-    placeholder: 'Markdown',
-    onChange: (v) => {
-      draft.body = v;
-      bodyField.update({ value: v });
-    },
-  });
-  const save = mountButton(actions, { label: 'Save', size: 'sm', onClick: () => submit() });
-  const cancel = mountButton(actions, { label: 'Cancel', size: 'sm', variant: 'outline', onClick: () => !busy && onDone() });
-
-  const showError = (message: string | null): void => {
-    errorDispose?.();
-    errorDispose = null;
-    if (message !== null) errorDispose = mountBanner(errorSlot, { tone: 'error', title: 'Could not save the task', body: message }).dispose;
-  };
-  const setBusy = (next: boolean): void => {
-    busy = next;
-    save.update({ loading: next, disabled: next });
-    cancel.update({ disabled: next });
-    titleField.update({ disabled: next });
-    bodyField.update({ disabled: next });
-  };
-  const submit = (): void => {
-    if (busy) return;
-    if (draft.title.trim() === '') {
-      titleField.update({ error: 'A title is required' });
-      titleSlot.querySelector('input')?.focus();
-      return;
-    }
-    showError(null);
-    setBusy(true);
-    void onSave({ ...draft }).then((error) => {
-      if (disposed) return;
-      setBusy(false);
-      if (error === null) onDone();
-      else showError(error);
-    });
-  };
-  titleSlot.addEventListener('keydown', (e) => {
-    if (e.key !== 'Enter' || e.isComposing) return;
-    e.preventDefault();
-    submit();
-  });
-
-  return () => {
-    disposed = true;
-    errorDispose?.();
-    titleField.dispose();
-    bodyField.dispose();
-    save.dispose();
-    cancel.dispose();
   };
 };
