@@ -83,7 +83,8 @@ export interface Tracker {
    * Deletes the task for good; returns the ids of every task it deleted (sub-tasks first), so
    * callers drop what they keep under them. Local: a feature with tickets needs `withChildren`
    * (the whole folder goes; other files in it refuse). GitHub: `gh issue delete` (repo admins only);
-   * without `withChildren` sub-issues stay as top-level issues.
+   * `withChildren` deletes the whole subtree (closed sub-issues and their sub-issues too); without
+   * it sub-issues stay as top-level issues.
    */
   remove(id: string, opts: { withChildren: boolean }): Promise<string[]>;
 }
