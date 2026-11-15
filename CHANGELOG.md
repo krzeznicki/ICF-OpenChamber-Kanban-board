@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- An existing task can be linked under an existing parent: `Tracker.setParent(id, parentId)`, the service's `/tasks/parent` (`{ id, parentId }` -> `{ task }`), the panel API's `setParent` and `task-board parent <id> <parentId>` (with `--json`). GitHub sets the native parent with `gh issue edit --parent` (gh 2.94+, the existing minimum), replacing an old one; the number stays. Locally the file moves into the parent's feature as its next ticket (heading renumbered, its `Blocked by` dropped, and its old feature's tickets that listed it lose that blocker), or a feature with no tickets becomes a ticket and its folder is removed; a feature with tickets, a ticket as the parent, the task itself and its current parent are refused (INVALID). The returned task carries the new id; the service re-keys the task's session links (`links.json`) and queue entry to it, so the card keeps its session.
 - `npm run build:test` builds a local test extension, **Kanban TEST** (id `icf-kanban-test`), from the checked-out branch into `~/openchamber-extensions/icf-kanban-test` (or `--out`/`KANBAN_TEST_OUT`), to install once next to production and reload on every rebuild. It keeps its data in `~/.icf-kanban-test/`, makes `icf-test/<slug>` worktree branches, ships its skills as `kanban-test-*`, tells agents it is the TEST build and shows a **TEST** badge. The variant is baked in at build time (`__KANBAN_VARIANT__`); the committed production bundles are built as `prod` and behave as before.
 
 ## 0.3.0

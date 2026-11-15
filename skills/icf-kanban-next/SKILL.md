@@ -19,4 +19,6 @@ If `docs/agents/issue-tracker.md` is missing, ask the user which tracker they wa
 2. Take the first unclaimed one exactly as the `icf-kanban-start` skill says: `task-board show <id>`, `task-board claim <id>`, do the work, then `task-board state <id> done`.
 3. Take another only if the user asked you to work through the board.
 
+To put a task under another feature or parent issue, use `task-board parent <id> <parentId>` and go on with the id it prints (in a local tracker the id changes).
+
 Never pick a `needs-triage`, `needs-info` or `ready-for-human` task: those wait for a person.

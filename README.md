@@ -247,6 +247,8 @@ Commands:
          [--blocked-by <id>[,<id>...]]...   blockers: repeat the option or separate ids with commas
   state <id> <state>                    set the state ('done' closes)
   claim <id>                            take a sub-task before working on it (orchestrator)
+  parent <id> <parentId>                make an existing task a sub-task of another (prints its id,
+                                        which changes in a local tracker: the file moves)
   next                                  first ready-for-agent ticket with no open blocker
   close <id> [--with-children]          close a task (and a feature's tickets)
   init <local|github>                   write docs/agents/issue-tracker.md
@@ -262,6 +264,8 @@ Exit codes: 0 ok, 2 usage, 3 nothing found, 4 tracker error
 ```
 
 Ids are paths locally (`.scratch/login/issues/01-empty-password.md`, `.scratch/login/spec.md`) and `#<number>` on GitHub. Locally, a task created without `--parent` becomes a feature (`spec.md`). Only a `ready-for-agent` ticket can be claimed.
+
+`parent <id> <parentId>` links an existing task under an existing parent. On GitHub it sets the native parent (`gh issue edit --parent`, replacing an old one) and the number stays. Locally the file moves: a ticket of another feature becomes the parent feature's next ticket (renumbered; its `Blocked by` numbers are dropped, and its old feature's tickets that listed it lose that blocker), and a feature with no tickets becomes a ticket and its folder is removed. A feature with tickets, a ticket as the parent, the task itself or its current parent are refused (exit 4). The new id is printed; the board's session links and queued start follow it.
 
 ## Limits
 
