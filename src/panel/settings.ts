@@ -142,6 +142,19 @@ export const skillUse = (s: Settings, found: readonly string[]): SkillUse => ({ 
  * in use and cover Diagnose, the built-in default for `bug` is Diagnose instead of Implement. A
  * preset the user set for `bug` in either layer still wins.
  */
+/**
+ * The thinking level over layers, top first: a layer that sets a model owns the level (its own, or
+ * none), so a level is never inherited onto another model; a layer setting only a level overrides.
+ */
+const ownVariant = (layers: ReadonlyArray<Partial<StartOptions> | undefined>): string | null => {
+  for (const l of layers) {
+    if (l === undefined) continue;
+    if (l.model !== undefined && l.model !== null) return l.variant ?? null;
+    if (l.variant !== undefined && l.variant !== null) return l.variant;
+  }
+  return null;
+};
+
 export const resolveSettings = (global: SettingsLayer, project: SettingsLayer, found: readonly string[] = []): Settings => {
   const g = parseSettings(global);
   const p = parseSettings(project);
@@ -152,7 +165,7 @@ export const resolveSettings = (global: SettingsLayer, project: SettingsLayer, f
   return {
     autoStart: p.autoStart ?? g.autoStart ?? d.autoStart,
     maxParallel: clampParallel(maxParallel),
-    defaults: { ...d.defaults, ...g.defaults, ...p.defaults },
+    defaults: { ...d.defaults, ...g.defaults, ...p.defaults, variant: ownVariant([p.defaults, g.defaults]) },
     presetByType: { ...byType, ...g.presetByType, ...p.presetByType },
     summary: { ...d.summary, ...g.summary, ...p.summary },
     hideChildren: p.hideChildren ?? g.hideChildren ?? d.hideChildren,
@@ -183,8 +196,9 @@ export const resolveStart = (
     model,
     agent: c.agent ?? s.defaults.agent,
     // A thinking level belongs to a model: without one it is dropped (the session would start on
-    // OpenChamber's selection, whose levels are unknown here).
-    variant: model === null ? null : (c.variant ?? s.defaults.variant),
+    // OpenChamber's selection, whose levels are unknown here),
+    // and a card that sets a model owns the level too (never another model's inherited one).
+    variant: model === null ? null : c.model !== undefined ? (c.variant ?? null) : (c.variant ?? s.defaults.variant),
     location: c.location ?? s.defaults.location,
   };
 };

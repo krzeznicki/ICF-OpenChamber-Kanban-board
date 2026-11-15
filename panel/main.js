@@ -3686,6 +3686,14 @@ ${ref}`,
   };
   var diagnose = BUILTIN_PRESETS.find((p) => p.id === DIAGNOSE_PRESET_ID);
   var skillUse = (s, found) => ({ use: s.useMattSkills, found });
+  var ownVariant = (layers) => {
+    for (const l of layers) {
+      if (l === void 0) continue;
+      if (l.model !== void 0 && l.model !== null) return l.variant ?? null;
+      if (l.variant !== void 0 && l.variant !== null) return l.variant;
+    }
+    return null;
+  };
   var resolveSettings = (global, project2, found = []) => {
     const g = parseSettings(global);
     const p = parseSettings(project2);
@@ -3696,7 +3704,7 @@ ${ref}`,
     return {
       autoStart: p.autoStart ?? g.autoStart ?? d.autoStart,
       maxParallel: clampParallel(maxParallel),
-      defaults: { ...d.defaults, ...g.defaults, ...p.defaults },
+      defaults: { ...d.defaults, ...g.defaults, ...p.defaults, variant: ownVariant([p.defaults, g.defaults]) },
       presetByType: { ...byType, ...g.presetByType, ...p.presetByType },
       summary: { ...d.summary, ...g.summary, ...p.summary },
       hideChildren: p.hideChildren ?? g.hideChildren ?? d.hideChildren,
@@ -3715,8 +3723,9 @@ ${ref}`,
       model,
       agent: c.agent ?? s.defaults.agent,
       // A thinking level belongs to a model: without one it is dropped (the session would start on
-      // OpenChamber's selection, whose levels are unknown here).
-      variant: model === null ? null : c.variant ?? s.defaults.variant,
+      // OpenChamber's selection, whose levels are unknown here),
+      // and a card that sets a model owns the level too (never another model's inherited one).
+      variant: model === null ? null : c.model !== void 0 ? c.variant ?? null : c.variant ?? s.defaults.variant,
       location: c.location ?? s.defaults.location
     };
   };
@@ -3949,7 +3958,7 @@ ${ref}`,
   };
 
   // src/panel/models.ts
-  var DEFAULT_MODEL_ID = "";
+  var DEFAULT_ID = "";
   var STATUS_ID = "status:list";
   var HINT_MAX = 80;
   var defaultLabel = (inherited, word = "Default") => inherited === null ? `${word} \u2014 OpenChamber's current selection` : `${word} (${inherited})`;
@@ -3957,7 +3966,7 @@ ${ref}`,
   var START_PATH_NOTE = "With a model, agent or thinking level set, the extension starts the session itself, in its own worktree (or the project folder). With none set, OpenChamber starts it with its current selection.";
   var clip = (s) => s.length <= HINT_MAX ? s : `${s.slice(0, HINT_MAX - 1)}\u2026`;
   var statusRow = (what, error2) => error2 === void 0 ? { id: STATUS_ID, label: `Loading ${what}\u2026` } : { id: STATUS_ID, label: `Couldn\u2019t load ${what} \u2014 try again`, hint: clip(error2) };
-  var stored = (value, known, missing) => value === null || value === DEFAULT_MODEL_ID || (known ?? []).includes(value) ? [] : [known === null ? { id: value, label: value } : { id: value, label: value, hint: missing }];
+  var stored = (value, known, missing) => value === null || value === DEFAULT_ID || (known ?? []).includes(value) ? [] : [known === null ? { id: value, label: value } : { id: value, label: value, hint: missing }];
   var byLabel = (a, b) => {
     const x = a.label.toLowerCase();
     const y = b.label.toLowerCase();
@@ -3965,7 +3974,7 @@ ${ref}`,
   };
   var modelOptions = (input) => {
     const { models, value } = input;
-    const out = [{ id: DEFAULT_MODEL_ID, label: input.defaultLabel }];
+    const out = [{ id: DEFAULT_ID, label: input.defaultLabel }];
     out.push(...stored(value, models === null ? null : models.map((m) => m.id), "not in the list"));
     if (models === null) return [...out, statusRow("models", input.error)];
     const seen = /* @__PURE__ */ new Set();
@@ -3977,29 +3986,31 @@ ${ref}`,
     }
     return [...out, ...list3.sort(byLabel)];
   };
-  var pickedModel = (id) => id === STATUS_ID ? null : { value: id === DEFAULT_MODEL_ID ? null : id };
+  var pickedModel = (id) => id === STATUS_ID ? null : { value: id === DEFAULT_ID ? null : id };
   var agentOptions = (input) => {
     const { agents, value } = input;
-    const out = [{ id: DEFAULT_MODEL_ID, label: input.defaultLabel }];
+    const out = [{ id: DEFAULT_ID, label: input.defaultLabel }];
     out.push(...stored(value, agents === null ? null : agents.map((a) => a.id), "not in the list"));
     if (agents === null) return [...out, statusRow("agents", input.error)];
     for (const a of agents) out.push(a.description === "" ? { id: a.id, label: a.name } : { id: a.id, label: a.name, hint: clip(a.description) });
     return out;
   };
   var thinkingField = (input) => {
-    const first = { id: DEFAULT_MODEL_ID, label: input.defaultLabel };
+    const first = { id: DEFAULT_ID, label: input.defaultLabel };
     const keep = (known, missing = "not offered by this model") => stored(input.value, known, missing);
     if (input.model === null) return { options: [first, ...keep([])], disabled: input.value === null, reason: "Pick a model first" };
     if (input.models === null) return { options: [first, ...keep(null), statusRow("thinking levels", input.error)], disabled: false };
     const model = input.models.find((m) => m.id === input.model);
     if (model === void 0) return { options: [first, ...keep(null)], disabled: input.value === null, reason: "Thinking levels unknown for this model" };
+    if (model.variants.length === 0 && model.variantsKnown === false)
+      return { options: [first, ...keep(null)], disabled: input.value === null, reason: "Thinking levels unavailable" };
     if (model.variants.length === 0) return { options: [first, ...keep([])], disabled: input.value === null, reason: "This model has no thinking levels" };
     return { options: [first, ...keep(model.variants), ...model.variants.map((v2) => ({ id: v2, label: v2 }))], disabled: false };
   };
   var keptVariant = (variant, model, models) => {
     if (variant === null || model === null || models === null) return variant;
     const m = models.find((x) => x.id === model);
-    return m === void 0 || m.variants.includes(variant) ? variant : null;
+    return m === void 0 || m.variantsKnown === false || m.variants.includes(variant) ? variant : null;
   };
   var createDirectoryLoader = (fetch2, directory) => {
     const kept = /* @__PURE__ */ new Map();
@@ -4046,7 +4057,7 @@ ${ref}`,
     const effectiveModel = () => value.model ?? inherited.model;
     const modelName = (id) => models?.find((m) => m.id === id)?.name ?? id;
     const agentName = (id) => agents?.find((a) => a.id === id)?.name ?? id;
-    const inheritedVariant = () => effectiveModel() === null ? null : inherited.variant;
+    const inheritedVariant = () => effectiveModel() === null || value.model !== null ? null : inherited.variant;
     const err = (e) => e !== void 0 ? { error: e } : {};
     const modelOpts = () => modelOptions({
       models,
@@ -4069,15 +4080,16 @@ ${ref}`,
     });
     const drawThinking = () => {
       const f = thinkingOpts();
-      thinking.update({ value: value.variant ?? DEFAULT_MODEL_ID, options: f.options, disabled: f.disabled });
+      thinking.update({ value: value.variant ?? DEFAULT_ID, options: f.options, disabled: f.disabled });
       if (f.reason !== void 0 && f.disabled) cells.thinking.title = f.reason;
       else cells.thinking.removeAttribute("title");
     };
     const drawModels = () => {
-      model.update({ value: value.model ?? DEFAULT_MODEL_ID, options: modelOpts() });
+      model.update({ value: value.model ?? DEFAULT_ID, options: modelOpts() });
       drawThinking();
     };
-    const drawAgents = () => agent.update({ value: value.agent ?? DEFAULT_MODEL_ID, options: agentOpts() });
+    const drawAgents = () => agent.update({ value: value.agent ?? DEFAULT_ID, options: agentOpts() });
+    const emit = () => props.onChange({ ...value });
     const loadModels = () => {
       if (models !== null || modelsLoading) return;
       modelsLoading = true;
@@ -4087,6 +4099,13 @@ ${ref}`,
           modelsLoading = false;
           if (disposed) return;
           models = list3;
+          if (props.dropStaleVariant === true && value.variant !== null) {
+            const kept = keptVariant(value.variant, effectiveModel(), models);
+            if (kept === null) {
+              value.variant = null;
+              emit();
+            }
+          }
           drawModels();
         },
         (e) => {
@@ -4118,10 +4137,9 @@ ${ref}`,
       );
       drawAgents();
     };
-    const emit = () => props.onChange({ ...value });
     const model = mountSelect(cells.model, {
       label: "Model",
-      value: value.model ?? DEFAULT_MODEL_ID,
+      value: value.model ?? DEFAULT_ID,
       options: modelOpts(),
       searchable: true,
       searchPlaceholder: "Filter models",
@@ -4141,7 +4159,7 @@ ${ref}`,
     const thinkingInit = thinkingOpts();
     const thinking = mountSelect(cells.thinking, {
       label: "Thinking",
-      value: value.variant ?? DEFAULT_MODEL_ID,
+      value: value.variant ?? DEFAULT_ID,
       options: thinkingInit.options,
       disabled: thinkingInit.disabled,
       onChange: (id) => {
@@ -4158,7 +4176,7 @@ ${ref}`,
     });
     const agent = mountSelect(cells.agent, {
       label: "Agent",
-      value: value.agent ?? DEFAULT_MODEL_ID,
+      value: value.agent ?? DEFAULT_ID,
       options: agentOpts(),
       onChange: (id) => {
         const picked = pickedModel(id);
@@ -11943,6 +11961,7 @@ ${note}` : note;
           // This start only: a default here is OpenChamber's current selection.
           inherited: { model: null, variant: null, agent: null },
           lists: lists2,
+          dropStaleVariant: true,
           onChange: (v2) => {
             options.model = v2.model;
             options.variant = v2.variant;

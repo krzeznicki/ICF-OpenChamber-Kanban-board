@@ -67,6 +67,7 @@ export const askStart = (
           // This start only: a default here is OpenChamber's current selection.
           inherited: { model: null, variant: null, agent: null },
           lists,
+          dropStaleVariant: true,
           onChange: (v) => {
             options.model = v.model;
             options.variant = v.variant;

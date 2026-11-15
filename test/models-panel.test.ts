@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   CURRENT_SELECTION,
-  DEFAULT_MODEL_ID,
+  DEFAULT_ID,
   STATUS_ID,
   agentOptions,
   createAgentLoader,
@@ -33,7 +33,7 @@ test('model options: the default first, then the models by name, each with its i
     defaultLabel: 'D',
   });
   assert.deepEqual(opts, [
-    { id: DEFAULT_MODEL_ID, label: 'D' },
+    { id: DEFAULT_ID, label: 'D' },
     { id: 'a/one', label: 'Alpha 1', hint: 'a/one' },
     { id: 'a/two', label: 'Alpha 2', hint: 'a/two' },
     { id: 'c/x', label: 'c/x' },
@@ -44,21 +44,21 @@ test('model options: the default first, then the models by name, each with its i
 test('a stored model missing from the list still shows, marked, right after the default; one in the list is not repeated', () => {
   const opts = modelOptions({ models: [m('a/one', 'One')], value: 'gone/model', defaultLabel: 'D' });
   assert.deepEqual(opts.slice(0, 3), [
-    { id: DEFAULT_MODEL_ID, label: 'D' },
+    { id: DEFAULT_ID, label: 'D' },
     { id: 'gone/model', label: 'gone/model', hint: 'not in the list' },
     { id: 'a/one', label: 'One', hint: 'a/one' },
   ]);
-  assert.deepEqual(modelOptions({ models: [m('a/one')], value: 'a/one', defaultLabel: 'D' }).map((o) => o.id), [DEFAULT_MODEL_ID, 'a/one']);
+  assert.deepEqual(modelOptions({ models: [m('a/one')], value: 'a/one', defaultLabel: 'D' }).map((o) => o.id), [DEFAULT_ID, 'a/one']);
 });
 
 test('while loading and after a failure: the stored model and a status row', () => {
   assert.deepEqual(modelOptions({ models: null, value: 'a/one', defaultLabel: 'D' }), [
-    { id: DEFAULT_MODEL_ID, label: 'D' },
+    { id: DEFAULT_ID, label: 'D' },
     { id: 'a/one', label: 'a/one' },
     { id: STATUS_ID, label: 'Loading models…' },
   ]);
   assert.deepEqual(modelOptions({ models: null, value: null, defaultLabel: 'D', error: 'opencode: command not found' }), [
-    { id: DEFAULT_MODEL_ID, label: 'D' },
+    { id: DEFAULT_ID, label: 'D' },
     { id: STATUS_ID, label: 'Couldn’t load models — try again', hint: 'opencode: command not found' },
   ]);
   const long = modelOptions({ models: null, value: null, defaultLabel: 'D', error: 'x'.repeat(300) });
@@ -66,7 +66,7 @@ test('while loading and after a failure: the stored model and a status row', () 
 });
 
 test('pickedModel maps the default to null and ignores the status row', () => {
-  assert.deepEqual(pickedModel(DEFAULT_MODEL_ID), { value: null });
+  assert.deepEqual(pickedModel(DEFAULT_ID), { value: null });
   assert.deepEqual(pickedModel('a/one'), { value: 'a/one' });
   assert.equal(pickedModel(STATUS_ID), null);
 });
@@ -77,7 +77,7 @@ test('agent options: the default, the stored agent if missing, then the agents i
     { id: 'plan', name: 'Plan', description: '' },
   ];
   assert.deepEqual(agentOptions({ agents, value: null, defaultLabel: 'D' }), [
-    { id: DEFAULT_MODEL_ID, label: 'D' },
+    { id: DEFAULT_ID, label: 'D' },
     { id: 'build', label: 'Build', hint: 'The default agent.' },
     { id: 'plan', label: 'Plan' },
   ]);
@@ -91,10 +91,15 @@ test('thinking: disabled without a model, and for a model with no levels', () =>
   const none = thinkingField({ model: null, models, value: null, defaultLabel: 'D' });
   assert.equal(none.disabled, true);
   assert.equal(none.reason, 'Pick a model first');
-  assert.deepEqual(none.options, [{ id: DEFAULT_MODEL_ID, label: 'D' }]);
+  assert.deepEqual(none.options, [{ id: DEFAULT_ID, label: 'D' }]);
   const flat = thinkingField({ model: 'a/flat', models, value: null, defaultLabel: 'D' });
   assert.equal(flat.disabled, true);
   assert.equal(flat.reason, 'This model has no thinking levels');
+  // From the `opencode models` fallback the levels are unknown, not absent.
+  const unknownLevels = thinkingField({ model: 'a/plain', models: [{ id: 'a/plain', name: 'a/plain', variants: [], variantsKnown: false }], value: null, defaultLabel: 'D' });
+  assert.equal(unknownLevels.disabled, true);
+  assert.equal(unknownLevels.reason, 'Thinking levels unavailable');
+  assert.equal(keptVariant('high', 'a/plain', [{ id: 'a/plain', name: 'a/plain', variants: [], variantsKnown: false }]), 'high');
 });
 
 test('thinking: the levels of the model in their order; a stored level the model lacks stays, marked', () => {
@@ -102,7 +107,7 @@ test('thinking: the levels of the model in their order; a stored level the model
   const f = thinkingField({ model: 'a/think', models, value: null, defaultLabel: 'D' });
   assert.equal(f.disabled, false);
   assert.deepEqual(f.options, [
-    { id: DEFAULT_MODEL_ID, label: 'D' },
+    { id: DEFAULT_ID, label: 'D' },
     { id: 'low', label: 'low' },
     { id: 'high', label: 'high' },
     { id: 'max', label: 'max' },
@@ -112,9 +117,9 @@ test('thinking: the levels of the model in their order; a stored level the model
   // A model not in the list (or the list not loaded): the stored level is kept, nothing else offered.
   const unknown = thinkingField({ model: 'gone/m', models, value: 'high', defaultLabel: 'D' });
   assert.equal(unknown.disabled, false);
-  assert.deepEqual(unknown.options.map((o) => o.id), [DEFAULT_MODEL_ID, 'high']);
+  assert.deepEqual(unknown.options.map((o) => o.id), [DEFAULT_ID, 'high']);
   const loading = thinkingField({ model: 'a/think', models: null, value: null, defaultLabel: 'D' });
-  assert.deepEqual(loading.options.map((o) => o.id), [DEFAULT_MODEL_ID, STATUS_ID]);
+  assert.deepEqual(loading.options.map((o) => o.id), [DEFAULT_ID, STATUS_ID]);
 });
 
 test('keptVariant: a level survives a model change only if the new model offers it (or its levels are unknown)', () => {

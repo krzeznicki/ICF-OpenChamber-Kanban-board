@@ -1226,7 +1226,7 @@ var createModelList = (exec, now = Date.now) => {
     const cli = await attempt(exec, "opencode models", ["models"], directory, parseModels);
     if ("error" in cli) return { error: `${api.error}; ${cli.error}` };
     if (cli.ok.length === 0) return { error: `${api.error}; opencode models listed no models` };
-    return { value: cli.ok.map((id) => ({ id, name: id, variants: [] })) };
+    return { value: cli.ok.map((id) => ({ id, name: id, variants: [], variantsKnown: false })) };
   };
   return cachedPerDirectory(
     run,

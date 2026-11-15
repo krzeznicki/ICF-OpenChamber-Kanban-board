@@ -144,7 +144,28 @@ test('a thinking level needs a model: with no model resolved the variant is drop
   const s = resolveSettings({ defaults: { variant: 'high' } }, {});
   assert.equal(resolveStart(s, task('chore'), {}).variant, null);
   assert.equal(resolveStart(s, task('chore'), { variant: 'max' }).variant, null);
-  assert.equal(resolveStart(s, task('chore'), { model: 'a/m' }).variant, 'high');
+  // The card's model owns the level: the global one is not carried onto it.
+  assert.equal(resolveStart(s, task('chore'), { model: 'a/m' }).variant, null);
+  assert.equal(resolveStart(s, task('chore'), { model: 'a/m', variant: 'high' }).variant, 'high');
+});
+
+test('a layer that sets a model owns the thinking level: it is never inherited onto another model', () => {
+  const g = { defaults: { model: 'a/x', variant: 'xhigh' } };
+  // Card sets model Y, thinking empty: no level (not X's xhigh).
+  const s = resolveSettings(g, {});
+  assert.equal(resolveStart(s, task('chore'), { model: 'a/y' }).variant, null);
+  assert.equal(resolveStart(s, task('chore'), { model: 'a/y', variant: 'low' }).variant, 'low');
+  assert.equal(resolveStart(s, task('chore'), {}).variant, 'xhigh');
+  // A card that sets only the level keeps the inherited model with that level.
+  assert.equal(resolveStart(s, task('chore'), { variant: 'max' }).variant, 'max');
+  // Project sets model Y, thinking empty: no level.
+  const p = resolveSettings(g, { defaults: { model: 'a/y' } });
+  assert.deepEqual([p.defaults.model, p.defaults.variant], ['a/y', null]);
+  assert.equal(resolveStart(p, task('chore'), {}).variant, null);
+  // Project sets only the level: it applies to the global model.
+  assert.equal(resolveSettings(g, { defaults: { variant: 'low' } }).defaults.variant, 'low');
+  // Project sets both.
+  assert.equal(resolveSettings(g, { defaults: { model: 'a/y', variant: 'high' } }).defaults.variant, 'high');
 });
 
 test('startsFromExtension: path B when a model, an agent or a thinking level is set; path A when none is', () => {

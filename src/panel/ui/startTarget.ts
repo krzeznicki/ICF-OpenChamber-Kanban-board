@@ -8,7 +8,7 @@
 // a stored value shows as its own option so it is never lost; the status row retries.
 import { mountSelect, type SelectHandle } from '@openchamber/sdk/ui';
 import {
-  DEFAULT_MODEL_ID,
+  DEFAULT_ID,
   agentOptions,
   defaultLabel,
   keptVariant,
@@ -32,6 +32,11 @@ export type StartTargetProps = {
   inheritWord?: string;
   lists: StartLists;
   onChange: (value: StartTarget) => void;
+  /**
+   * Start form: once the model list is known, a level set here that the model in force does not
+   * offer is cleared (and reported), so the session does not start with it.
+   */
+  dropStaleVariant?: boolean;
 };
 
 const message = (e: unknown): string => (e instanceof Error ? e.message : String(e));
@@ -55,7 +60,8 @@ export const mountStartTarget = (
   const effectiveModel = (): string | null => value.model ?? inherited.model;
   const modelName = (id: string): string => models?.find((m) => m.id === id)?.name ?? id;
   const agentName = (id: string): string => agents?.find((a) => a.id === id)?.name ?? id;
-  const inheritedVariant = (): string | null => (effectiveModel() === null ? null : inherited.variant);
+  // A model set here owns the level: the inherited one belongs to the inherited model.
+  const inheritedVariant = (): string | null => (effectiveModel() === null || value.model !== null ? null : inherited.variant);
   const err = (e: string | undefined): { error?: string } => (e !== undefined ? { error: e } : {});
 
   const modelOpts = () =>
@@ -83,15 +89,17 @@ export const mountStartTarget = (
 
   const drawThinking = (): void => {
     const f = thinkingOpts();
-    thinking.update({ value: value.variant ?? DEFAULT_MODEL_ID, options: f.options, disabled: f.disabled });
+    thinking.update({ value: value.variant ?? DEFAULT_ID, options: f.options, disabled: f.disabled });
     if (f.reason !== undefined && f.disabled) cells.thinking.title = f.reason;
     else cells.thinking.removeAttribute('title');
   };
   const drawModels = (): void => {
-    model.update({ value: value.model ?? DEFAULT_MODEL_ID, options: modelOpts() });
+    model.update({ value: value.model ?? DEFAULT_ID, options: modelOpts() });
     drawThinking();
   };
-  const drawAgents = (): void => agent.update({ value: value.agent ?? DEFAULT_MODEL_ID, options: agentOpts() });
+  const drawAgents = (): void => agent.update({ value: value.agent ?? DEFAULT_ID, options: agentOpts() });
+
+  const emit = (): void => props.onChange({ ...value });
 
   const loadModels = (): void => {
     if (models !== null || modelsLoading) return;
@@ -102,6 +110,13 @@ export const mountStartTarget = (
         modelsLoading = false;
         if (disposed) return;
         models = list;
+        if (props.dropStaleVariant === true && value.variant !== null) {
+          const kept = keptVariant(value.variant, effectiveModel(), models);
+          if (kept === null) {
+            value.variant = null;
+            emit();
+          }
+        }
         drawModels();
       },
       (e: unknown) => {
@@ -134,11 +149,10 @@ export const mountStartTarget = (
     drawAgents();
   };
 
-  const emit = (): void => props.onChange({ ...value });
 
   const model: SelectHandle = mountSelect(cells.model, {
     label: 'Model',
-    value: value.model ?? DEFAULT_MODEL_ID,
+    value: value.model ?? DEFAULT_ID,
     options: modelOpts(),
     searchable: true,
     searchPlaceholder: 'Filter models',
@@ -161,7 +175,7 @@ export const mountStartTarget = (
   const thinkingInit = thinkingOpts();
   const thinking: SelectHandle = mountSelect(cells.thinking, {
     label: 'Thinking',
-    value: value.variant ?? DEFAULT_MODEL_ID,
+    value: value.variant ?? DEFAULT_ID,
     options: thinkingInit.options,
     disabled: thinkingInit.disabled,
     onChange: (id) => {
@@ -178,7 +192,7 @@ export const mountStartTarget = (
   });
   const agent: SelectHandle = mountSelect(cells.agent, {
     label: 'Agent',
-    value: value.agent ?? DEFAULT_MODEL_ID,
+    value: value.agent ?? DEFAULT_ID,
     options: agentOpts(),
     onChange: (id) => {
       const picked = pickedModel(id);

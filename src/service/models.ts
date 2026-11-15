@@ -11,8 +11,11 @@ export const MODELS_TTL_MS = 10 * 60 * 1000;
 export const MODELS_TIMEOUT_MS = 60 * 1000;
 const ERROR_MAX = 500;
 
-/** A model: `provider/model` id, display name, and its thinking levels (OpenCode's variants). */
-export type ModelInfo = { id: string; name: string; variants: string[] };
+/**
+ * A model: `provider/model` id, display name, and its thinking levels (OpenCode's variants).
+ * `variantsKnown: false` (the `opencode models` fallback) means the levels are unknown, not absent.
+ */
+export type ModelInfo = { id: string; name: string; variants: string[]; variantsKnown?: false };
 /** A session agent (mode primary, not hidden). */
 export type AgentInfo = { id: string; name: string; description: string };
 
@@ -165,7 +168,7 @@ export const createModelList = (exec: Exec, now: () => number = Date.now): ((dir
     const cli = await attempt(exec, 'opencode models', ['models'], directory, parseModels);
     if ('error' in cli) return { error: `${api.error}; ${cli.error}` };
     if (cli.ok.length === 0) return { error: `${api.error}; opencode models listed no models` };
-    return { value: cli.ok.map((id) => ({ id, name: id, variants: [] })) };
+    return { value: cli.ok.map((id) => ({ id, name: id, variants: [], variantsKnown: false as const })) };
   };
   return cachedPerDirectory<ModelInfo[], ModelListResult>(
     run,

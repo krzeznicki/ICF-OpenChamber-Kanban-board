@@ -162,15 +162,15 @@ test('when the API fails, models fall back to `opencode models` (names are the i
   const list = createModelList(exec, () => 0);
   assert.deepEqual(await list(directory), {
     models: [
-      { id: 'a/one', name: 'a/one', variants: [] },
-      { id: 'b/two', name: 'b/two', variants: [] },
+      { id: 'a/one', name: 'a/one', variants: [], variantsKnown: false },
+      { id: 'b/two', name: 'b/two', variants: [], variantsKnown: false },
     ],
   });
   assert.deepEqual(calls[1], { cmd: 'opencode', args: ['models'], cwd: directory, timeoutMs: MODELS_TIMEOUT_MS });
   // An unparsable or empty answer and a throw also fall back.
   for (const bad of [ok('<html>'), ok('{"data":[]}'), new Error('spawn exploded')]) {
     const f = fakeExec([bad, ok('a/one\n')]);
-    assert.deepEqual(await createModelList(f.exec, () => 0)(directory), { models: [{ id: 'a/one', name: 'a/one', variants: [] }] });
+    assert.deepEqual(await createModelList(f.exec, () => 0)(directory), { models: [{ id: 'a/one', name: 'a/one', variants: [], variantsKnown: false }] });
   }
 });
 
