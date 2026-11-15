@@ -3,7 +3,8 @@
 import { stat } from 'node:fs/promises';
 import { isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readConfig, writeConfig } from '../core/config.ts';
+import { readConfig, readLabels, writeConfig, type ProjectConfig } from '../core/config.ts';
+import { createGithubTracker } from '../core/githubTracker.ts';
 import { openTracker } from '../core/openTracker.ts';
 import type { Exec, NewTask, TaskState, Tracker } from '../core/types.ts';
 import { TrackerError } from '../core/types.ts';
@@ -76,6 +77,28 @@ type Route = (body: Body, dir: string, deps: Deps) => Promise<unknown>;
 
 const tracker = (dir: string, deps: Deps): Promise<Tracker> => openTracker(dir, deps.exec);
 
+/** The config already in `dir`, or null when it has none (an unsupported one throws). */
+const existingConfig = async (dir: string): Promise<ProjectConfig | null> => {
+  try {
+    return await readConfig(dir);
+  } catch (e) {
+    if (e instanceof TrackerError && e.code === 'NOT_CONFIGURED') return null;
+    throw e;
+  }
+};
+
+/** A github.com URL in `git remote -v` output: `origin` first, else the first such remote. */
+export const githubRemote = (output: string): string | null => {
+  const remotes: Array<{ name: string; url: string }> = [];
+  for (const line of output.split(/\r?\n/)) {
+    const m = /^(\S+)\s+(\S+)/.exec(line);
+    if (m === null) continue;
+    const url = m[2]!;
+    if (/^(?:[a-z+]+:\/\/)?(?:[^@/\s]+@)?github\.com[:/]/i.test(url)) remotes.push({ name: m[1]!, url });
+  }
+  return (remotes.find((r) => r.name === 'origin') ?? remotes[0])?.url ?? null;
+};
+
 const POST: Record<string, Route> = {
   '/config/read': async (_body, dir) => {
     try {
@@ -88,18 +111,30 @@ const POST: Record<string, Route> = {
       throw e;
     }
   },
-  '/config/init': async (body, dir) => {
+  '/config/init': async (body, dir, deps) => {
     const kind = body.tracker;
     if (kind !== 'local' && kind !== 'github') return invalid('"tracker" must be "local" or "github"');
-    await writeConfig(dir, kind);
-    const config = await readConfig(dir);
-    if (config.tracker !== kind) {
+    const alreadySetUp = (tracker: string): never => {
       throw new TrackerError(
         'INVALID',
-        `docs/agents/issue-tracker.md already configures the ${config.tracker} tracker; it was left unchanged`,
+        `docs/agents/issue-tracker.md already configures the ${tracker} tracker; it was left unchanged`,
       );
-    }
+    };
+    const existing = await existingConfig(dir);
+    if (existing !== null && existing.tracker !== kind) alreadySetUp(existing.tracker);
+    // GitHub: check gh before writing anything, so a missing or logged-out gh leaves the project untouched.
+    // writeConfig never writes triage-labels.md, so the label strings are already final here.
+    const gh = kind === 'github' ? createGithubTracker(dir, deps.exec, await readLabels(dir)) : null;
+    await gh?.preflight();
+    await writeConfig(dir, kind);
+    const config = await readConfig(dir);
+    if (config.tracker !== kind) alreadySetUp(config.tracker);
+    await gh?.setupLabels();
     return { config };
+  },
+  '/config/detect': async (_body, dir, deps) => {
+    const r = await deps.exec('git', ['remote', '-v'], { cwd: dir });
+    return { remote: r.code === 0 ? githubRemote(r.stdout) : null };
   },
   '/tasks/list': async (_body, dir, deps) => ({ tasks: await (await tracker(dir, deps)).list() }),
   '/tasks/get': async (body, dir, deps) => {

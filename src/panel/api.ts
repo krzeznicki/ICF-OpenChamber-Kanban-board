@@ -57,6 +57,8 @@ export const createApi = (host: HostClient, directory: string) => {
     readConfig: () => call<ConfigResult>('POST', '/config/read'),
     initConfig: (tracker: 'local' | 'github') =>
       call<{ config: ProjectConfig }>('POST', '/config/init', { tracker }).then((r) => r.config),
+    /** The github.com remote of the project (origin first), or null. */
+    detect: () => call<{ remote: string | null }>('POST', '/config/detect').then((r) => r.remote),
     list: () => call<{ tasks: Task[] }>('POST', '/tasks/list').then((r) => r.tasks),
     get: (id: string) => call<{ task: Task }>('POST', '/tasks/get', { id }).then((r) => r.task),
     create: (input: NewTask) => call<{ task: Task }>('POST', '/tasks/create', { input }).then((r) => r.task),

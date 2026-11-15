@@ -2308,6 +2308,94 @@ ${GUEST_UI_LOOK_CSS}`;
     };
   };
 
+  // node_modules/@openchamber/sdk/dist/ui/list.js
+  var listCount = 0;
+  var mountList = (root, initial) => {
+    ensureStyle(UI_CSS);
+    let props = initial;
+    const uid = `oc-sdk-list-${listCount += 1}`;
+    const list = el("div", "oc-sdk oc-sdk-list");
+    list.setAttribute("role", "listbox");
+    list.tabIndex = 0;
+    root.append(list);
+    let activeId = null;
+    const rowId = (id) => `${uid}-${id}`;
+    const setActive = (id) => {
+      activeId = id;
+      for (const row of Array.from(list.children)) {
+        if (row instanceof HTMLElement) {
+          row.dataset.active = row.id === rowId(id ?? "") ? "true" : "false";
+        }
+      }
+      setAttr(list, "aria-activedescendant", id ? rowId(id) : null);
+      list.querySelector('[data-active="true"]')?.scrollIntoView({ block: "nearest" });
+    };
+    const span = (className, text) => {
+      const node = el("span", className);
+      node.textContent = text;
+      return node;
+    };
+    const paint = () => {
+      clearNode(list);
+      setAttr(list, "aria-label", props.ariaLabel);
+      if (props.items.length === 0) {
+        list.append(span("oc-sdk-list-empty", props.emptyText ?? "Nothing here"));
+        setActive(null);
+        return;
+      }
+      for (const item of props.items) {
+        const row = button("oc-sdk-row");
+        row.id = rowId(item.id);
+        row.setAttribute("role", "option");
+        row.setAttribute("aria-selected", item.id === props.selectedId ? "true" : "false");
+        row.disabled = Boolean(item.disabled);
+        row.tabIndex = -1;
+        if (item.leading)
+          row.append(span("oc-sdk-row-lead", item.leading));
+        const main = el("span", "oc-sdk-row-main");
+        main.append(span("oc-sdk-row-title", item.title));
+        if (item.subtitle)
+          main.append(span("oc-sdk-row-sub", item.subtitle));
+        row.append(main);
+        if (item.badge) {
+          const badge = span("oc-sdk-badge", item.badge.label);
+          applyTone(badge, item.badge.tone);
+          row.append(badge);
+        }
+        if (item.meta)
+          row.append(span("oc-sdk-row-meta", item.meta));
+        row.addEventListener("click", () => props.onSelect(item.id));
+        list.append(row);
+      }
+      const stillThere = props.items.some((item) => item.id === activeId && !item.disabled);
+      setActive(stillThere ? activeId : props.selectedId ?? null);
+    };
+    const onKeyDown = (event) => {
+      const step = navigationKey(event);
+      if (step) {
+        event.preventDefault();
+        setActive(moveListSelection(props.items, activeId, step));
+        return;
+      }
+      if ((event.key === "Enter" || event.key === " ") && activeId) {
+        event.preventDefault();
+        props.onSelect(activeId);
+      }
+    };
+    list.addEventListener("keydown", onKeyDown);
+    paint();
+    return {
+      update: (next) => {
+        props = { ...props, ...next };
+        paint();
+      },
+      dispose: () => {
+        list.removeEventListener("keydown", onKeyDown);
+        list.remove();
+      }
+    };
+  };
+
   // node_modules/@openchamber/sdk/dist/ui/empty.js
   var mountEmpty = (root, initial) => {
     ensureStyle(UI_CSS);
@@ -2517,6 +2605,8 @@ ${GUEST_UI_LOOK_CSS}`;
       directory,
       readConfig: () => call("POST", "/config/read"),
       initConfig: (tracker) => call("POST", "/config/init", { tracker }).then((r) => r.config),
+      /** The github.com remote of the project (origin first), or null. */
+      detect: () => call("POST", "/config/detect").then((r) => r.remote),
       list: () => call("POST", "/tasks/list").then((r) => r.tasks),
       get: (id) => call("POST", "/tasks/get", { id }).then((r) => r.task),
       create: (input) => call("POST", "/tasks/create", { input }).then((r) => r.task),
@@ -2602,6 +2692,54 @@ ${GUEST_UI_LOOK_CSS}`;
       }
     }
     return board2;
+  };
+
+  // src/panel/setup.ts
+  var TRACKER_NAMES = { local: "local Markdown files", github: "GitHub Issues" };
+  var trackerName = (tracker) => TRACKER_NAMES[tracker];
+  var defaultChoice = (remote) => remote === null ? "local" : "github";
+  var TITLES = {
+    UNSUPPORTED: "This project\u2019s tracker is not supported",
+    GH_MISSING: "GitHub CLI is not installed",
+    GH_OLD: "GitHub CLI is too old",
+    GH_AUTH: "GitHub CLI is not logged in",
+    NO_SERVICE: "The ICF-kanban service is not allowed or not running"
+  };
+  var loadNotice = (e) => ({
+    tone: e.code === "UNSUPPORTED" ? "warning" : "error",
+    title: TITLES[e.code] ?? "Could not load the board",
+    body: e.message,
+    action: "Retry"
+  });
+  var setupOutcome = (choice, initError, read) => {
+    if ("error" in read) {
+      const notice = initError === null ? loadNotice(read.error) : { ...loadNotice(initError), title: "Could not set up the board" };
+      return { kind: "notice", notice };
+    }
+    const tracker = read.config.tracker;
+    if (tracker !== choice) {
+      return {
+        kind: "notice",
+        notice: {
+          tone: "info",
+          title: `This project is already set up for ${trackerName(tracker)}`,
+          body: `docs/agents/issue-tracker.md already names ${trackerName(tracker)}, so it was left unchanged. The board uses it.`,
+          action: "Open board"
+        }
+      };
+    }
+    if (initError !== null) {
+      return {
+        kind: "notice",
+        notice: {
+          tone: "warning",
+          title: `Set up for ${trackerName(tracker)}, with a problem`,
+          body: initError.message,
+          action: "Open board"
+        }
+      };
+    }
+    return { kind: "board" };
   };
 
   // src/panel/ui/card.ts
@@ -2719,6 +2857,8 @@ ${GUEST_UI_LOOK_CSS}`;
           }).dispose;
         } else if (next.kind === "empty") {
           statusDispose = mountEmpty(status, { title: next.title, body: next.body }).dispose;
+        } else if (next.kind === "custom") {
+          statusDispose = next.mount(status);
         }
       },
       /** Draws the columns; null hides them (no project, no tracker, or an error). */
@@ -2757,6 +2897,14 @@ ${GUEST_UI_LOOK_CSS}`;
     };
   };
 
+  // src/panel/ui/notice.ts
+  var mountNotice = (root, model, onAction) => mountBanner(root, {
+    tone: model.tone,
+    title: model.title,
+    body: model.body,
+    action: { label: model.action, onClick: onAction }
+  }).dispose;
+
   // src/panel/ui/styles.ts
   var CSS2 = `
 html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg); font-family: var(--oc-font); }
@@ -2783,6 +2931,11 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
 .kb-badges:empty { display: none; }
 .kb-progress { display: flex; flex-direction: column; gap: 0.25rem; }
 .kb-progress-label { color: var(--oc-muted); font-size: 0.8em; font-variant-numeric: tabular-nums; }
+.kb-wizard { display: flex; flex-direction: column; gap: 0.75rem; max-width: 34rem; margin: 1rem auto; padding: 1rem;
+  background: var(--oc-elevated); color: var(--oc-elevated-fg); border: 1px solid var(--oc-border); border-radius: var(--oc-radius); }
+.kb-wizard-title { margin: 0; font-size: 1.1em; font-weight: 600; }
+.kb-wizard-body { margin: 0; color: var(--oc-muted); font-size: 0.9em; }
+.kb-wizard-actions { display: flex; justify-content: flex-end; }
 .kb-loading { display: flex; justify-content: center; padding: 2rem 0; }
 :root[data-oc-surface="panel"] .kb-columns { flex-direction: column; align-items: stretch; overflow-x: visible; }
 :root[data-oc-surface="panel"] .kb-column { flex: 0 0 auto; min-width: 0; }
@@ -2794,6 +2947,64 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     const style = document.createElement("style");
     style.textContent = CSS2;
     document.head.appendChild(style);
+  };
+
+  // src/panel/ui/wizard.ts
+  var element = (tag, className, text) => {
+    const node = document.createElement(tag);
+    node.className = className;
+    if (text !== void 0) node.textContent = text;
+    return node;
+  };
+  var mountWizard = (root, props) => {
+    let choice = props.initial;
+    let busy = false;
+    const wrap = element("section", "kb-wizard");
+    const title = element("h2", "kb-wizard-title", "Set up a task board for this project");
+    const body = element(
+      "p",
+      "kb-wizard-body",
+      "Choose where the tasks live. ICF-kanban writes docs/agents/issue-tracker.md in the format the agent skills read."
+    );
+    const listSlot = element("div", "kb-wizard-choices");
+    const actions = element("div", "kb-wizard-actions");
+    wrap.append(title, body, listSlot, actions);
+    root.append(wrap);
+    const list = mountList(listSlot, {
+      ariaLabel: "Tracker",
+      selectedId: choice,
+      items: [
+        { id: "local", title: "Local", subtitle: "Markdown files under .scratch/ in this repository" },
+        {
+          id: "github",
+          title: "GitHub",
+          subtitle: props.remote === null ? "Issues of the repository\u2019s GitHub remote (none found); needs the gh CLI" : `Issues of ${props.remote}; creates the missing labels, needs the gh CLI`,
+          ...props.remote !== null ? { badge: { label: "remote found", tone: "success" } } : {}
+        }
+      ],
+      onSelect: (id) => {
+        if (busy || id !== "local" && id !== "github") return;
+        choice = id;
+        list.update({ selectedId: id });
+      }
+    });
+    const button2 = mountButton(actions, {
+      label: "Set up board",
+      onClick: () => {
+        if (!busy) props.onSetup(choice);
+      }
+    });
+    return {
+      setBusy: (next) => {
+        busy = next;
+        button2.update({ loading: next, disabled: next });
+      },
+      dispose: () => {
+        list.dispose();
+        button2.dispose();
+        wrap.remove();
+      }
+    };
   };
 
   // src/panel/main.ts
@@ -2808,7 +3019,8 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     config: null,
     tasks: null,
     hideSubtasks: false,
-    lastLoad: 0
+    lastLoad: 0,
+    view: "none"
   };
   var board;
   var unsubscribeSessions = null;
@@ -2839,16 +3051,71 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
       board.setStatus({ kind: "none" });
     }
   };
+  var failureOf = (e) => ({
+    code: e instanceof ApiError ? e.code : "FAILED",
+    message: e instanceof Error ? e.message : String(e)
+  });
+  var showNotice = (notice) => {
+    state.config = null;
+    state.tasks = null;
+    state.view = "notice";
+    board.setStatus({ kind: "custom", mount: (slot) => mountNotice(slot, notice, () => void load()) });
+    draw();
+  };
+  var showWizard = (api, remote) => {
+    state.config = null;
+    state.tasks = null;
+    state.view = "wizard";
+    board.setStatus({
+      kind: "custom",
+      mount: (slot) => {
+        const wizard = mountWizard(slot, {
+          remote,
+          initial: defaultChoice(remote),
+          onSetup: (choice) => {
+            wizard.setBusy(true);
+            void setup(api, choice);
+          }
+        });
+        return wizard.dispose;
+      }
+    });
+    draw();
+  };
+  var setup = async (api, choice) => {
+    const mine = ++generation;
+    board.setBusy(true);
+    let initError = null;
+    try {
+      await api.initConfig(choice);
+    } catch (e) {
+      initError = failureOf(e);
+    }
+    if (mine !== generation) return;
+    let read;
+    try {
+      read = await api.readConfig();
+    } catch (e) {
+      read = { error: failureOf(e) };
+    }
+    if (mine !== generation) return;
+    board.setBusy(false);
+    const outcome = setupOutcome(choice, initError, read);
+    if (outcome.kind === "board") void load();
+    else showNotice(outcome.notice);
+  };
   var load = async () => {
     const p = project();
     const mine = ++generation;
     if (p === null) {
       state.config = null;
       state.tasks = null;
+      state.view = "none";
       board.setStatus({ kind: "empty", title: "No project", body: "Open or choose a project to see its board." });
       draw();
       return;
     }
+    state.lastLoad = Date.now();
     const api = createApi(host, p.directory);
     if (state.tasks === null) board.setStatus({ kind: "loading" });
     board.setBusy(true);
@@ -2856,35 +3123,30 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
       const result = await api.readConfig();
       if (mine !== generation) return;
       if ("error" in result) {
-        state.config = null;
-        state.tasks = null;
-        board.setStatus(
-          result.error.code === "NOT_CONFIGURED" ? { kind: "banner", tone: "info", title: "This project has no tracker yet", body: result.error.message } : { kind: "banner", tone: "warning", title: "This project\u2019s tracker is not supported", body: result.error.message }
-        );
-        draw();
+        if (result.error.code !== "NOT_CONFIGURED") {
+          showNotice(loadNotice(result.error));
+          return;
+        }
+        const remote = await api.detect().catch(() => null);
+        if (mine !== generation) return;
+        showWizard(api, remote);
         return;
       }
       const tasks = await api.list();
       if (mine !== generation) return;
       state.config = result.config;
       state.tasks = tasks;
-      state.lastLoad = Date.now();
+      state.view = "board";
       draw();
     } catch (e) {
       if (mine !== generation) return;
-      state.config = null;
-      state.tasks = null;
-      const code = e instanceof ApiError ? e.code : "FAILED";
-      board.setStatus({
-        kind: "banner",
-        tone: "error",
-        title: code === "NO_SERVICE" ? "The ICF-kanban service is not allowed or not running" : "Could not load the board",
-        body: e instanceof Error ? e.message : String(e)
-      });
-      draw();
+      showNotice(loadNotice(failureOf(e)));
     } finally {
       if (mine === generation) board.setBusy(false);
     }
+  };
+  var backgroundLoad = () => {
+    if (state.view !== "wizard") void load();
   };
   var selectProject = async (id) => {
     if (id === state.projectId) return;
@@ -2950,10 +3212,10 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
       });
     });
     setInterval(() => {
-      if (document.visibilityState === "visible") void load();
+      if (document.visibilityState === "visible") backgroundLoad();
     }, POLL_MS);
     document.addEventListener("visibilitychange", () => {
-      if (document.visibilityState === "visible" && Date.now() - state.lastLoad >= POLL_MS) void load();
+      if (document.visibilityState === "visible" && Date.now() - state.lastLoad >= POLL_MS) backgroundLoad();
     });
   };
   var mounted = false;

@@ -67,12 +67,16 @@ export const parseLabels = (text: string | null): Record<LabelRole, string> => {
   return labels;
 };
 
+/** The label strings of `root`: triage-labels.md when present, else the role names. */
+export const readLabels = async (root: string): Promise<Record<LabelRole, string>> =>
+  parseLabels(await readOptional(join(root, TRIAGE_LABELS)));
+
 export const readConfig = async (root: string): Promise<ProjectConfig> => {
   const tracker = await readOptional(join(root, ISSUE_TRACKER));
   if (tracker === null) {
     throw new TrackerError('NOT_CONFIGURED', `No ${ISSUE_TRACKER}: choose a tracker (Local Markdown or GitHub) first`);
   }
-  return { tracker: detect(tracker), labels: parseLabels(await readOptional(join(root, TRIAGE_LABELS))) };
+  return { tracker: detect(tracker), labels: await readLabels(root) };
 };
 
 /** Writes `path` only when it does not exist yet. */

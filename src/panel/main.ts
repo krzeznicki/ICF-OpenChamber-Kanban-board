@@ -5,10 +5,13 @@ import { connectHost } from '@openchamber/sdk';
 import type { GuestProject, GuestSessionRecord, HostReadyContext } from '@openchamber/sdk';
 import { applyHostReady } from '@openchamber/sdk/ui';
 import type { Task } from '../core/types.ts';
-import { ApiError, createApi, type ProjectConfig } from './api.ts';
+import { ApiError, createApi, type Api, type ConfigResult, type ProjectConfig } from './api.ts';
 import { groupTasks } from './columns.ts';
+import { defaultChoice, loadNotice, setupOutcome, type ApiFailure, type NoticeModel, type TrackerChoice } from './setup.ts';
 import { createBoard, type Board } from './ui/board.ts';
+import { mountNotice } from './ui/notice.ts';
 import { injectStyles } from './ui/styles.ts';
+import { mountWizard } from './ui/wizard.ts';
 
 const POLL_MS = 60_000;
 
@@ -24,7 +27,10 @@ type State = {
   config: ProjectConfig | null;
   tasks: Task[] | null;
   hideSubtasks: boolean;
+  /** When the last load was attempted, successful or not. */
   lastLoad: number;
+  /** What the status slot shows; polling leaves the wizard alone so the user's pick survives. */
+  view: 'none' | 'board' | 'wizard' | 'notice';
 };
 
 const state: State = {
@@ -37,6 +43,7 @@ const state: State = {
   tasks: null,
   hideSubtasks: false,
   lastLoad: 0,
+  view: 'none',
 };
 
 let board: Board;
@@ -77,16 +84,78 @@ const draw = (): void => {
   }
 };
 
+const failureOf = (e: unknown): ApiFailure => ({
+  code: e instanceof ApiError ? e.code : 'FAILED',
+  message: e instanceof Error ? e.message : String(e),
+});
+
+/** Clears the board and shows a notice whose button re-runs the load. */
+const showNotice = (notice: NoticeModel): void => {
+  state.config = null;
+  state.tasks = null;
+  state.view = 'notice';
+  board.setStatus({ kind: 'custom', mount: (slot) => mountNotice(slot, notice, () => void load()) });
+  draw();
+};
+
+const showWizard = (api: Api, remote: string | null): void => {
+  state.config = null;
+  state.tasks = null;
+  state.view = 'wizard';
+  board.setStatus({
+    kind: 'custom',
+    mount: (slot) => {
+      const wizard = mountWizard(slot, {
+        remote,
+        initial: defaultChoice(remote),
+        onSetup: (choice) => {
+          wizard.setBusy(true);
+          void setup(api, choice);
+        },
+      });
+      return wizard.dispose;
+    },
+  });
+  draw();
+};
+
+/** The wizard's button: write the config, then read it back and show the board or a notice. */
+const setup = async (api: Api, choice: TrackerChoice): Promise<void> => {
+  const mine = ++generation;
+  board.setBusy(true);
+  let initError: ApiFailure | null = null;
+  try {
+    await api.initConfig(choice);
+  } catch (e) {
+    initError = failureOf(e);
+  }
+  if (mine !== generation) return;
+  let read: ConfigResult;
+  try {
+    read = await api.readConfig();
+  } catch (e) {
+    read = { error: failureOf(e) };
+  }
+  if (mine !== generation) return;
+  board.setBusy(false);
+  const outcome = setupOutcome(choice, initError, read);
+  if (outcome.kind === 'board') void load();
+  else showNotice(outcome.notice);
+};
+
 const load = async (): Promise<void> => {
   const p = project();
   const mine = ++generation;
   if (p === null) {
     state.config = null;
     state.tasks = null;
+    state.view = 'none';
     board.setStatus({ kind: 'empty', title: 'No project', body: 'Open or choose a project to see its board.' });
     draw();
     return;
   }
+  // Set on every attempt: after an error, returning to the tab does not reload (and call gh) at once.
+  state.lastLoad = Date.now();
   const api = createApi(host, p.directory);
   if (state.tasks === null) board.setStatus({ kind: 'loading' });
   board.setBusy(true);
@@ -94,37 +163,32 @@ const load = async (): Promise<void> => {
     const result = await api.readConfig();
     if (mine !== generation) return;
     if ('error' in result) {
-      state.config = null;
-      state.tasks = null;
-      board.setStatus(
-        result.error.code === 'NOT_CONFIGURED'
-          ? { kind: 'banner', tone: 'info', title: 'This project has no tracker yet', body: result.error.message }
-          : { kind: 'banner', tone: 'warning', title: 'This project’s tracker is not supported', body: result.error.message },
-      );
-      draw();
+      if (result.error.code !== 'NOT_CONFIGURED') {
+        showNotice(loadNotice(result.error));
+        return;
+      }
+      const remote = await api.detect().catch(() => null);
+      if (mine !== generation) return;
+      showWizard(api, remote);
       return;
     }
     const tasks = await api.list();
     if (mine !== generation) return;
     state.config = result.config;
     state.tasks = tasks;
-    state.lastLoad = Date.now();
+    state.view = 'board';
     draw();
   } catch (e) {
     if (mine !== generation) return;
-    state.config = null;
-    state.tasks = null;
-    const code = e instanceof ApiError ? e.code : 'FAILED';
-    board.setStatus({
-      kind: 'banner',
-      tone: 'error',
-      title: code === 'NO_SERVICE' ? 'The ICF-kanban service is not allowed or not running' : 'Could not load the board',
-      body: e instanceof Error ? e.message : String(e),
-    });
-    draw();
+    showNotice(loadNotice(failureOf(e)));
   } finally {
     if (mine === generation) board.setBusy(false);
   }
+};
+
+/** Background reloads (poll, tab shown) skip the wizard: nothing changes there on its own. */
+const backgroundLoad = (): void => {
+  if (state.view !== 'wizard') void load();
 };
 
 const selectProject = async (id: string | null): Promise<void> => {
@@ -200,10 +264,10 @@ const start = (ctx: HostReadyContext): void => {
     });
 
   setInterval(() => {
-    if (document.visibilityState === 'visible') void load();
+    if (document.visibilityState === 'visible') backgroundLoad();
   }, POLL_MS);
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible' && Date.now() - state.lastLoad >= POLL_MS) void load();
+    if (document.visibilityState === 'visible' && Date.now() - state.lastLoad >= POLL_MS) backgroundLoad();
   });
 };
 

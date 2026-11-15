@@ -16,7 +16,9 @@ export type BoardStatus =
   | { kind: 'none' }
   | { kind: 'loading' }
   | { kind: 'banner'; tone: BannerTone; title: string; body?: string }
-  | { kind: 'empty'; title: string; body: string };
+  | { kind: 'empty'; title: string; body: string }
+  /** Anything else drawn in the slot (the setup wizard, a notice); returns its dispose. */
+  | { kind: 'custom'; mount: (slot: HTMLElement) => () => void };
 
 const div = (className: string): HTMLDivElement => {
   const node = document.createElement('div');
@@ -87,6 +89,8 @@ export const createBoard = (root: HTMLElement, callbacks: BoardCallbacks) => {
         }).dispose;
       } else if (next.kind === 'empty') {
         statusDispose = mountEmpty(status, { title: next.title, body: next.body }).dispose;
+      } else if (next.kind === 'custom') {
+        statusDispose = next.mount(status);
       }
     },
     /** Draws the columns; null hides them (no project, no tracker, or an error). */

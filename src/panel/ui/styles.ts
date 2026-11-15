@@ -26,6 +26,11 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
 .kb-badges:empty { display: none; }
 .kb-progress { display: flex; flex-direction: column; gap: 0.25rem; }
 .kb-progress-label { color: var(--oc-muted); font-size: 0.8em; font-variant-numeric: tabular-nums; }
+.kb-wizard { display: flex; flex-direction: column; gap: 0.75rem; max-width: 34rem; margin: 1rem auto; padding: 1rem;
+  background: var(--oc-elevated); color: var(--oc-elevated-fg); border: 1px solid var(--oc-border); border-radius: var(--oc-radius); }
+.kb-wizard-title { margin: 0; font-size: 1.1em; font-weight: 600; }
+.kb-wizard-body { margin: 0; color: var(--oc-muted); font-size: 0.9em; }
+.kb-wizard-actions { display: flex; justify-content: flex-end; }
 .kb-loading { display: flex; justify-content: center; padding: 2rem 0; }
 :root[data-oc-surface="panel"] .kb-columns { flex-direction: column; align-items: stretch; overflow-x: visible; }
 :root[data-oc-surface="panel"] .kb-column { flex: 0 0 auto; min-width: 0; }

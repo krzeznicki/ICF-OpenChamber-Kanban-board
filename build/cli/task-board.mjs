@@ -76,12 +76,13 @@ var parseLabels = (text) => {
   }
   return labels;
 };
+var readLabels = async (root) => parseLabels(await readOptional(join(root, TRIAGE_LABELS)));
 var readConfig = async (root) => {
   const tracker = await readOptional(join(root, ISSUE_TRACKER));
   if (tracker === null) {
     throw new TrackerError("NOT_CONFIGURED", `No ${ISSUE_TRACKER}: choose a tracker (Local Markdown or GitHub) first`);
   }
-  return { tracker: detect(tracker), labels: parseLabels(await readOptional(join(root, TRIAGE_LABELS))) };
+  return { tracker: detect(tracker), labels: await readLabels(root) };
 };
 var writeNew = async (path, text) => {
   try {
@@ -168,6 +169,10 @@ var bodyBlockers = (body) => {
     if (m) take(m[1]);
   }
   return out;
+};
+var CATEGORY_DESCRIPTIONS = {
+  bug: "Something isn't working",
+  enhancement: "New feature or request"
 };
 var versionOf = (stdout) => {
   const m = /gh version (\d+)\.(\d+)(?:\.(\d+))?/.exec(stdout.split("\n")[0] ?? "");
@@ -299,7 +304,7 @@ var createGithubTracker = (root, exec, labels) => {
     for (const name of names) {
       if (have.has(name)) continue;
       const role = ROLES2.find((r) => labels[r] === name);
-      const description = role === void 0 ? "Task type" : ROLE_DESCRIPTIONS[role];
+      const description = role !== void 0 ? ROLE_DESCRIPTIONS[role] : CATEGORY_DESCRIPTIONS[name] ?? "Task type";
       await run(["label", "create", name, "--description", description]);
       have.add(name);
     }
@@ -327,6 +332,8 @@ var createGithubTracker = (root, exec, labels) => {
     return get(idOf(issue.number));
   };
   return {
+    preflight: ready,
+    setupLabels: () => ensureLabels([...stateLabels, ...CATEGORIES]),
     async list() {
       const r = await run(["issue", "list", "--state", "all", "--limit", "500", "--json", LIST_FIELDS]);
       const raw = parseJson(r.stdout, "issue list");

@@ -103,12 +103,13 @@ var parseLabels = (text) => {
   }
   return labels;
 };
+var readLabels = async (root) => parseLabels(await readOptional(join(root, TRIAGE_LABELS)));
 var readConfig = async (root) => {
   const tracker2 = await readOptional(join(root, ISSUE_TRACKER));
   if (tracker2 === null) {
     throw new TrackerError("NOT_CONFIGURED", `No ${ISSUE_TRACKER}: choose a tracker (Local Markdown or GitHub) first`);
   }
-  return { tracker: detect(tracker2), labels: parseLabels(await readOptional(join(root, TRIAGE_LABELS))) };
+  return { tracker: detect(tracker2), labels: await readLabels(root) };
 };
 var writeNew = async (path, text) => {
   try {
@@ -170,6 +171,10 @@ var bodyBlockers = (body) => {
     if (m) take(m[1]);
   }
   return out;
+};
+var CATEGORY_DESCRIPTIONS = {
+  bug: "Something isn't working",
+  enhancement: "New feature or request"
 };
 var versionOf = (stdout) => {
   const m = /gh version (\d+)\.(\d+)(?:\.(\d+))?/.exec(stdout.split("\n")[0] ?? "");
@@ -301,7 +306,7 @@ var createGithubTracker = (root, exec, labels) => {
     for (const name of names) {
       if (have.has(name)) continue;
       const role = ROLES2.find((r) => labels[r] === name);
-      const description = role === void 0 ? "Task type" : ROLE_DESCRIPTIONS[role];
+      const description = role !== void 0 ? ROLE_DESCRIPTIONS[role] : CATEGORY_DESCRIPTIONS[name] ?? "Task type";
       await run(["label", "create", name, "--description", description]);
       have.add(name);
     }
@@ -329,6 +334,8 @@ var createGithubTracker = (root, exec, labels) => {
     return get(idOf(issue.number));
   };
   return {
+    preflight: ready,
+    setupLabels: () => ensureLabels([...stateLabels, ...CATEGORIES]),
     async list() {
       const r = await run(["issue", "list", "--state", "all", "--limit", "500", "--json", LIST_FIELDS]);
       const raw = parseJson(r.stdout, "issue list");
@@ -841,6 +848,24 @@ var newTask = (v) => {
 };
 var defaultCliPath = () => fileURLToPath(new URL("../build/cli/task-board.mjs", import.meta.url));
 var tracker = (dir, deps) => openTracker(dir, deps.exec);
+var existingConfig = async (dir) => {
+  try {
+    return await readConfig(dir);
+  } catch (e) {
+    if (e instanceof TrackerError && e.code === "NOT_CONFIGURED") return null;
+    throw e;
+  }
+};
+var githubRemote = (output) => {
+  const remotes = [];
+  for (const line of output.split(/\r?\n/)) {
+    const m = /^(\S+)\s+(\S+)/.exec(line);
+    if (m === null) continue;
+    const url = m[2];
+    if (/^(?:[a-z+]+:\/\/)?(?:[^@/\s]+@)?github\.com[:/]/i.test(url)) remotes.push({ name: m[1], url });
+  }
+  return (remotes.find((r) => r.name === "origin") ?? remotes[0])?.url ?? null;
+};
 var POST = {
   "/config/read": async (_body, dir) => {
     try {
@@ -852,18 +877,28 @@ var POST = {
       throw e;
     }
   },
-  "/config/init": async (body, dir) => {
+  "/config/init": async (body, dir, deps) => {
     const kind = body.tracker;
     if (kind !== "local" && kind !== "github") return invalid('"tracker" must be "local" or "github"');
-    await writeConfig(dir, kind);
-    const config = await readConfig(dir);
-    if (config.tracker !== kind) {
+    const alreadySetUp = (tracker2) => {
       throw new TrackerError(
         "INVALID",
-        `docs/agents/issue-tracker.md already configures the ${config.tracker} tracker; it was left unchanged`
+        `docs/agents/issue-tracker.md already configures the ${tracker2} tracker; it was left unchanged`
       );
-    }
+    };
+    const existing = await existingConfig(dir);
+    if (existing !== null && existing.tracker !== kind) alreadySetUp(existing.tracker);
+    const gh = kind === "github" ? createGithubTracker(dir, deps.exec, await readLabels(dir)) : null;
+    await gh?.preflight();
+    await writeConfig(dir, kind);
+    const config = await readConfig(dir);
+    if (config.tracker !== kind) alreadySetUp(config.tracker);
+    await gh?.setupLabels();
     return { config };
+  },
+  "/config/detect": async (_body, dir, deps) => {
+    const r = await deps.exec("git", ["remote", "-v"], { cwd: dir });
+    return { remote: r.code === 0 ? githubRemote(r.stdout) : null };
   },
   "/tasks/list": async (_body, dir, deps) => ({ tasks: await (await tracker(dir, deps)).list() }),
   "/tasks/get": async (body, dir, deps) => {

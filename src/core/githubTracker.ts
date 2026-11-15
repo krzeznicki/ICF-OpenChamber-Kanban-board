@@ -92,12 +92,26 @@ export const bodyBlockers = (body: string): number[] => {
   return out;
 };
 
+/** Descriptions GitHub gives its default category labels. */
+const CATEGORY_DESCRIPTIONS: Record<string, string> = {
+  bug: "Something isn't working",
+  enhancement: 'New feature or request',
+};
+
 const versionOf = (stdout: string): [number, number, number] | null => {
   const m = /gh version (\d+)\.(\d+)(?:\.(\d+))?/.exec(stdout.split('\n')[0] ?? '');
   return m ? [Number(m[1]), Number(m[2]), Number(m[3] ?? 0)] : null;
 };
 
-export const createGithubTracker = (root: string, exec: Exec, labels: ProjectConfig['labels']): Tracker => {
+/** The tracker plus what the setup wizard needs: the gh preflight and label creation. */
+export type GithubTracker = Tracker & {
+  /** Checks gh is installed, new enough and logged in (GH_MISSING / GH_OLD / GH_AUTH). */
+  preflight(): Promise<void>;
+  /** Creates the state-role labels and `bug` / `enhancement` the repo does not have yet. */
+  setupLabels(): Promise<void>;
+};
+
+export const createGithubTracker = (root: string, exec: Exec, labels: ProjectConfig['labels']): GithubTracker => {
   const stateLabels = ROLES.map((r) => labels[r]);
   let preflight: Promise<void> | null = null;
   let known: Promise<Set<string>> | null = null;
@@ -248,7 +262,7 @@ export const createGithubTracker = (root: string, exec: Exec, labels: ProjectCon
     for (const name of names) {
       if (have.has(name)) continue;
       const role = ROLES.find((r) => labels[r] === name);
-      const description = role === undefined ? 'Task type' : ROLE_DESCRIPTIONS[role];
+      const description = role !== undefined ? ROLE_DESCRIPTIONS[role] : (CATEGORY_DESCRIPTIONS[name] ?? 'Task type');
       await run(['label', 'create', name, '--description', description]);
       have.add(name);
     }
@@ -280,6 +294,9 @@ export const createGithubTracker = (root: string, exec: Exec, labels: ProjectCon
   };
 
   return {
+    preflight: ready,
+    setupLabels: () => ensureLabels([...stateLabels, ...CATEGORIES]),
+
     async list() {
       const r = await run(['issue', 'list', '--state', 'all', '--limit', '500', '--json', LIST_FIELDS]);
       const raw = parseJson<(Omit<Issue, 'labels'> & { labels: { name: string }[] })[]>(r.stdout, 'issue list');
