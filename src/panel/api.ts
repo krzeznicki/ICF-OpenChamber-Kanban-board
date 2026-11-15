@@ -76,6 +76,8 @@ export const createApi = (host: HostClient, directory: string) => {
      */
     setParent: (id: string, parentId: string) =>
       call<{ task: Task }>('POST', '/tasks/parent', { id, parentId }).then((r) => r.task),
+    /** Unlinks a sub-task from its parent; like setParent the returned task can have a new id (local: it became a feature). */
+    removeParent: (id: string) => call<{ task: Task }>('POST', '/tasks/unparent', { id }).then((r) => r.task),
     close: (id: string, withChildren = false) =>
       call<{ tasks: Task[] }>('POST', '/tasks/close', { id, withChildren }).then((r) => r.tasks),
     cliPath: () => call<{ path: string }>('GET', '/cli').then((r) => r.path),

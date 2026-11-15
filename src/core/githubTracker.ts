@@ -7,7 +7,8 @@ import { TrackerError } from './types.ts';
 
 /**
  * gh 2.94.0 (released 2026-06-10) added `gh issue create --parent` and `--blocked-by`, which create() uses (checked against its release notes and `gh issue create --help` of 2.103),
- * and `gh issue edit --parent` (replaces an existing parent), which setParent() uses (checked against pkg/cmd/issue/edit/edit.go at v2.94.0).
+ * and `gh issue edit --parent` (replaces an existing parent), which setParent() uses (checked against pkg/cmd/issue/edit/edit.go at v2.94.0),
+ * and `gh issue edit --remove-parent`, which removeParent() uses (same file, same version).
  */
 const MIN_GH: [number, number] = [2, 94];
 const DONE_WINDOW_MS = 30 * 24 * 3600 * 1000;
@@ -389,6 +390,15 @@ export const createGithubTracker = (root: string, exec: Exec, labels: ProjectCon
       }
       // gh replaces an existing parent; the issue keeps its number, so the id does not change.
       await run(['issue', 'edit', String(n), '--parent', String(p)]);
+      return get(idOf(n));
+    },
+
+    async removeParent(id) {
+      const n = parseNumber(id);
+      const found = (await graph([n], false)).get(n) ?? null;
+      if (found === null) throw new TrackerError('NOT_FOUND', `Issue not found: ${idOf(n)}`);
+      if (relationsOf(found).parent === null) throw new TrackerError('INVALID', `${idOf(n)} has no parent issue to remove`);
+      await run(['issue', 'edit', String(n), '--remove-parent']);
       return get(idOf(n));
     },
 

@@ -341,3 +341,49 @@ test('setParent refuses a feature without tickets whose folder holds other files
   assert.deepEqual((await tracker.list()).map((x) => x.id), [SPEC, T1, T2, lone.id]);
   assert.equal(existsSync(join(root, '.scratch/example-feature/issues/03-lone-idea.md')), false);
 });
+
+test('removeParent moves a ticket out into its own feature (spec.md), without its number and blockers', async (t) => {
+  const root = await repo(t);
+  const tracker = createLocalTracker(root);
+  const alone = await tracker.removeParent(T2);
+  assert.equal(alone.id, '.scratch/second/spec.md');
+  assert.equal(alone.kind, 'parent');
+  assert.equal(alone.parentId, null);
+  assert.equal(alone.title, 'Second');
+  assert.equal(alone.state, 'needs-info');
+  assert.equal(alone.type, 'bug');
+  assert.equal(
+    await readFile(join(root, alone.id), 'utf8'),
+    '# Second\n\nDo it.\n\n**Type:** bug\n\n**Status:** needs-info\n',
+  );
+  assert.equal(existsSync(join(root, T2)), false);
+  assert.deepEqual((await tracker.list()).map((x) => x.id), [SPEC, T1, alone.id]);
+});
+
+test('removeParent: a taken feature name gets a suffix; tickets left behind lose the moved one as blocker', async (t) => {
+  const root = await repo(t);
+  const o = await other(root);
+  const tracker = createLocalTracker(root);
+  await tracker.create({ title: 'Alpha' }); // .scratch/alpha exists
+  const alone = await tracker.removeParent(o.a);
+  assert.equal(alone.id, '.scratch/alpha-2/spec.md');
+  assert.deepEqual((await tracker.get(o.b)).blockedBy, []);
+});
+
+test('removeParent: a claimed ticket becomes a ready-for-agent feature (a feature cannot be claimed)', async (t) => {
+  const root = await repo(t);
+  const tracker = createLocalTracker(root);
+  await tracker.claim(T1);
+  const alone = await tracker.removeParent(T1);
+  assert.equal(alone.state, 'ready-for-agent');
+  assert.equal(alone.claimed, false);
+  assert.match(alone.body, /\*\*Status:\*\* ready-for-agent/);
+});
+
+test('removeParent refuses a feature (it has no parent) and a missing ticket', async (t) => {
+  const root = await repo(t);
+  const tracker = createLocalTracker(root);
+  await rejectsWith(tracker.removeParent(SPEC), 'INVALID', /no parent/);
+  await rejectsWith(tracker.removeParent('.scratch/example-feature/issues/09-x.md'), 'NOT_FOUND');
+  assert.deepEqual((await tracker.list()).map((x) => x.id), [SPEC, T1, T2]);
+});

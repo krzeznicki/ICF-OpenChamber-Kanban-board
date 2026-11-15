@@ -142,6 +142,10 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
 .kb-add-sub-row .kb-add-sub-type { flex: 0 1 11rem; }
 .kb-add-sub-row .kb-add-sub-title { flex: 1 1 14rem; }
 .kb-add-sub { padding-top: 0.25rem; }
+.kb-sheet-part.kb-sub-rows { gap: 0.25rem; }
+.kb-sub-row { display: flex; align-items: center; gap: 0.5rem; }
+.kb-sub-row-item { flex: 1 1 auto; min-width: 0; }
+.kb-sub-row-action { flex: 0 0 auto; }
 :root[data-oc-surface="panel"] .kb-columns { flex-direction: column; align-items: stretch; overflow-x: visible; }
 :root[data-oc-surface="panel"] .kb-column { flex: 0 0 auto; min-width: 0; }
 `;

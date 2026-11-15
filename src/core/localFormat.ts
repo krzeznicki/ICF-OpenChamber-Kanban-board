@@ -222,6 +222,25 @@ export const renumberIssue = (text: string, n: number, title: string): string =>
   return lines.join('\n');
 };
 
+/**
+ * A ticket's text as a feature's spec.md: heading `# <title>` (no number) and no `Blocked by`
+ * line, since a spec has no blockers. One blank line next to the dropped line goes with it.
+ */
+export const specFromIssue = (text: string, title: string): string => {
+  const lines = splitLines(text);
+  const i = headingIndex(lines);
+  const heading = `# ${title.trim()}`;
+  if (i < 0) lines.unshift(heading, '');
+  else lines[i] = heading + (lines[i]!.endsWith('\r') ? '\r' : '');
+  const blocked = headerFields(lines).find((f) => f.field === 'Blocked by');
+  if (blocked !== undefined) {
+    const blank = (k: number): boolean => k >= 0 && k < lines.length && content(lines[k]!).trim() === '';
+    const from = blocked.index;
+    lines.splice(from, blank(from + 1) && blank(from - 1) ? 2 : 1);
+  }
+  return lines.join('\n');
+};
+
 /** A first body block that is a list, heading, fence, quote or table is not a leading paragraph. */
 const NOT_PARAGRAPH = /^\s*(?:[-+]\s|\*\s|\d+[.)]\s|#|```|~~~|>|\|)/;
 

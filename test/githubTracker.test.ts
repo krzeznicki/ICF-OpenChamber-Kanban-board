@@ -287,3 +287,18 @@ test('setParent refuses a parent that is the task itself’s descendant (walking
   assert.deepEqual(gh.commands(), []);
   assert.equal((await tracker.setParent('#4', '#3')).parentId, '#3');
 });
+
+test('removeParent unlinks the native parent with gh issue edit --remove-parent; the number stays', async () => {
+  const { tracker, gh } = setup();
+  const alone = await tracker.removeParent('#2');
+  assert.equal(alone.id, '#2');
+  assert.equal(alone.parentId, null);
+  assert.deepEqual(gh.commands(), ['gh issue edit 2 --remove-parent']);
+});
+
+test('removeParent refuses an issue without a parent; a missing issue is NOT_FOUND', async () => {
+  const { tracker, gh } = setup();
+  await rejectsWith(tracker.removeParent('#1'), 'INVALID', /no parent/);
+  await rejectsWith(tracker.removeParent('#99'), 'NOT_FOUND');
+  assert.deepEqual(gh.commands(), []);
+});

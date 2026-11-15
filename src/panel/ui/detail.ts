@@ -10,7 +10,8 @@
 // It sits on the shell it shares with Add task (ui/modal.ts). Which sections are open is
 // remembered (settings.ts Sections). It draws what it is given and reports choices; the editor
 // (edit.ts) runs them and asks to confirm. The compact row also has a "Parent" picker when the task
-// has a parent or may move under one (link.ts linkChoices).
+// has a parent or may move under one (link.ts linkChoices); with a parent set, its "No parent"
+// unlinks the task, as does "Unlink" on a row of the parent's sub-task list.
 import { mountBadge, mountBanner, mountButton, mountList, mountSelect, mountSpinner, mountTextField } from '@openchamber/sdk/ui';
 import type { Tone } from '@openchamber/sdk/ui';
 import type { Task, TaskState } from '../../core/types.ts';
@@ -26,6 +27,8 @@ import { FILTER_OVER, openModalShell } from './modal.ts';
 import { mountStartOptions } from './startOptions.ts';
 
 const NO_TYPE = '';
+/** The Parent picker's "No parent" option, offered while the task has a parent: picking it unlinks. */
+const NO_PARENT = '';
 
 export const STATES: readonly TaskState[] = ['needs-triage', 'needs-info', 'ready-for-agent', 'ready-for-human', 'wontfix', 'done'];
 
@@ -107,6 +110,10 @@ export type DetailCallbacks = {
   onSetParent: (parentId: string) => Promise<string | null>;
   /** "Link existing task": resolves to null on success, or the message to show under it. */
   onLinkChild: (childId: string) => Promise<string | null>;
+  /** "No parent" in the Parent picker: resolves to null on success, or the message to show under it. */
+  onRemoveParent: () => Promise<string | null>;
+  /** "Unlink" on a sub-task row (the caller confirms): resolves to null on success or cancel, or the message to show. */
+  onUnlinkChild: (childId: string) => Promise<string | null>;
   /** The user opened or collapsed a section. */
   onSections: (sections: Sections) => void;
   /** "Unarchive" on an archived task: it shows in Done again. */
@@ -159,7 +166,7 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
   const settingsTop = el('div', 'kb-sheet-part');
   const startBox = el('section', 'kb-sheet-part kb-start');
   settingsSec.content.append(settingsTop, startBox);
-  const subList = el('div', 'kb-sheet-part');
+  const subList = el('div', 'kb-sheet-part kb-sub-rows');
   const addBox = el('div', 'kb-sheet-part kb-add-sub');
   const linkBox = el('div', 'kb-sheet-part kb-add-sub');
   subSec.content.append(subList, addBox, linkBox);
@@ -297,6 +304,8 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
     else box.append(renderMarkdown(task.body, callbacks.onOpenUrl));
   };
 
+  /** The last failed "Unlink", shown under the sub-task list until the task changes or another unlink. */
+  let unlinkError: { taskId: string; message: string } | null = null;
   const drawChildren = (m: DetailModel): void => {
     subSec.box.hidden = m.children.length === 0 && !m.addSubtask && m.links.children.length === 0;
     drawAddSubtask(m);
@@ -307,13 +316,43 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
     }
     const done = m.children.filter((c) => c.state === 'done').length;
     subSec.label.textContent = `Sub-tasks (${done}/${m.children.length} done)`;
-    disposers.push(
-      mountList(subList, {
-        items: m.children.map((c) => ({ id: c.id, title: c.title, subtitle: c.id, badge: { label: c.state, tone: stateTone(c.state) } })),
-        onSelect: callbacks.onOpenTask,
-        ariaLabel: 'Sub-tasks',
-      }).dispose,
-    );
+    if (unlinkError !== null && unlinkError.taskId !== m.task.id) unlinkError = null;
+    // One row per sub-task: the list item opens it, "Unlink" next to it removes it from this parent.
+    // The SDK list has no row actions, so each row is a one-item list beside its own button.
+    for (const c of m.children) {
+      const row = el('div', 'kb-sub-row');
+      const item = el('div', 'kb-sub-row-item');
+      const action = el('div', 'kb-sub-row-action');
+      row.append(item, action);
+      subList.append(row);
+      disposers.push(
+        mountList(item, {
+          items: [{ id: c.id, title: c.title, subtitle: c.id, badge: { label: c.state, tone: stateTone(c.state) } }],
+          onSelect: callbacks.onOpenTask,
+          ariaLabel: `Sub-task ${c.title}`,
+        }).dispose,
+        mountButton(action, {
+          label: 'Unlink',
+          variant: 'ghost',
+          size: 'xs',
+          disabled: m.busy,
+          onClick: () => {
+            const taskId = m.task.id;
+            unlinkError = null;
+            void callbacks.onUnlinkChild(c.id).then((error) => {
+              if (disposed || error === null) return;
+              unlinkError = { taskId, message: error };
+              if (current !== null) draw(current);
+            });
+          },
+        }).dispose,
+      );
+    }
+    if (unlinkError !== null) {
+      const errorSlot = el('div', 'kb-add-error');
+      subList.append(errorSlot);
+      disposers.push(mountBanner(errorSlot, { tone: 'error', title: 'Could not unlink the sub-task', body: unlinkError.message }).dispose);
+    }
   };
 
   /**
@@ -348,7 +387,9 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
     if (parents.length > 0 || parent !== null) {
       const parentSlot = el('div', 'kb-field');
       fields.append(parentSlot);
-      const options = parent !== null && !parents.some((p) => p.id === parent.id) ? [parent, ...parents] : parents;
+      const listed = parent !== null && !parents.some((p) => p.id === parent.id) ? [parent, ...parents] : parents;
+      // With a parent set, "No parent" unlinks it.
+      const options = parent !== null ? [{ id: NO_PARENT, label: 'No parent', hint: 'Unlink from the parent' }, ...listed] : listed;
       disposers.push(
         mountSelect(parentSlot, {
           label: 'Parent',
@@ -356,13 +397,14 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
           placeholder: 'No parent',
           options,
           searchable: options.length > FILTER_OVER,
-          disabled: m.busy || parents.length === 0, // only the current parent: shown, nothing to pick
+          disabled: m.busy,
           onChange: (id) => {
             if (id === task.parentId) return;
             const taskId = task.id;
             quickKey = null; // snaps back until the reload shows the new parent
             parentError = null;
-            void callbacks.onSetParent(id).then((error) => {
+            const change = id === NO_PARENT ? callbacks.onRemoveParent() : callbacks.onSetParent(id);
+            void change.then((error) => {
               if (disposed || error === null) return;
               parentError = { taskId: current?.task.id ?? taskId, message: error };
               quickKey = null;
