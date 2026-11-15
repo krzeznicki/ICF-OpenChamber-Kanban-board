@@ -10,13 +10,13 @@ import type { StartLists } from './models.ts';
 import { resolveStart, type CardOptions, type Sections, type Settings } from './settings.ts';
 import { askedOf, type Suggester } from './suggest.ts';
 import { COLUMNS, type Column, type SessionLookup, type SessionTarget } from './columns.ts';
-import { linkChoices } from './link.ts';
 import { openChildren, planMove, taskTypes, type Move } from './moves.ts';
 import { openAddModal, type AddModalStart, type AddResult } from './ui/addModal.ts';
 import type { Board } from './ui/board.ts';
 import { askChoice } from './ui/confirm.ts';
 import { openDetail, type DetailHandle, type DetailModel, type SessionView, type SummaryModel } from './ui/detail.ts';
 import { attachDrag } from './ui/dnd.ts';
+import { canLinkUnder, linkChoices, linkConfirm } from './link.ts';
 
 export type EditorDeps = {
   host: HostClient;
@@ -258,7 +258,7 @@ export const createEditor = (deps: EditorDeps) => {
    * comes back with a new id: the open modal and its start options follow it (the service re-keys
    * the session links and queue entry). Resolves to null, or the service's error for the modal.
    */
-  const link = async (childId: string, parentId: string): Promise<string | null> => {
+  const linkFromDetail = async (childId: string, parentId: string): Promise<string | null> => {
     const api = deps.api();
     if (api === null) return 'No project is open.';
     if (moving.has(childId)) return null;
@@ -342,6 +342,16 @@ export const createEditor = (deps: EditorDeps) => {
     apply(task, from, planMove(task, from, to, openChildren(task, deps.tasks())));
   };
 
+  /** A card dropped onto an accepting card: confirm, then link it under that card (run reloads; a failure is a toast). */
+  const link = async (id: string, parentId: string): Promise<void> => {
+    const child = find(id);
+    const parent = find(parentId);
+    if (child === null || parent === null || moving.has(id)) return;
+    const { title, body } = linkConfirm(deps.tracker(), child, parent);
+    if ((await askChoice(title, body, [{ id: 'link', label: 'Make sub-task' }])) !== 'link') return;
+    await run(id, (api) => api.setParent(id, parentId));
+  };
+
   const closeDetail = (): void => {
     const d = detail;
     detail = null;
@@ -373,8 +383,8 @@ export const createEditor = (deps: EditorDeps) => {
         refreshDetail();
         return null;
       },
-      onSetParent: (parentId) => link(id, parentId),
-      onLinkChild: (childId) => link(childId, id),
+      onSetParent: (parentId) => linkFromDetail(id, parentId),
+      onLinkChild: (childId) => linkFromDetail(childId, id),
       onSections: deps.sections.save,
       onUnarchive: () => {
         deps.archive.unarchive(id);
@@ -513,6 +523,12 @@ export const createEditor = (deps: EditorDeps) => {
   const detachDrag = attachDrag(deps.board.columns, {
     canDrag: (id) => !moving.has(id),
     onDrop: move,
+    canLink: (id, parentId) => {
+      const child = find(id);
+      const parent = find(parentId);
+      return child !== null && parent !== null && canLinkUnder(deps.tracker(), child, parent, deps.tasks());
+    },
+    onLink: (id, parentId) => void link(id, parentId),
     onOpen: showDetail,
   });
 

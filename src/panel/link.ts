@@ -49,3 +49,12 @@ export const linkChoices = (
   parents: parentTargets(tracker, task, tasks).map(linkChoice),
   children: childCandidates(tracker, task, tasks).map(linkChoice),
 });
+
+/** The confirm before linking (dropping a card onto a card): names both tasks; locally the move changes the id and drops blockers. */
+export const linkConfirm = (tracker: TrackerKind, child: Task, parent: Task): { title: string; body: string } => ({
+  title: `Make “${child.title}” a sub-task of “${parent.title}”?`,
+  body:
+    tracker === 'local'
+      ? `${child.id} moves into the feature ${parent.id} as its next ticket: it gets a new id and its blockers (both ways) are dropped.`
+      : `${child.id} becomes a sub-task of ${parent.id}, replacing its current parent if it has one.`,
+});

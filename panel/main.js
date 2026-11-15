@@ -4294,30 +4294,6 @@ ${ref}`,
     };
   };
 
-  // src/panel/link.ts
-  var canLinkUnder = (tracker, child, parent, tasks) => {
-    if (child.id === parent.id || child.state === "done" || parent.state === "done") return false;
-    if (child.parentId === parent.id) return false;
-    if (tracker === "local") {
-      if (parent.kind !== "parent") return false;
-      return child.kind === "ticket" || !tasks.some((t) => t.parentId === child.id);
-    }
-    const seen = /* @__PURE__ */ new Set();
-    for (let up = parent.parentId; up !== null && !seen.has(up); ) {
-      if (up === child.id) return false;
-      seen.add(up);
-      up = tasks.find((t) => t.id === up)?.parentId ?? null;
-    }
-    return true;
-  };
-  var parentTargets = (tracker, child, tasks) => tasks.filter((p) => canLinkUnder(tracker, child, p, tasks));
-  var childCandidates = (tracker, parent, tasks) => tasks.filter((c) => canLinkUnder(tracker, c, parent, tasks));
-  var linkChoice = (t) => ({ id: t.id, label: t.title, hint: t.id });
-  var linkChoices = (tracker, task, tasks) => ({
-    parents: parentTargets(tracker, task, tasks).map(linkChoice),
-    children: childCandidates(tracker, task, tasks).map(linkChoice)
-  });
-
   // src/panel/moves.ts
   var planMove = (task, from, to, openChildren2) => {
     if (from === to) return { kind: "none", reason: "The task is already in this column" };
@@ -11942,6 +11918,8 @@ ${ref}`,
       case "up": {
         if (press === null || input.pointerId !== press.pointerId) return { press, effect: NONE3 };
         if (!press.dragging) return { press: null, effect: { kind: "open", taskId: press.taskId } };
+        const onto = input.onto ?? null;
+        if (onto !== null && onto !== press.taskId) return { press: null, effect: { kind: "link", taskId: press.taskId, parentId: onto } };
         if (input.to === null) return end(press);
         return { press: null, effect: { kind: "drop", taskId: press.taskId, from: press.from, to: input.to } };
       }
@@ -11955,6 +11933,7 @@ ${ref}`,
 
   // src/panel/ui/dnd.ts
   var COLUMNS2 = ["backlog", "ready", "in_progress", "review", "done"];
+  var OVER = ["is-drop-target", "is-link-target"];
   var columnOf = (node) => {
     const col = node?.closest(".kb-column") ?? null;
     return col !== null && COLUMNS2.includes(col.dataset.column ?? "") ? col : null;
@@ -11966,17 +11945,23 @@ ${ref}`,
   var attachDrag = (container, callbacks) => {
     let press = null;
     let dom = null;
-    const setOver = (col) => {
-      if (dom === null || dom.over === col) return;
-      dom.over?.classList.remove("is-drop-target");
-      dom.over = col;
-      col?.classList.add("is-drop-target");
+    const linkTarget = (node, taskId) => {
+      const card = node?.closest(".kb-card") ?? null;
+      const id = card?.dataset.taskId;
+      if (card === null || id === void 0 || id === taskId || !container.contains(card)) return null;
+      return callbacks.canLink(taskId, id) ? card : null;
+    };
+    const setOver = (node, kind) => {
+      if (dom === null || dom.over === node && node?.classList.contains(kind) === true) return;
+      dom.over?.classList.remove(...OVER);
+      dom.over = node;
+      node?.classList.add(kind);
     };
     const cleanup = (pointerId, taskId) => {
       const d = dom;
       dom = null;
       if (d !== null) {
-        d.over?.classList.remove("is-drop-target");
+        d.over?.classList.remove(...OVER);
         d.ghost?.remove();
         d.card.classList.remove("is-dragging");
       }
@@ -12001,7 +11986,10 @@ ${ref}`,
     const follow = (x, y) => {
       if (dom?.ghost == null) return;
       dom.ghost.style.transform = `translate(${x - dom.dx}px, ${y - dom.dy}px)`;
-      setOver(columnOf(document.elementFromPoint(x, y)));
+      const hit = document.elementFromPoint(x, y);
+      const card = press === null ? null : linkTarget(hit, press.taskId);
+      if (card !== null) setOver(card, "is-link-target");
+      else setOver(columnOf(hit), "is-drop-target");
     };
     const feed = (input, at) => {
       const before = press;
@@ -12012,6 +12000,7 @@ ${ref}`,
       else if (effect.kind === "follow" && at !== void 0) follow(at.x, at.y);
       else if (effect.kind === "open") callbacks.onOpen(effect.taskId);
       else if (effect.kind === "drop") callbacks.onDrop(effect.taskId, effect.from, effect.to);
+      else if (effect.kind === "link") callbacks.onLink(effect.taskId, effect.parentId);
       return effect;
     };
     const onDown = (e) => {
@@ -12049,8 +12038,10 @@ ${ref}`,
       if (effect.kind === "start" || effect.kind === "follow") e.preventDefault();
     };
     const onUp = (e) => {
-      const to = press?.dragging === true ? columnOf(document.elementFromPoint(e.clientX, e.clientY)) : null;
-      feed({ type: "up", pointerId: e.pointerId, to: to?.dataset.column ?? null });
+      const hit = press?.dragging === true ? document.elementFromPoint(e.clientX, e.clientY) : null;
+      const to = columnOf(hit);
+      const onto = press !== null && hit !== null ? linkTarget(hit, press.taskId)?.dataset.taskId ?? null : null;
+      feed({ type: "up", pointerId: e.pointerId, to: to?.dataset.column ?? null, onto });
     };
     const onPointerAbort = (e) => void feed({ type: "abort", pointerId: e.pointerId });
     const onContextMenu = () => void feed({ type: "abort" });
@@ -12085,6 +12076,34 @@ ${ref}`,
       document.removeEventListener("keydown", onEscape);
     };
   };
+
+  // src/panel/link.ts
+  var canLinkUnder = (tracker, child, parent, tasks) => {
+    if (child.id === parent.id || child.state === "done" || parent.state === "done") return false;
+    if (child.parentId === parent.id) return false;
+    if (tracker === "local") {
+      if (parent.kind !== "parent") return false;
+      return child.kind === "ticket" || !tasks.some((t) => t.parentId === child.id);
+    }
+    const seen = /* @__PURE__ */ new Set();
+    for (let up = parent.parentId; up !== null && !seen.has(up); ) {
+      if (up === child.id) return false;
+      seen.add(up);
+      up = tasks.find((t) => t.id === up)?.parentId ?? null;
+    }
+    return true;
+  };
+  var parentTargets = (tracker, child, tasks) => tasks.filter((p) => canLinkUnder(tracker, child, p, tasks));
+  var childCandidates = (tracker, parent, tasks) => tasks.filter((c) => canLinkUnder(tracker, c, parent, tasks));
+  var linkChoice = (t) => ({ id: t.id, label: t.title, hint: t.id });
+  var linkChoices = (tracker, task, tasks) => ({
+    parents: parentTargets(tracker, task, tasks).map(linkChoice),
+    children: childCandidates(tracker, task, tasks).map(linkChoice)
+  });
+  var linkConfirm = (tracker, child, parent) => ({
+    title: `Make \u201C${child.title}\u201D a sub-task of \u201C${parent.title}\u201D?`,
+    body: tracker === "local" ? `${child.id} moves into the feature ${parent.id} as its next ticket: it gets a new id and its blockers (both ways) are dropped.` : `${child.id} becomes a sub-task of ${parent.id}, replacing its current parent if it has one.`
+  });
 
   // src/panel/edit.ts
   var errorText2 = (e) => e instanceof Error ? e.message : String(e);
@@ -12227,7 +12246,7 @@ ${ref}`,
         refreshDetail();
       }
     };
-    const link2 = async (childId, parentId) => {
+    const linkFromDetail = async (childId, parentId) => {
       const api = deps.api();
       if (api === null) return "No project is open.";
       if (moving.has(childId)) return null;
@@ -12303,6 +12322,14 @@ ${ref}`,
       if (task === null || moving.has(id) || from === to) return;
       apply(task, from, planMove(task, from, to, openChildren(task, deps.tasks())));
     };
+    const link2 = async (id, parentId) => {
+      const child = find(id);
+      const parent = find(parentId);
+      if (child === null || parent === null || moving.has(id)) return;
+      const { title, body } = linkConfirm(deps.tracker(), child, parent);
+      if (await askChoice(title, body, [{ id: "link", label: "Make sub-task" }]) !== "link") return;
+      await run(id, (api) => api.setParent(id, parentId));
+    };
     const closeDetail = () => {
       const d = detail;
       detail = null;
@@ -12333,8 +12360,8 @@ ${ref}`,
           refreshDetail();
           return null;
         },
-        onSetParent: (parentId) => link2(id, parentId),
-        onLinkChild: (childId) => link2(childId, id),
+        onSetParent: (parentId) => linkFromDetail(id, parentId),
+        onLinkChild: (childId) => linkFromDetail(childId, id),
         onSections: deps.sections.save,
         onUnarchive: () => {
           deps.archive.unarchive(id);
@@ -12459,6 +12486,12 @@ ${ref}`,
     const detachDrag = attachDrag(deps.board.columns, {
       canDrag: (id) => !moving.has(id),
       onDrop: move,
+      canLink: (id, parentId) => {
+        const child = find(id);
+        const parent = find(parentId);
+        return child !== null && parent !== null && canLinkUnder(deps.tracker(), child, parent, deps.tasks());
+      },
+      onLink: (id, parentId) => void link2(id, parentId),
       onOpen: showDetail
     });
     return {
@@ -13344,6 +13377,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
   box-shadow: 0 8px 24px rgb(0 0 0 / 0.25); }
 :root.kb-dragging, :root.kb-dragging * { cursor: grabbing !important; }
 .kb-column.is-drop-target { border-color: var(--oc-primary); box-shadow: inset 0 0 0 1px var(--oc-primary); }
+.kb-card.is-link-target { border-color: var(--oc-primary); border-style: dashed; box-shadow: 0 0 0 2px var(--oc-primary); }
 .kb-add-error:empty { display: none; }
 .kb-fields { display: flex; flex-wrap: wrap; gap: 0.5rem; }
 .kb-field { flex: 1 1 10rem; min-width: 0; }
