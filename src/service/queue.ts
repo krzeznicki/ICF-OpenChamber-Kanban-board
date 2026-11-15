@@ -9,7 +9,7 @@
 // it is starting itself.
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { nextToStart, type LinkStatus, type QueueEntry } from '../core/queue.ts';
+import { MAX_START_FAILURES, nextToStart, type LinkStatus, type QueueEntry } from '../core/queue.ts';
 import { readJson, serial, writeJson } from './store.ts';
 
 export const defaultQueueFile = (): string => join(homedir(), '.icf-kanban', 'queue.json');
@@ -34,7 +34,8 @@ const isEntry = (v: unknown): v is QueueEntry => {
     (e.agent === null || typeof e.agent === 'string') &&
     (e.location === 'worktree' || e.location === 'project') &&
     typeof e.queuedAt === 'number' &&
-    (e.lastError === undefined || typeof e.lastError === 'string')
+    (e.lastError === undefined || typeof e.lastError === 'string') &&
+    (e.failures === undefined || (typeof e.failures === 'number' && Number.isFinite(e.failures)))
   );
 };
 
@@ -99,17 +100,26 @@ export const removeFromQueue = (file: string, dir: string, taskId: string): Prom
   });
 };
 
+/** An entry that failed MAX_START_FAILURES times: it stays listed but is never taken automatically. */
+export const isStuck = (e: QueueEntry): boolean => (e.failures ?? 0) >= MAX_START_FAILURES;
+
 /**
  * A taken entry whose start failed: back at the front of the queue (replacing a copy queued again
- * meanwhile) with the reason, and no longer reserved. It is retried on the next drain, not in a
- * loop. An entry the user removed while it was starting stays removed.
+ * meanwhile) with the reason and one more failure, and no longer reserved. It is retried on the
+ * next drain, not in a loop, until it failed MAX_START_FAILURES times; then it waits for the user.
+ * An entry the user removed while it was starting stays removed.
  */
 export const requeueFailed = (file: string, dir: string, entry: QueueEntry, error: string): Promise<QueueEntry[]> => {
   release(file, dir, entry.taskId);
   if (forgetRemoval(file, dir, entry.taskId)) return listQueue(file, dir);
+  const failures = (entry.failures ?? 0) + 1;
+  const lastError =
+    failures >= MAX_START_FAILURES
+      ? `${error} (failed ${failures} times; not retried automatically: move the card out of In Progress and back to try again)`
+      : error;
   return update(file, dir, (q) => {
     q.entries = q.entries.filter((e) => e.taskId !== entry.taskId);
-    q.entries.unshift({ ...entry, lastError: error });
+    q.entries.unshift({ ...entry, lastError, failures });
     return [...q.entries];
   });
 };
@@ -183,6 +193,7 @@ export const takeFromQueue = (file: string, dir: string, input: TakeInput): Prom
   update(file, dir, async (q) => {
     if (input.maxParallel !== undefined) q.maxParallel = clampMax(input.maxParallel);
     if (q.entries.length === 0) return { taken: [], queue: [] };
+    if (q.entries.every(isStuck)) return { taken: [], queue: [...q.entries] };
     const links = await input.links();
     // Fail closed: a status lookup that failed (no grant, host unreachable, rate limit) means the
     // running count is unknown, so nothing starts; the next event or panel drain tries again.
@@ -192,7 +203,8 @@ export const takeFromQueue = (file: string, dir: string, input: TakeInput): Prom
     const now = (input.now ?? Date.now)();
     const p = pendingFor(file, dir);
     const running = runningNow(links, p, [...(input.starting ?? []), ...(input.running ?? [])], now);
-    const ids = new Set(nextToStart(q.entries.map((e) => e.taskId), running, q.maxParallel));
+    // A stuck entry stays listed (the card shows its error) but neither starts nor holds up the rest.
+    const ids = new Set(nextToStart(q.entries.filter((e) => !isStuck(e)).map((e) => e.taskId), running, q.maxParallel));
     const taken = q.entries.filter((e) => ids.has(e.taskId));
     q.entries = q.entries.filter((e) => !ids.has(e.taskId));
     for (const e of taken) p.reserved.set(e.taskId, now);

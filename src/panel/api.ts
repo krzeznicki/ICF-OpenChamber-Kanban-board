@@ -80,7 +80,7 @@ export const createApi = (host: HostClient, directory: string) => {
       model: string | null;
       agent: string | null;
       location: 'worktree' | 'project';
-    }) => call<{ sessionId: string; directory: string; worktree: string | null }>('POST', '/sessions/start', input),
+    }) => call<{ sessionId: string; directory: string; worktree: string | null; linkError?: string }>('POST', '/sessions/start', input),
     /** Sessions linked to this project's tasks (path B, and path A the panel recorded), with their live status. */
     listLinks: () => call<{ links: LinkRecord[] }>('POST', '/links/list').then((r) => r.links),
     /** Records a session the panel started (path A), so the queue counts it while it runs. */

@@ -14,7 +14,12 @@ export type QueueEntry = {
   queuedAt: number;
   /** Why the service's last start of this entry failed; it was put back at the front. */
   lastError?: string;
+  /** How many starts of this entry by the service failed in a row; at MAX_START_FAILURES it is no longer taken automatically. */
+  failures?: number;
 };
+
+/** After this many failed starts by the service, an entry waits for the user (drag it out, or queue it again). */
+export const MAX_START_FAILURES = 3;
 
 /**
  * Live state of a session the service knows about through its links. `unknown`: the host does not

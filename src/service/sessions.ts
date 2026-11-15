@@ -174,17 +174,47 @@ export const worktreesRoot = (directory: string): string => join(dirname(directo
 
 const message = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
-export type StartDeps = { exec: Exec; sessions: SessionHost; linksFile: string; suffix?: () => string };
+export type StartDeps = {
+  exec: Exec;
+  sessions: SessionHost;
+  linksFile: string;
+  suffix?: () => string;
+  /** Where a failed cleanup or an unsaved link is reported; defaults to stderr. */
+  log?: (message: string) => void;
+};
+
+/**
+ * Removes a worktree and its branch made for a start that then failed, so a retried start does not
+ * leave one more behind each time. Never throws: a failure is logged. True when the worktree is gone.
+ */
+const removeWorktree = async (deps: StartDeps, directory: string, path: string, branch: string): Promise<boolean> => {
+  const log = deps.log ?? ((m: string) => console.error(m));
+  const run = async (args: string[], what: string): Promise<boolean> => {
+    try {
+      const r = await deps.exec('git', ['-C', directory, ...args], { cwd: directory });
+      if (r.code === 0) return true;
+      log(`icf-kanban: could not remove the ${what}: ${(r.stderr || r.stdout).trim() || `git exited ${r.code}`}`);
+    } catch (e) {
+      log(`icf-kanban: could not remove the ${what}: ${message(e)}`);
+    }
+    return false;
+  };
+  const removed = await run(['worktree', 'remove', '--force', path], `worktree ${path}`);
+  await run(['branch', '-D', branch], `branch ${branch}`);
+  return removed;
+};
 
 export const startSession = async (
   input: StartInput,
   deps: StartDeps,
-): Promise<{ sessionId: string; directory: string; worktree: string | null }> => {
+): Promise<{ sessionId: string; directory: string; worktree: string | null; linkError?: string }> => {
   let worktree: string | null = null;
+  let branch = '';
   if (input.location === 'worktree') {
     const slug = worktreeSlug(input.taskId, input.title, deps.suffix?.());
     const path = join(worktreesRoot(input.directory), slug);
-    const r = await deps.exec('git', ['-C', input.directory, 'worktree', 'add', '-b', `icf/${slug}`, path], { cwd: input.directory });
+    branch = `icf/${slug}`;
+    const r = await deps.exec('git', ['-C', input.directory, 'worktree', 'add', '-b', branch, path], { cwd: input.directory });
     if (r.code !== 0) {
       throw new TrackerError('FAILED', `Could not create the worktree ${path}: ${(r.stderr || r.stdout).trim() || `git exited ${r.code}`}`);
     }
@@ -201,17 +231,20 @@ export const startSession = async (
       ...(input.agent !== null ? { agent: input.agent } : {}),
     });
   } catch (e) {
-    const kept = worktree === null ? '' : ` The worktree ${worktree} was created and is kept; remove it with git worktree remove if you do not need it.`;
+    const kept =
+      worktree === null || (await removeWorktree(deps, input.directory, worktree, branch))
+        ? ''
+        : ` The worktree ${worktree} could not be removed; remove it with git worktree remove if you do not need it.`;
     throw new TrackerError('FAILED', `Could not start the session: ${message(e).replace(/\.$/, '')}.${kept}`);
   }
   const directory = started.directory ?? cwd;
+  // The session runs: a failed link write must not fail the start, or a retry would start a second one.
+  let linkError: string | undefined;
   try {
     await addLink(deps.linksFile, input.directory, { taskId: input.taskId, sessionId: started.sessionId, directory, createdAt: Date.now() });
   } catch (e) {
-    throw new TrackerError(
-      'FAILED',
-      `The session ${started.sessionId} started, but its link to the card could not be saved (${message(e)}); the card will not follow it.`,
-    );
+    linkError = `The session ${started.sessionId} started, but its link to the card could not be saved (${message(e)}); the card will not follow it.`;
+    (deps.log ?? ((m: string) => console.error(m)))(`icf-kanban: ${linkError}`);
   }
-  return { sessionId: started.sessionId, directory, worktree };
+  return { sessionId: started.sessionId, directory, worktree, ...(linkError !== undefined ? { linkError } : {}) };
 };

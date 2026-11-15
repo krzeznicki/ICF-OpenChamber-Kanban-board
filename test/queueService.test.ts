@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { GuestSessionEventRequest } from '@openchamber/sdk';
@@ -256,6 +256,48 @@ test('a failed queued start goes back to the front with lastError, unreserved, a
   assert.equal(starts.length, 1);
   assert.equal(starts[0]!.prompt, 'Do a');
   assert.deepEqual(ids((await post(deps, '/queue/list', { directory })).queue), ['b']);
+});
+
+test('after 3 failed starts an entry stays queued with lastError and is not taken again automatically', async (t) => {
+  const { directory, deps, logs } = await setup(t);
+  let tries = 0;
+  const failing: Deps = { ...deps, sessions: { ...deps.sessions!, start: async () => (tries++, Promise.reject(new Error('quota'))) } };
+  await post(failing, '/queue/add', { directory, entry: entry('a'), maxParallel: 1 });
+  for (let i = 0; i < 5; i++) await deliver(failing, event('turn-finished', 'ses_x', directory));
+  assert.equal(tries, 3);
+  const q = (await post(deps, '/queue/list', { directory })).queue;
+  assert.deepEqual(ids(q), ['a']);
+  assert.equal(q[0]!.failures, 3);
+  assert.match(q[0]!.lastError ?? '', /quota/);
+  assert.match(q[0]!.lastError ?? '', /not retried automatically/);
+  assert.equal(logs.length, 3);
+  // A stuck entry does not hold up the ones behind it.
+  await post(deps, '/queue/add', { directory, entry: entry('b') });
+  const r = await post(deps, '/queue/take', { directory, maxParallel: 1 });
+  assert.deepEqual(ids(r.taken), ['b']);
+  assert.deepEqual(ids(r.queue), ['a']);
+  // Taken out and queued again by the user: a fresh entry, tried again.
+  await post(deps, '/queue/remove', { directory, taskId: 'a' });
+  await post(deps, '/queue/add', { directory, entry: entry('a') });
+  assert.equal((await post(deps, '/queue/list', { directory })).queue.find((e) => e.taskId === 'a')!.failures, undefined);
+});
+
+test('a queued start that succeeds but cannot save its link is not put back (no duplicate session)', async (t) => {
+  const { root, directory, deps, starts, logs } = await setup(t);
+  await post(deps, '/queue/add', { directory, entry: entry('a'), maxParallel: 1 });
+  // Links can be read (none yet) but not written.
+  const locked = join(root, 'locked');
+  await mkdir(locked);
+  await chmod(locked, 0o500);
+  t.after(() => chmod(locked, 0o700).catch(() => {}));
+  const broken: Deps = { ...deps, linksFile: join(locked, 'links.json') };
+  await deliver(broken, event('turn-finished', 'ses_x', directory));
+  assert.equal(starts.length, 1);
+  assert.deepEqual(ids((await post(deps, '/queue/list', { directory })).queue), []);
+  assert.ok(logs.some((l) => /ses_q1 started, but its link/.test(l)), logs.join('\n'));
+  assert.ok(!logs.some((l) => /could not start the queued task/.test(l)), logs.join('\n'));
+  await deliver(broken, event('turn-finished', 'ses_x', directory));
+  assert.equal(starts.length, 1);
 });
 
 test('fail closed: when status lookups fail (not 404), take starts nothing; a 404 (deleted session) does not block', async (t) => {

@@ -111,6 +111,7 @@ export const createStarter = (deps: StarterDeps) => {
           agent: opts.agent,
           location: opts.location,
         });
+        if (r.linkError !== undefined) fail(r.linkError);
         void reloadLinks(p.id, p.directory);
         return { sessionId: r.sessionId };
       } catch (e) {

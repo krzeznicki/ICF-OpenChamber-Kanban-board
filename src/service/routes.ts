@@ -149,7 +149,13 @@ const start = async (dir: string, input: Omit<Parameters<typeof startSession>[0]
     return await inFlight(queueFile(deps), dir, input.taskId, () =>
       startSession(
         { directory: dir, ...input },
-        { exec: deps.exec, sessions, linksFile: linksFile(deps), ...(deps.suffix ? { suffix: deps.suffix } : {}) },
+        {
+          exec: deps.exec,
+          sessions,
+          linksFile: linksFile(deps),
+          ...(deps.suffix ? { suffix: deps.suffix } : {}),
+          ...(deps.log ? { log: deps.log } : {}),
+        },
       ),
     );
   } finally {
@@ -163,8 +169,10 @@ const ERROR_MAX = 500;
 
 /**
  * Takes what may start now from the project's queue and starts it by path B (the board may be
- * closed). A failed start goes back to the front of the queue with `lastError`, which the panel
- * shows on the queued card; it is tried again on the next drain.
+ * closed). A failed start (its new worktree and branch removed again) goes back to the front of
+ * the queue with `lastError`, which the panel shows on the queued card; it is tried again on the
+ * next drain, up to MAX_START_FAILURES times. A start whose session runs but whose link could not
+ * be saved counts as started (startSession logs it), so it is never started twice.
  */
 export const drainProject = async (dir: string, deps: Deps): Promise<void> => {
   const { taken } = await takeFromQueue(queueFile(deps), dir, { links: () => liveLinks(dir, deps) });

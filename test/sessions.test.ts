@@ -95,14 +95,54 @@ test('/sessions/start: a failing git is 422 and starts nothing', async (t) => {
   await assert.rejects(readFile(linksFile, 'utf8'));
 });
 
-test('/sessions/start: a failing start is 422 naming the kept worktree, and writes no link', async (t) => {
-  const { directory, linksFile, deps } = await setup(t, { startFails: true });
+test('/sessions/start: a failing start is 422, removes the new worktree and its branch, and writes no link', async (t) => {
+  const { directory, linksFile, execs, deps } = await setup(t, { startFails: true });
   const r = await handle('POST', '/sessions/start', body(directory), deps);
   assert.equal(r.status, 422);
   const msg = (r.json as Err).error.message;
   assert.match(msg, /Session control is not approved/);
-  assert.ok(msg.includes(join(dirname(directory), 'repo-worktrees', 'drag-cards-abc123')), msg);
+  const wt = join(dirname(directory), 'repo-worktrees', 'drag-cards-abc123');
+  assert.deepEqual(
+    execs.map((e) => e.args),
+    [
+      ['-C', directory, 'worktree', 'add', '-b', 'icf/drag-cards-abc123', wt],
+      ['-C', directory, 'worktree', 'remove', '--force', wt],
+      ['-C', directory, 'branch', '-D', 'icf/drag-cards-abc123'],
+    ],
+  );
+  assert.ok(!msg.includes('is kept'), msg);
   await assert.rejects(readFile(linksFile, 'utf8'));
+});
+
+test('/sessions/start: when removing the worktree fails too, the start error stands, the cleanup failure is logged and the worktree named', async (t) => {
+  const { directory, deps } = await setup(t, { startFails: true });
+  const logs: string[] = [];
+  const calls: string[][] = [];
+  const exec: Exec = async (_cmd, args) => {
+    calls.push(args);
+    return args.includes('remove') ? { code: 1, stdout: '', stderr: 'fatal: locked' } : { code: 0, stdout: '', stderr: '' };
+  };
+  const r = await handle('POST', '/sessions/start', body(directory), { ...deps, exec, log: (m) => logs.push(m) });
+  assert.equal(r.status, 422);
+  const msg = (r.json as Err).error.message;
+  assert.match(msg, /Session control is not approved/);
+  assert.ok(msg.includes(join(dirname(directory), 'repo-worktrees', 'drag-cards-abc123')), msg);
+  assert.ok(logs.some((l) => /could not remove the worktree .*fatal: locked/.test(l)), logs.join('\n'));
+  assert.ok(calls.some((a) => a.includes('branch') && a.includes('-D')), 'still tries to delete the branch');
+});
+
+test('/sessions/start: a started session whose link cannot be saved is still a success, with a logged warning', async (t) => {
+  const { root, directory, starts, deps } = await setup(t);
+  const blocker = join(root, 'not-a-dir');
+  await writeFile(blocker, 'x');
+  const logs: string[] = [];
+  const r = await handle('POST', '/sessions/start', body(directory), { ...deps, linksFile: join(blocker, 'links.json'), log: (m) => logs.push(m) });
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  const json = r.json as { sessionId: string; linkError?: string };
+  assert.equal(json.sessionId, 'ses_1');
+  assert.match(json.linkError ?? '', /link to the card could not be saved/);
+  assert.equal(starts.length, 1);
+  assert.ok(logs.some((l) => /ses_1 started, but its link/.test(l)), logs.join('\n'));
 });
 
 test('/sessions/start: bad parameters are 400; without session control 422', async (t) => {

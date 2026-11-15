@@ -4929,6 +4929,7 @@ ${note}` : note;
             agent: opts.agent,
             location: opts.location
           });
+          if (r.linkError !== void 0) fail2(r.linkError);
           void reloadLinks(p.id, p.directory);
           return { sessionId: r.sessionId };
         } catch (e) {

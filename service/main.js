@@ -1121,6 +1121,7 @@ import { homedir } from "node:os";
 import { join as join3 } from "node:path";
 
 // src/core/queue.ts
+var MAX_START_FAILURES = 3;
 var nextToStart = (queued, running, maxParallel) => queued.slice(0, Math.max(0, maxParallel - running));
 
 // src/service/store.ts
@@ -1173,7 +1174,7 @@ var MAX_PARALLEL_LIMIT = 10;
 var RESERVE_MS = 18e4;
 var isEntry = (v) => {
   const e = v;
-  return typeof e === "object" && e !== null && typeof e.taskId === "string" && typeof e.title === "string" && typeof e.prompt === "string" && (e.model === null || typeof e.model === "string") && (e.agent === null || typeof e.agent === "string") && (e.location === "worktree" || e.location === "project") && typeof e.queuedAt === "number" && (e.lastError === void 0 || typeof e.lastError === "string");
+  return typeof e === "object" && e !== null && typeof e.taskId === "string" && typeof e.title === "string" && typeof e.prompt === "string" && (e.model === null || typeof e.model === "string") && (e.agent === null || typeof e.agent === "string") && (e.location === "worktree" || e.location === "project") && typeof e.queuedAt === "number" && (e.lastError === void 0 || typeof e.lastError === "string") && (e.failures === void 0 || typeof e.failures === "number" && Number.isFinite(e.failures));
 };
 var clampMax = (n) => typeof n === "number" && Number.isFinite(n) ? Math.min(MAX_PARALLEL_LIMIT, Math.max(1, Math.round(n))) : DEFAULT_MAX_PARALLEL;
 var readQueueFile = async (file) => {
@@ -1218,12 +1219,15 @@ var removeFromQueue = (file, dir, taskId) => {
     return [...q.entries];
   });
 };
+var isStuck = (e) => (e.failures ?? 0) >= MAX_START_FAILURES;
 var requeueFailed = (file, dir, entry, error2) => {
   release(file, dir, entry.taskId);
   if (forgetRemoval(file, dir, entry.taskId)) return listQueue(file, dir);
+  const failures = (entry.failures ?? 0) + 1;
+  const lastError = failures >= MAX_START_FAILURES ? `${error2} (failed ${failures} times; not retried automatically: move the card out of In Progress and back to try again)` : error2;
   return update(file, dir, (q) => {
     q.entries = q.entries.filter((e) => e.taskId !== entry.taskId);
-    q.entries.unshift({ ...entry, lastError: error2 });
+    q.entries.unshift({ ...entry, lastError, failures });
     return [...q.entries];
   });
 };
@@ -1264,6 +1268,7 @@ var runningNow = (links, p, starting, now) => {
 var takeFromQueue = (file, dir, input) => update(file, dir, async (q) => {
   if (input.maxParallel !== void 0) q.maxParallel = clampMax(input.maxParallel);
   if (q.entries.length === 0) return { taken: [], queue: [] };
+  if (q.entries.every(isStuck)) return { taken: [], queue: [...q.entries] };
   const links = await input.links();
   if (links.some((l) => l.status === "error")) return { taken: [], queue: [...q.entries] };
   const live = new Set(links.filter((l) => l.status === "busy" || l.status === "waiting").map((l) => l.taskId));
@@ -1271,7 +1276,7 @@ var takeFromQueue = (file, dir, input) => update(file, dir, async (q) => {
   const now = (input.now ?? Date.now)();
   const p = pendingFor(file, dir);
   const running = runningNow(links, p, [...input.starting ?? [], ...input.running ?? []], now);
-  const ids = new Set(nextToStart(q.entries.map((e) => e.taskId), running, q.maxParallel));
+  const ids = new Set(nextToStart(q.entries.filter((e) => !isStuck(e)).map((e) => e.taskId), running, q.maxParallel));
   const taken = q.entries.filter((e) => ids.has(e.taskId));
   q.entries = q.entries.filter((e) => !ids.has(e.taskId));
   for (const e of taken) p.reserved.set(e.taskId, now);
@@ -1351,12 +1356,30 @@ var worktreeSlug = (taskId, title, suffix = randomBytes2(3).toString("hex")) => 
 };
 var worktreesRoot = (directory) => join4(dirname2(directory), `${basename(directory)}-worktrees`);
 var message = (e) => e instanceof Error ? e.message : String(e);
+var removeWorktree = async (deps2, directory, path, branch) => {
+  const log = deps2.log ?? ((m) => console.error(m));
+  const run = async (args, what) => {
+    try {
+      const r = await deps2.exec("git", ["-C", directory, ...args], { cwd: directory });
+      if (r.code === 0) return true;
+      log(`icf-kanban: could not remove the ${what}: ${(r.stderr || r.stdout).trim() || `git exited ${r.code}`}`);
+    } catch (e) {
+      log(`icf-kanban: could not remove the ${what}: ${message(e)}`);
+    }
+    return false;
+  };
+  const removed = await run(["worktree", "remove", "--force", path], `worktree ${path}`);
+  await run(["branch", "-D", branch], `branch ${branch}`);
+  return removed;
+};
 var startSession = async (input, deps2) => {
   let worktree = null;
+  let branch = "";
   if (input.location === "worktree") {
     const slug = worktreeSlug(input.taskId, input.title, deps2.suffix?.());
     const path = join4(worktreesRoot(input.directory), slug);
-    const r = await deps2.exec("git", ["-C", input.directory, "worktree", "add", "-b", `icf/${slug}`, path], { cwd: input.directory });
+    branch = `icf/${slug}`;
+    const r = await deps2.exec("git", ["-C", input.directory, "worktree", "add", "-b", branch, path], { cwd: input.directory });
     if (r.code !== 0) {
       throw new TrackerError("FAILED", `Could not create the worktree ${path}: ${(r.stderr || r.stdout).trim() || `git exited ${r.code}`}`);
     }
@@ -1373,19 +1396,18 @@ var startSession = async (input, deps2) => {
       ...input.agent !== null ? { agent: input.agent } : {}
     });
   } catch (e) {
-    const kept = worktree === null ? "" : ` The worktree ${worktree} was created and is kept; remove it with git worktree remove if you do not need it.`;
+    const kept = worktree === null || await removeWorktree(deps2, input.directory, worktree, branch) ? "" : ` The worktree ${worktree} could not be removed; remove it with git worktree remove if you do not need it.`;
     throw new TrackerError("FAILED", `Could not start the session: ${message(e).replace(/\.$/, "")}.${kept}`);
   }
   const directory = started.directory ?? cwd;
+  let linkError;
   try {
     await addLink(deps2.linksFile, input.directory, { taskId: input.taskId, sessionId: started.sessionId, directory, createdAt: Date.now() });
   } catch (e) {
-    throw new TrackerError(
-      "FAILED",
-      `The session ${started.sessionId} started, but its link to the card could not be saved (${message(e)}); the card will not follow it.`
-    );
+    linkError = `The session ${started.sessionId} started, but its link to the card could not be saved (${message(e)}); the card will not follow it.`;
+    (deps2.log ?? ((m) => console.error(m)))(`icf-kanban: ${linkError}`);
   }
-  return { sessionId: started.sessionId, directory, worktree };
+  return { sessionId: started.sessionId, directory, worktree, ...linkError !== void 0 ? { linkError } : {} };
 };
 
 // src/service/routes.ts
@@ -1459,7 +1481,13 @@ var start = async (dir, input, deps2) => {
       input.taskId,
       () => startSession(
         { directory: dir, ...input },
-        { exec: deps2.exec, sessions, linksFile: linksFile(deps2), ...deps2.suffix ? { suffix: deps2.suffix } : {} }
+        {
+          exec: deps2.exec,
+          sessions,
+          linksFile: linksFile(deps2),
+          ...deps2.suffix ? { suffix: deps2.suffix } : {},
+          ...deps2.log ? { log: deps2.log } : {}
+        }
       )
     );
   } finally {
