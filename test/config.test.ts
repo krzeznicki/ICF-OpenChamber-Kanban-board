@@ -10,6 +10,7 @@ import { openTracker } from '../src/core/openTracker.ts';
 import { TEMPLATES } from '../src/core/templates/index.ts';
 import type { Exec } from '../src/core/types.ts';
 import { TrackerError } from '../src/core/types.ts';
+import { fakeGh } from './fakeGh.ts';
 
 const FIXTURES = fileURLToPath(new URL('./fixtures/config/', import.meta.url));
 const TEMPLATE_DIR = fileURLToPath(new URL('../src/core/templates/', import.meta.url));
@@ -169,9 +170,15 @@ test('openTracker returns a working local tracker', async (t) => {
   assert.deepEqual(await tracker.list(), []);
 });
 
-test('openTracker for github is UNSUPPORTED until the GitHub tracker lands', async (t) => {
-  const root = await repo(t, { 'issue-tracker.md': await fixture('issue-tracker-github.md') });
-  await rejectsWith(openTracker(root, noExec), 'UNSUPPORTED', /GitHub/);
+test('openTracker for github returns the GitHub tracker, using the triage labels', async (t) => {
+  const root = await repo(t, {
+    'issue-tracker.md': await fixture('issue-tracker-github.md'),
+    'triage-labels.md': '| `ready-for-agent` | `afk` | x |\n',
+  });
+  const gh = fakeGh([{ number: 5, title: 'A', labels: ['afk'] }]);
+  const tracker = await openTracker(root, gh.exec);
+  assert.deepEqual((await tracker.list()).map((x) => [x.id, x.state]), [['#5', 'ready-for-agent']]);
+  assert.ok(gh.calls.every((c) => c[0] === 'gh'));
 });
 
 test('openTracker for gitlab is UNSUPPORTED', async (t) => {

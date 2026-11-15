@@ -123,6 +123,269 @@ var realExec = (cmd, args, opts) => new Promise((resolve2) => {
   );
 });
 
+// src/core/githubTracker.ts
+var MIN_GH = [2, 94];
+var DONE_WINDOW_MS = 30 * 24 * 3600 * 1e3;
+var ROLES2 = ["needs-triage", "needs-info", "ready-for-agent", "ready-for-human", "wontfix"];
+var CATEGORIES = ["bug", "enhancement"];
+var TYPE_PREFIX = "type:";
+var LIST_FIELDS = "number,title,body,labels,state,updatedAt,url,closedAt";
+var ROLE_DESCRIPTIONS = {
+  "needs-triage": "Maintainer needs to evaluate this issue",
+  "needs-info": "Waiting on reporter for more information",
+  "ready-for-agent": "Fully specified, ready for an AFK agent",
+  "ready-for-human": "Requires human implementation",
+  wontfix: "Will not be actioned"
+};
+var RELATION_FIELDS = "number parent { number } subIssues(first: 100) { totalCount nodes { number state } } issueDependenciesSummary { totalBlockedBy } blockedBy(first: 100) { nodes { number } }";
+var ISSUE_FIELDS = `title body state url updatedAt closedAt labels(first: 100) { nodes { name } } ${RELATION_FIELDS}`;
+var parseNumber = (id) => {
+  const m = typeof id === "string" ? /^\s*#?(\d+)\s*$/.exec(id) : null;
+  if (m === null || Number(m[1]) === 0) throw new TrackerError("INVALID", `GitHub task id must be "#<number>": ${String(id)}`);
+  return Number(m[1]);
+};
+var idOf = (n) => `#${n}`;
+var bodyBlockers = (body) => {
+  const out = [];
+  const take = (text) => {
+    for (const m of text.matchAll(/#(\d+)\b/g)) {
+      const n = Number(m[1]);
+      if (!out.includes(n)) out.push(n);
+    }
+  };
+  let inSection = false;
+  for (const line2 of body.split(/\r?\n/)) {
+    const heading = /^ {0,3}#{1,6}\s+(.*?)\s*#*\s*$/.exec(line2);
+    if (heading) {
+      inSection = /^blocked by:?$/i.test(heading[1].replace(/[*_]/g, "").trim());
+      continue;
+    }
+    if (inSection) {
+      take(line2);
+      continue;
+    }
+    const m = /^\s*[-*]?\s*[*_]*blocked by:?[*_]*:?\s*(.*)$/i.exec(line2);
+    if (m) take(m[1]);
+  }
+  return out;
+};
+var versionOf = (stdout) => {
+  const m = /gh version (\d+)\.(\d+)(?:\.(\d+))?/.exec(stdout.split("\n")[0] ?? "");
+  return m ? [Number(m[1]), Number(m[2]), Number(m[3] ?? 0)] : null;
+};
+var createGithubTracker = (root, exec, labels) => {
+  const stateLabels = ROLES2.map((r) => labels[r]);
+  let preflight = null;
+  let known = null;
+  const missing = () => new TrackerError("GH_MISSING", "GitHub CLI (gh) is not installed: install it with `brew install gh`, then run `gh auth login`");
+  const check = async () => {
+    const v = await exec("gh", ["--version"], { cwd: root });
+    if (v.code === 127) throw missing();
+    const version = versionOf(v.stdout);
+    if (v.code !== 0 || version === null) {
+      throw new TrackerError("FAILED", `Cannot read the gh version: ${(v.stderr || v.stdout).trim()}`);
+    }
+    if (version[0] < MIN_GH[0] || version[0] === MIN_GH[0] && version[1] < MIN_GH[1]) {
+      throw new TrackerError(
+        "GH_OLD",
+        `gh ${version.join(".")} is too old: ICF-kanban needs gh ${MIN_GH.join(".")} or later; update it with \`brew upgrade gh\``
+      );
+    }
+    const auth = await exec("gh", ["auth", "status"], { cwd: root });
+    if (auth.code === 127) throw missing();
+    if (auth.code !== 0) {
+      const detail = (auth.stderr || auth.stdout).trim();
+      throw new TrackerError("GH_AUTH", `gh is not logged in to GitHub: run \`gh auth login\`${detail ? ` (${detail})` : ""}`);
+    }
+  };
+  const ready = () => {
+    if (preflight === null) {
+      preflight = check();
+      preflight.catch(() => {
+        preflight = null;
+      });
+    }
+    return preflight;
+  };
+  const failed = (args, r) => new TrackerError("FAILED", `gh ${args.slice(0, 2).join(" ")} failed: ${(r.stderr || r.stdout).trim() || `exit code ${r.code}`}`);
+  const run = async (args, allowFailure = false) => {
+    await ready();
+    const r = await exec("gh", args, { cwd: root });
+    if (r.code === 127) throw missing();
+    if (r.code !== 0 && !allowFailure) throw failed(args, r);
+    return r;
+  };
+  const parseJson = (text, what) => {
+    try {
+      return JSON.parse(text);
+    } catch {
+      throw new TrackerError("FAILED", `gh returned invalid JSON for ${what}`);
+    }
+  };
+  const graph = async (numbers, full) => {
+    const fields = full ? ISSUE_FIELDS : RELATION_FIELDS;
+    const aliases = numbers.map((n) => `i${n}: issue(number: ${n}) { ${fields} }`).join(" ");
+    const query = `query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { ${aliases} } }`;
+    const args = ["api", "graphql", "-F", "owner={owner}", "-F", "name={repo}", "-f", `query=${query}`];
+    const r = await run(args, true);
+    let data = null;
+    try {
+      data = JSON.parse(r.stdout);
+    } catch {
+      data = null;
+    }
+    const repo = data?.data?.repository;
+    if (r.code !== 0 && (repo === void 0 || repo === null)) throw failed(args, r);
+    if (repo === void 0 || repo === null) throw new TrackerError("FAILED", "gh api graphql returned no repository");
+    return new Map(numbers.map((n) => [n, repo[`i${n}`] ?? null]));
+  };
+  const relationsOf = (g) => ({
+    parent: g?.parent?.number ?? null,
+    children: (g?.subIssues?.nodes ?? []).map((c) => ({ number: c.number, open: c.state === "OPEN" })),
+    childCount: g?.subIssues?.totalCount ?? 0,
+    blockedBy: g?.issueDependenciesSummary && g.issueDependenciesSummary.totalBlockedBy > 0 && g.blockedBy ? g.blockedBy.nodes.map((b) => b.number) : null
+  });
+  const stateOf = (issue) => {
+    if (issue.state !== "OPEN") return "done";
+    return ROLES2.find((r) => issue.labels.includes(labels[r])) ?? "needs-triage";
+  };
+  const typeOf = (names) => {
+    const category = CATEGORIES.find((c) => names.includes(c));
+    if (category !== void 0) return category;
+    const custom = names.find((l) => l.toLowerCase().startsWith(TYPE_PREFIX));
+    return custom === void 0 ? null : custom.slice(TYPE_PREFIX.length).trim() || null;
+  };
+  const toTask = (issue, rel) => ({
+    id: idOf(issue.number),
+    kind: rel.childCount > 0 ? "parent" : "ticket",
+    title: issue.title,
+    body: issue.body,
+    state: stateOf(issue),
+    type: typeOf(issue.labels),
+    parentId: rel.parent === null ? null : idOf(rel.parent),
+    blockedBy: (rel.blockedBy ?? bodyBlockers(issue.body)).map(idOf),
+    url: issue.url,
+    updatedAt: Date.parse(issue.updatedAt) || 0
+  });
+  const load = async (n) => {
+    const g = (await graph([n], true)).get(n) ?? null;
+    if (g === null) throw new TrackerError("NOT_FOUND", `Issue not found: #${n}`);
+    const issue = {
+      number: g.number,
+      title: g.title ?? "",
+      body: g.body ?? "",
+      labels: (g.labels?.nodes ?? []).map((l) => l.name),
+      state: g.state ?? "OPEN",
+      updatedAt: g.updatedAt ?? "",
+      url: g.url ?? "",
+      closedAt: g.closedAt ?? null
+    };
+    const rel = relationsOf(g);
+    return { task: toTask(issue, rel), issue, rel };
+  };
+  const get = async (id) => (await load(parseNumber(id))).task;
+  const typeLabel = (type) => CATEGORIES.includes(type) ? type : `${TYPE_PREFIX}${type}`;
+  const isTypeLabel = (l) => CATEGORIES.includes(l) || l.toLowerCase().startsWith(TYPE_PREFIX);
+  const ensureLabels = async (names) => {
+    if (known === null) {
+      known = run(["label", "list", "--limit", "1000", "--json", "name"]).then(
+        (r) => new Set(parseJson(r.stdout, "label list").map((l) => l.name))
+      );
+      known.catch(() => {
+        known = null;
+      });
+    }
+    const have = await known;
+    for (const name of names) {
+      if (have.has(name)) continue;
+      const role = ROLES2.find((r) => labels[r] === name);
+      const description = role === void 0 ? "Task type" : ROLE_DESCRIPTIONS[role];
+      await run(["label", "create", name, "--description", description]);
+      have.add(name);
+    }
+  };
+  const swapLabels = async (n, add, remove) => {
+    if (add === null && remove.length === 0) return;
+    if (add !== null) await ensureLabels([add]);
+    const args = ["issue", "edit", String(n)];
+    if (add !== null) args.push("--add-label", add);
+    for (const l of remove) args.push("--remove-label", l);
+    await run(args);
+  };
+  const setState = async (id, state) => {
+    const { issue } = await load(parseNumber(id));
+    const open = issue.state === "OPEN";
+    if (state === "done") {
+      if (open) await run(["issue", "close", String(issue.number)]);
+      return get(idOf(issue.number));
+    }
+    if (!ROLES2.includes(state)) throw new TrackerError("INVALID", `Unknown state: ${String(state)}`);
+    if (!open) await run(["issue", "reopen", String(issue.number)]);
+    const label = labels[state];
+    const remove = issue.labels.filter((l) => stateLabels.includes(l) && l !== label);
+    await swapLabels(issue.number, issue.labels.includes(label) ? null : label, remove);
+    return get(idOf(issue.number));
+  };
+  return {
+    async list() {
+      const r = await run(["issue", "list", "--state", "all", "--limit", "500", "--json", LIST_FIELDS]);
+      const raw = parseJson(r.stdout, "issue list");
+      const now = Date.now();
+      const issues = raw.map((i) => ({ ...i, body: i.body ?? "", labels: (i.labels ?? []).map((l) => l.name) })).filter((i) => i.state === "OPEN" || i.closedAt !== null && now - Date.parse(i.closedAt) <= DONE_WINDOW_MS).sort((a, b) => a.number - b.number);
+      if (issues.length === 0) return [];
+      const rel = await graph(issues.map((i) => i.number), false);
+      return issues.map((i) => toTask(i, relationsOf(rel.get(i.number) ?? null)));
+    },
+    get,
+    async create(input) {
+      if (typeof input.title !== "string" || input.title.trim() === "") throw new TrackerError("INVALID", "Title is required");
+      const parent = input.parentId === void 0 ? null : parseNumber(input.parentId);
+      const blockers = (input.blockedBy ?? []).map(parseNumber);
+      const type = input.type?.trim() ? typeLabel(input.type.trim()) : null;
+      const state = input.state === void 0 || input.state === "done" ? null : labels[input.state];
+      if (input.state !== void 0 && input.state !== "done" && state === void 0) {
+        throw new TrackerError("INVALID", `Unknown state: ${String(input.state)}`);
+      }
+      const add = [state, type].filter((l) => l !== null);
+      await ensureLabels(add);
+      const args = ["issue", "create", "--title", input.title.trim(), "--body", input.body ?? ""];
+      for (const l of add) args.push("--label", l);
+      if (parent !== null) args.push("--parent", String(parent));
+      if (blockers.length > 0) args.push("--blocked-by", blockers.join(","));
+      const r = await run(args);
+      const m = /\/issues\/(\d+)\s*$/.exec(r.stdout.trim());
+      if (m === null) throw new TrackerError("FAILED", `gh issue create printed no issue URL: ${r.stdout.trim()}`);
+      const n = Number(m[1]);
+      if (input.state === "done") await run(["issue", "close", String(n)]);
+      return get(idOf(n));
+    },
+    setState,
+    async setType(id, type) {
+      const value = typeof type === "string" ? type.trim() : "";
+      if (value === "") throw new TrackerError("INVALID", "Type is required");
+      const { issue } = await load(parseNumber(id));
+      const label = typeLabel(value);
+      const remove = issue.labels.filter((l) => isTypeLabel(l) && l !== label);
+      await swapLabels(issue.number, issue.labels.includes(label) ? null : label, remove);
+      return get(idOf(issue.number));
+    },
+    async close(id, opts) {
+      const { issue, rel } = await load(parseNumber(id));
+      const closed = [];
+      if (opts.withChildren) {
+        for (const child of rel.children.filter((c) => c.open)) {
+          await run(["issue", "close", String(child.number)]);
+          closed.push(child.number);
+        }
+      }
+      if (issue.state === "OPEN") await run(["issue", "close", String(issue.number)]);
+      const out = [await get(idOf(issue.number))];
+      for (const n of closed) out.push(await get(idOf(n)));
+      return out;
+    }
+  };
+};
+
 // src/core/localTracker.ts
 import { mkdir as mkdir2, readdir, readFile as readFile2, stat, writeFile as writeFile2 } from "node:fs/promises";
 import { join as join2, posix } from "node:path";
@@ -298,7 +561,7 @@ var issueFileName = (n, title) => `${pad(n)}-${slugify(title)}.md`;
 
 // src/core/localTracker.ts
 var SCRATCH = ".scratch";
-var DONE_WINDOW_MS = 30 * 24 * 3600 * 1e3;
+var DONE_WINDOW_MS2 = 30 * 24 * 3600 * 1e3;
 var ID = /^\.scratch\/([^/]+)\/(spec\.md|issues\/([^/]+\.md))$/;
 var NN = /^(\d+)/;
 var specId = (feature) => `${SCRATCH}/${feature}/spec.md`;
@@ -346,7 +609,7 @@ var fileNumber = (file) => {
   const m = NN.exec(file);
   return m ? Number(m[1]) : Number.POSITIVE_INFINITY;
 };
-var isRecent = (t, now) => t.state !== "done" || now - t.updatedAt <= DONE_WINDOW_MS;
+var isRecent = (t, now) => t.state !== "done" || now - t.updatedAt <= DONE_WINDOW_MS2;
 var createLocalTracker = (root) => {
   const abs = (id) => join2(root, ...id.split("/"));
   const featureDir = (feature) => join2(root, SCRATCH, feature);
@@ -533,8 +796,7 @@ var createLocalTracker = (root) => {
 var openTracker = async (root, exec) => {
   const config = await readConfig(root);
   if (config.tracker === "local") return createLocalTracker(root);
-  void exec;
-  throw new TrackerError("UNSUPPORTED", "GitHub Issues tracker is not available in this build yet");
+  return createGithubTracker(root, exec, config.labels);
 };
 
 // src/cli/main.ts
