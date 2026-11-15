@@ -27,6 +27,7 @@ import {
   resetPreset,
   setPresetText,
   setSkills,
+  setOptionLabel,
   setStatusLine,
 } from '../src/panel/presets.ts';
 import {
@@ -277,7 +278,7 @@ test('custom sets: a copy (with edits) or empty, rename, delete; every preset in
   const team = listPresets(copy.stored, copy.id);
   assert.deepEqual(team.map((p) => p.id), [...PRESET_IDS]);
   assert.equal(team.find((p) => p.id === 'implement')!.text, 'My way.');
-  assert.ok(team.every((p) => !p.builtin && p.skills === undefined));
+  assert.ok(team.every((p) => !p.builtin));
   const empty = addSet(copy.stored, 'Team', null);
   assert.equal(empty.id, 'set-team-2');
   assert.deepEqual(listPresets(empty.stored, empty.id), []);
@@ -300,7 +301,7 @@ test('custom sets: a copy (with edits) or empty, rename, delete; every preset in
   stored = deletePreset(stored, 'set-team', 'triage');
   stored = addPreset(stored, 'set-team', 'Extra').stored;
   const after = listPresets(stored, 'set-team');
-  assert.deepEqual(after[0], { id: 'plan', name: 'Think', text: 'T', builtin: false });
+  assert.deepEqual(after[0], { id: 'plan', name: 'Think', text: 'T', builtin: false, skills: ['brainstorming', 'writing-plans'] });
   assert.deepEqual(after.map((p) => p.id), ['plan', 'prototype', 'implement', 'implement-no-questions', 'orchestrate', 'diagnose', 'custom-extra']);
   assert.equal(isEdited(stored, 'set-team', 'plan'), false);
   stored = deleteSet(stored, 'set-team');
@@ -347,6 +348,36 @@ test('migrateStoredPresets: 0.2 edits and own presets go to every built-in set (
   }
   assert.deepEqual(migrateStoredPresets(undefined), EMPTY_SETS);
   assert.deepEqual(migrateStoredPresets({ builtin: {}, custom: [] }), EMPTY_SETS);
+});
+
+test('a copy of a built-in set keeps each preset\'s skills, so SKILL.md paths and the skills check still work', () => {
+  const copy = addSet(EMPTY_SETS, 'Team', 'superpowers');
+  const team = listPresets(copy.stored, copy.id, { brainstorming: '/s/brainstorming/SKILL.md' });
+  const src = set('superpowers').presets.find((p) => p.id === 'plan')!;
+  const plan = team.find((p) => p.id === 'plan')!;
+  assert.deepEqual(plan.skills, src.skills);
+  assert.deepEqual(plan.requires, src.requires);
+  assert.deepEqual(plan.skillFiles, [{ name: 'brainstorming', path: '/s/brainstorming/SKILL.md' }]);
+  // Survives storage, a rename and a text edit; a copy of the copy keeps them too.
+  let stored = parseStoredSets(structuredClone(copy.stored));
+  stored = renamePreset(setPresetText(stored, copy.id, 'plan', 'Mine'), copy.id, 'plan', 'Think');
+  assert.deepEqual(listPresets(stored, copy.id).find((p) => p.id === 'plan')!.skills, src.skills);
+  const again = addSet(stored, 'Again', copy.id);
+  assert.deepEqual(listPresets(again.stored, again.id).find((p) => p.id === 'plan')!.skills, src.skills);
+  // The set's skills are the copy's: the status line and the picker label check them.
+  assert.deepEqual(setSkills(copy.id, copy.stored).sort(), [...SP].sort());
+  assert.deepEqual(missingSkills(copy.id, SP.slice(1), copy.stored), [SP[0]]);
+  assert.equal(setStatusLine(copy.id, SP, true, copy.stored), 'All of the skills this set names were found.');
+  assert.equal(setStatusLine(copy.id, SP.slice(1), true, copy.stored), `Skills missing: ${SP[0]}. Sessions are still told to run them.`);
+  assert.equal(setStatusLine(copy.id, null, true, copy.stored), 'The service could not check which skills are installed.');
+  assert.equal(setOptionLabel({ id: copy.id, name: 'Team', builtin: false }, SP.slice(1), copy.stored), 'Team (skills missing)');
+  // A copy of Plain, or an empty set, names no skills.
+  const plain = addSet(EMPTY_SETS, 'P', 'plain');
+  assert.deepEqual(setSkills(plain.id, plain.stored), []);
+  assert.equal(setStatusLine(plain.id, [], true, plain.stored), 'Your own set: its texts are used as written.');
+  // Malformed skills in storage are dropped, not thrown.
+  const odd = parseStoredSets({ custom: [{ id: 'set-x', name: 'X', presets: [{ id: 'a', name: 'A', text: 't', skills: [1, 'tdd'], requires: 'no' }] }] });
+  assert.deepEqual(odd.custom[0]!.presets[0], { id: 'a', name: 'A', text: 't', skills: ['tdd'] });
 });
 
 test('Settings lines: what each set needs and what was found', () => {

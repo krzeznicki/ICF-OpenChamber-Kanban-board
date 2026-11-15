@@ -3420,6 +3420,16 @@ ${GUEST_UI_LOOK_CSS}`;
   var builtinSet = (id) => BUILTIN_SETS.find((s) => s.id === id);
   var isBuiltinSet = (id) => builtinSet(id) !== void 0;
   var record2 = (v2) => typeof v2 === "object" && v2 !== null && !Array.isArray(v2) ? v2 : null;
+  var names = (v2) => {
+    if (!Array.isArray(v2)) return void 0;
+    const list2 = v2.filter((n) => typeof n === "string" && n !== "");
+    return list2.length === 0 ? void 0 : list2;
+  };
+  var skillMeta = (p) => {
+    const skills = names(p.skills);
+    const requires = names(p.requires);
+    return { ...skills === void 0 ? {} : { skills }, ...requires === void 0 ? {} : { requires } };
+  };
   var parsePresetList = (raw, reserved = /* @__PURE__ */ new Set()) => {
     const out = [];
     if (!Array.isArray(raw)) return out;
@@ -3429,7 +3439,7 @@ ${GUEST_UI_LOOK_CSS}`;
       if (c === null || typeof c.id !== "string" || c.id === "" || reserved.has(c.id) || seen.has(c.id)) continue;
       if (typeof c.name !== "string" || typeof c.text !== "string") continue;
       seen.add(c.id);
-      out.push({ id: c.id, name: c.name, text: c.text });
+      out.push({ id: c.id, name: c.name, text: c.text, ...skillMeta(c) });
     }
     return out;
   };
@@ -3480,30 +3490,35 @@ ${GUEST_UI_LOOK_CSS}`;
     ...stored2.custom.map((s) => ({ id: s.id, name: s.name, builtin: false }))
   ];
   var hasSet = (stored2, id) => isBuiltinSet(id) || stored2.custom.some((s) => s.id === id);
-  var setSkills = (setId) => [...builtinSet(setId)?.skills ?? []];
-  var missingSkills = (setId, found) => setSkills(setId).filter((n) => !found.includes(n));
+  var setSkills = (setId, stored2 = EMPTY_SETS) => {
+    const builtin = builtinSet(setId);
+    if (builtin !== void 0) return [...builtin.skills];
+    const mine = stored2.custom.find((s) => s.id === setId);
+    return [...new Set((mine?.presets ?? []).flatMap((p) => [...p.skills ?? [], ...p.requires ?? []]))];
+  };
+  var missingSkills = (setId, found, stored2 = EMPTY_SETS) => setSkills(setId, stored2).filter((n) => !found.includes(n));
   var defaultSetId = (found) => {
     if (missingSkills("matt", found).length === 0) return "matt";
     if (missingSkills("superpowers", found).length === 0) return "superpowers";
     return "plain";
   };
   var effectiveSetId = (stored2, requested, found) => requested.find((id) => id !== null && id !== void 0 && hasSet(stored2, id)) ?? defaultSetId(found);
-  var resolveShipped = (p, edit, paths) => {
-    if (edit !== void 0) return { ...p, text: edit };
-    if (p.skills === void 0) return p;
-    const skillFiles = [...p.skills, ...p.requires ?? []].flatMap((name) => {
+  var withSkillFiles = (p, paths) => {
+    if (p.skills === void 0 && p.requires === void 0) return p;
+    const skillFiles = [...p.skills ?? [], ...p.requires ?? []].flatMap((name) => {
       const path = paths[name];
       return path === void 0 ? [] : [{ name, path }];
     });
     return skillFiles.length === 0 ? p : { ...p, skillFiles };
   };
-  var own = (p) => ({ id: p.id, name: p.name, text: p.text, builtin: false });
+  var resolveShipped = (p, edit, paths) => edit !== void 0 ? { ...p, text: edit } : withSkillFiles(p, paths);
+  var own = (p, paths = {}) => withSkillFiles({ id: p.id, name: p.name, text: p.text, builtin: false, ...skillMeta(p) }, paths);
   var listPresets = (stored2, setId, paths = {}) => {
     const mine = stored2.custom.find((s) => s.id === setId);
-    if (mine !== void 0) return mine.presets.map(own);
+    if (mine !== void 0) return mine.presets.map((p) => own(p, paths));
     const set2 = builtinSet(setId) ?? builtinSet("plain");
     const edits = stored2.builtin[set2.id];
-    return [...set2.presets.map((p) => resolveShipped(p, edits?.texts[p.id], paths)), ...(edits?.custom ?? []).map(own)];
+    return [...set2.presets.map((p) => resolveShipped(p, edits?.texts[p.id], paths)), ...(edits?.custom ?? []).map((p) => own(p, paths))];
   };
   var pickPreset = (presets2, id) => presets2.find((p) => p.id === id) ?? presets2.find((p) => p.id === FALLBACK_ID) ?? PLAIN_PRESETS.find((p) => p.id === FALLBACK_ID);
   var isEdited = (stored2, setId, presetId) => stored2.builtin[setId] !== void 0 && Object.hasOwn(stored2.builtin[setId].texts, presetId);
@@ -3556,7 +3571,7 @@ ${GUEST_UI_LOOK_CSS}`;
   var addSet = (stored2, name, from) => {
     const trimmed = name.trim();
     const id = unique(`set-${slug(trimmed, "set")}`, new Set(listSets(stored2).map((s) => s.id)));
-    const presets2 = from === null ? [] : listPresets(stored2, from).map((p) => ({ id: p.id, name: p.name, text: p.text }));
+    const presets2 = from === null ? [] : listPresets(stored2, from).map((p) => ({ id: p.id, name: p.name, text: p.text, ...skillMeta(p) }));
     return { id, stored: { ...stored2, custom: [...stored2.custom, { id, name: trimmed === "" ? UNTITLED_SET : trimmed, presets: presets2 }] } };
   };
   var renameSet = (stored2, id, name) => {
@@ -3565,15 +3580,18 @@ ${GUEST_UI_LOOK_CSS}`;
   };
   var deleteSet = (stored2, id) => isBuiltinSet(id) ? stored2 : { ...stored2, custom: stored2.custom.filter((s) => s.id !== id) };
   var SKILLS_OWNER = { matt: "Matt Pocock's skills", superpowers: "Superpowers skills" };
-  var setStatusLine = (setId, found, projectOpen) => {
-    if (!isBuiltinSet(setId)) return "Your own set: its texts are used as written.";
-    if (setSkills(setId).length === 0) return "Plain instructions; no skills needed.";
+  var setStatusLine = (setId, found, projectOpen, stored2 = EMPTY_SETS) => {
+    const builtin = isBuiltinSet(setId);
+    const skills = setSkills(setId, stored2);
+    if (!builtin && skills.length === 0) return "Your own set: its texts are used as written.";
+    if (skills.length === 0) return "Plain instructions; no skills needed.";
     if (found === null) return projectOpen ? "The service could not check which skills are installed." : "Open a project to check which skills are installed.";
-    const missing = missingSkills(setId, found);
-    if (missing.length === 0) return setId === "matt" ? "All of Matt Pocock's skills were found." : "All of the Superpowers skills were found.";
-    return `${SKILLS_OWNER[setId]} missing: ${missing.join(", ")}. Sessions are still told to run them.`;
+    const missing = missingSkills(setId, found, stored2);
+    if (missing.length === 0)
+      return !builtin ? "All of the skills this set names were found." : setId === "matt" ? "All of Matt Pocock's skills were found." : "All of the Superpowers skills were found.";
+    return `${SKILLS_OWNER[setId] ?? "Skills"} missing: ${missing.join(", ")}. Sessions are still told to run them.`;
   };
-  var setOptionLabel = (set2, found) => found !== null && missingSkills(set2.id, found).length > 0 ? `${set2.name} (skills missing)` : set2.name;
+  var setOptionLabel = (set2, found, stored2 = EMPTY_SETS) => found !== null && missingSkills(set2.id, found, stored2).length > 0 ? `${set2.name} (skills missing)` : set2.name;
   var presetSkillsNote = (preset, setId, edited) => {
     if (!preset.builtin || preset.skills === void 0 || preset.skills.length === 0) return null;
     if (edited) return "Your text is used.";
@@ -4874,7 +4892,7 @@ ${ref}`,
     const picker = mountSelect(pickSlot, {
       label: "Set",
       value: current.id,
-      options: sets.map((x) => ({ id: x.id, label: setOptionLabel(x, view.found) })),
+      options: sets.map((x) => ({ id: x.id, label: setOptionLabel(x, view.found, getStored()) })),
       onChange: (id) => {
         picker.update({ value: id });
         view.pick(id);
@@ -4933,7 +4951,7 @@ ${ref}`,
       });
       disposers.push(name.dispose);
     }
-    root.append(el2("p", "kb-settings-hint", setStatusLine(current.id, view.found, view.projectOpen)));
+    root.append(el2("p", "kb-settings-hint", setStatusLine(current.id, view.found, view.projectOpen, getStored())));
     const presets2 = listPresets(getStored(), current.id);
     if (presets2.length === 0) root.append(el2("p", "kb-settings-hint", "This set has no presets yet: cards that use it start with the Plain Implement text."));
     for (const preset of presets2) {
@@ -5052,7 +5070,7 @@ ${ref}`,
       const projectOpen = m.project !== null;
       const sets = listSets(m.presets);
       const setName = (id) => sets.find((x) => x.id === id)?.name ?? id;
-      const setOptions = sets.map((x) => ({ id: x.id, label: setOptionLabel(x, m.skills) }));
+      const setOptions = sets.map((x) => ({ id: x.id, label: setOptionLabel(x, m.skills, m.presets) }));
       const setOf = (project2) => presetSetOf(m.global, project2, m.presets, found);
       const globalSet = setOf({});
       const projectSet = m.project === null ? globalSet : setOf(m.project.layer);
@@ -5071,7 +5089,7 @@ ${ref}`,
           sets: {
             options: setOptions,
             inheritLabel: m.skills === null ? "Default (by the skills installed)" : `Default (${setName(fallback)})`,
-            line: `${setName(globalSet)}: ${setStatusLine(globalSet, m.skills, projectOpen)}${m.skills === null ? "" : " Without a choice: Matt Pocock's skills when all are found, else Superpowers when found, else Plain."}`
+            line: `${setName(globalSet)}: ${setStatusLine(globalSet, m.skills, projectOpen, m.presets)}${m.skills === null ? "" : " Without a choice: Matt Pocock's skills when all are found, else Superpowers when found, else Plain."}`
           },
           onChange: (layer) => {
             const before = m.global;
@@ -5095,7 +5113,7 @@ ${ref}`,
             sets: {
               options: setOptions,
               inheritLabel: `Use global (${setName(globalSet)})`,
-              line: `${setName(projectSet)}: ${setStatusLine(projectSet, m.skills, true)}`
+              line: `${setName(projectSet)}: ${setStatusLine(projectSet, m.skills, true, m.presets)}`
             },
             onChange: (layer) => {
               const before = project2.layer;

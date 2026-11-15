@@ -369,7 +369,7 @@ const drawPresets = (
   const picker = mountSelect(pickSlot, {
     label: 'Set',
     value: current.id,
-    options: sets.map((x) => ({ id: x.id, label: setOptionLabel(x, view.found) })),
+    options: sets.map((x) => ({ id: x.id, label: setOptionLabel(x, view.found, getStored()) })),
     onChange: (id) => {
       picker.update({ value: id });
       view.pick(id);
@@ -428,7 +428,7 @@ const drawPresets = (
     });
     disposers.push(name.dispose);
   }
-  root.append(el('p', 'kb-settings-hint', setStatusLine(current.id, view.found, view.projectOpen)));
+  root.append(el('p', 'kb-settings-hint', setStatusLine(current.id, view.found, view.projectOpen, getStored())));
 
   const presets = listPresets(getStored(), current.id);
   if (presets.length === 0) root.append(el('p', 'kb-settings-hint', 'This set has no presets yet: cards that use it start with the Plain Implement text.'));
@@ -551,7 +551,7 @@ export const openSettings = (initial: SettingsModel, callbacks: SettingsCallback
     const projectOpen = m.project !== null;
     const sets = listSets(m.presets);
     const setName = (id: string): string => sets.find((x) => x.id === id)?.name ?? id;
-    const setOptions = sets.map((x) => ({ id: x.id, label: setOptionLabel(x, m.skills) }));
+    const setOptions = sets.map((x) => ({ id: x.id, label: setOptionLabel(x, m.skills, m.presets) }));
     /** The set a layer stack ends up with (a deleted set reads as the default). */
     const setOf = (project: SettingsLayer): string => presetSetOf(m.global, project, m.presets, found);
     const globalSet = setOf({});
@@ -572,7 +572,7 @@ export const openSettings = (initial: SettingsModel, callbacks: SettingsCallback
         sets: {
           options: setOptions,
           inheritLabel: m.skills === null ? 'Default (by the skills installed)' : `Default (${setName(fallback)})`,
-          line: `${setName(globalSet)}: ${setStatusLine(globalSet, m.skills, projectOpen)}${m.skills === null ? '' : ' Without a choice: Matt Pocock\'s skills when all are found, else Superpowers when found, else Plain.'}`,
+          line: `${setName(globalSet)}: ${setStatusLine(globalSet, m.skills, projectOpen, m.presets)}${m.skills === null ? '' : ' Without a choice: Matt Pocock\'s skills when all are found, else Superpowers when found, else Plain.'}`,
         },
         onChange: (layer) => {
           const before = m.global;
@@ -596,7 +596,7 @@ export const openSettings = (initial: SettingsModel, callbacks: SettingsCallback
           sets: {
             options: setOptions,
             inheritLabel: `Use global (${setName(globalSet)})`,
-            line: `${setName(projectSet)}: ${setStatusLine(projectSet, m.skills, true)}`,
+            line: `${setName(projectSet)}: ${setStatusLine(projectSet, m.skills, true, m.presets)}`,
           },
           onChange: (layer) => {
             const before = project.layer;

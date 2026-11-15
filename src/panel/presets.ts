@@ -41,8 +41,11 @@ export const BUILTIN_SETS: readonly BuiltinSet[] = [
 export const PRESET_IDS: readonly string[] = PLAIN_PRESETS.map((p) => p.id);
 export const FALLBACK_ID = 'implement';
 
-/** One of the user's presets, as stored. */
-export type StoredPreset = { id: string; name: string; text: string };
+/**
+ * One of the user's presets, as stored. `skills` and `requires` are kept from a built-in preset when
+ * its set is copied, so the copy still names each skill's SKILL.md and its set's skills are checked.
+ */
+export type StoredPreset = { id: string; name: string; text: string; skills?: string[]; requires?: string[] };
 /**
  * What is kept in storage: per built-in set, the edited texts of its shipped presets and the user's
  * own presets in it; and the user's own sets, whole.
@@ -61,6 +64,19 @@ const isBuiltinSet = (id: string): boolean => builtinSet(id) !== undefined;
 const record = (v: unknown): Record<string, unknown> | null =>
   typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
 
+const names = (v: unknown): string[] | undefined => {
+  if (!Array.isArray(v)) return undefined;
+  const list = v.filter((n): n is string => typeof n === 'string' && n !== '');
+  return list.length === 0 ? undefined : list;
+};
+
+/** A preset's skill metadata, only the fields that are set. */
+const skillMeta = (p: { skills?: readonly string[]; requires?: readonly string[] }): { skills?: string[]; requires?: string[] } => {
+  const skills = names(p.skills);
+  const requires = names(p.requires);
+  return { ...(skills === undefined ? {} : { skills }), ...(requires === undefined ? {} : { requires }) };
+};
+
 /** A list of stored presets read defensively: string id/name/text, unique ids, none in `reserved`. */
 const parsePresetList = (raw: unknown, reserved: ReadonlySet<string> = new Set()): StoredPreset[] => {
   const out: StoredPreset[] = [];
@@ -71,7 +87,7 @@ const parsePresetList = (raw: unknown, reserved: ReadonlySet<string> = new Set()
     if (c === null || typeof c.id !== 'string' || c.id === '' || reserved.has(c.id) || seen.has(c.id)) continue;
     if (typeof c.name !== 'string' || typeof c.text !== 'string') continue;
     seen.add(c.id);
-    out.push({ id: c.id, name: c.name, text: c.text });
+    out.push({ id: c.id, name: c.name, text: c.text, ...skillMeta(c) });
   }
   return out;
 };
@@ -133,10 +149,19 @@ export const listSets = (stored: StoredSets): SetInfo[] => [
 
 const hasSet = (stored: StoredSets, id: string): boolean => isBuiltinSet(id) || stored.custom.some((s) => s.id === id);
 
-/** Every skill a built-in set's presets name or need; none for Plain and the user's sets. */
-export const setSkills = (setId: string): string[] => [...(builtinSet(setId)?.skills ?? [])];
+/**
+ * Every skill a set's presets name or need: a built-in set's list; for the user's set, those its
+ * presets keep from the set they were copied from (none for Plain, an empty set or own presets).
+ */
+export const setSkills = (setId: string, stored: StoredSets = EMPTY_SETS): string[] => {
+  const builtin = builtinSet(setId);
+  if (builtin !== undefined) return [...builtin.skills];
+  const mine = stored.custom.find((s) => s.id === setId);
+  return [...new Set((mine?.presets ?? []).flatMap((p) => [...(p.skills ?? []), ...(p.requires ?? [])]))];
+};
 
-export const missingSkills = (setId: string, found: readonly string[]): string[] => setSkills(setId).filter((n) => !found.includes(n));
+export const missingSkills = (setId: string, found: readonly string[], stored: StoredSets = EMPTY_SETS): string[] =>
+  setSkills(setId, stored).filter((n) => !found.includes(n));
 
 /** The set used when none is chosen: Matt's if all its skills are found, else Superpowers' if found, else Plain. */
 export const defaultSetId = (found: readonly string[]): BuiltinSetId => {
@@ -152,18 +177,23 @@ export const defaultSetId = (found: readonly string[]): BuiltinSetId => {
 export const effectiveSetId = (stored: StoredSets, requested: ReadonlyArray<string | null | undefined>, found: readonly string[]): string =>
   requested.find((id): id is string => id !== null && id !== undefined && hasSet(stored, id)) ?? defaultSetId(found);
 
-/** A shipped preset as listed: the user's edit, else its text with the SKILL.md paths known. */
-const resolveShipped = (p: Preset, edit: string | undefined, paths: Readonly<Record<string, string>>): Preset => {
-  if (edit !== undefined) return { ...p, text: edit };
-  if (p.skills === undefined) return p;
-  const skillFiles = [...p.skills, ...(p.requires ?? [])].flatMap((name) => {
+/** A preset with the SKILL.md of each skill it names or needs, where known. */
+const withSkillFiles = (p: Preset, paths: Readonly<Record<string, string>>): Preset => {
+  if (p.skills === undefined && p.requires === undefined) return p;
+  const skillFiles = [...(p.skills ?? []), ...(p.requires ?? [])].flatMap((name) => {
     const path = paths[name];
     return path === undefined ? [] : [{ name, path }];
   });
   return skillFiles.length === 0 ? p : { ...p, skillFiles };
 };
 
-const own = (p: StoredPreset): Preset => ({ id: p.id, name: p.name, text: p.text, builtin: false });
+/** A shipped preset as listed: the user's edit, else its text with the SKILL.md paths known. */
+const resolveShipped = (p: Preset, edit: string | undefined, paths: Readonly<Record<string, string>>): Preset =>
+  edit !== undefined ? { ...p, text: edit } : withSkillFiles(p, paths);
+
+/** One of the user's presets; one copied from a skills preset keeps its skills and their SKILL.md. */
+const own = (p: StoredPreset, paths: Readonly<Record<string, string>> = {}): Preset =>
+  withSkillFiles({ id: p.id, name: p.name, text: p.text, builtin: false, ...skillMeta(p) }, paths);
 
 /**
  * Every preset of a set, as a session would get it: a built-in set's shipped presets (edits applied,
@@ -171,10 +201,10 @@ const own = (p: StoredPreset): Preset => ({ id: p.id, name: p.name, text: p.text
  */
 export const listPresets = (stored: StoredSets, setId: string, paths: Readonly<Record<string, string>> = {}): Preset[] => {
   const mine = stored.custom.find((s) => s.id === setId);
-  if (mine !== undefined) return mine.presets.map(own);
+  if (mine !== undefined) return mine.presets.map((p) => own(p, paths));
   const set = builtinSet(setId) ?? (builtinSet('plain') as BuiltinSet);
   const edits = stored.builtin[set.id];
-  return [...set.presets.map((p) => resolveShipped(p, edits?.texts[p.id], paths)), ...(edits?.custom ?? []).map(own)];
+  return [...set.presets.map((p) => resolveShipped(p, edits?.texts[p.id], paths)), ...(edits?.custom ?? []).map((p) => own(p, paths))];
 };
 
 /** The preset a session starts with: `id`, else the set's Implement, else Plain's Implement. */
@@ -261,11 +291,14 @@ export const renamePreset = (stored: StoredSets, setId: string, presetId: string
 export const deletePreset = (stored: StoredSets, setId: string, presetId: string): StoredSets =>
   shipped(setId, presetId) !== undefined ? stored : withOwn(stored, setId, (list) => list.filter((p) => p.id !== presetId));
 
-/** A new set of the user's: a copy of `from` as it reads now (edits included, as the user's own presets), or empty. */
+/**
+ * A new set of the user's: a copy of `from` as it reads now (edits included, as the user's own
+ * presets, each keeping the skills it names), or empty.
+ */
 export const addSet = (stored: StoredSets, name: string, from: string | null): { stored: StoredSets; id: string } => {
   const trimmed = name.trim();
   const id = unique(`set-${slug(trimmed, 'set')}`, new Set(listSets(stored).map((s) => s.id)));
-  const presets = from === null ? [] : listPresets(stored, from).map((p) => ({ id: p.id, name: p.name, text: p.text }));
+  const presets = from === null ? [] : listPresets(stored, from).map((p) => ({ id: p.id, name: p.name, text: p.text, ...skillMeta(p) }));
   return { id, stored: { ...stored, custom: [...stored.custom, { id, name: trimmed === '' ? UNTITLED_SET : trimmed, presets }] } };
 };
 
@@ -287,18 +320,21 @@ const SKILLS_OWNER: Partial<Record<string, string>> = { matt: "Matt Pocock's ski
  * Under the set pickers: what the set needs and what was found. `found` is null when it is not known:
  * no project open, or the service's check failed.
  */
-export const setStatusLine = (setId: string, found: readonly string[] | null, projectOpen: boolean): string => {
-  if (!isBuiltinSet(setId)) return 'Your own set: its texts are used as written.';
-  if (setSkills(setId).length === 0) return 'Plain instructions; no skills needed.';
+export const setStatusLine = (setId: string, found: readonly string[] | null, projectOpen: boolean, stored: StoredSets = EMPTY_SETS): string => {
+  const builtin = isBuiltinSet(setId);
+  const skills = setSkills(setId, stored);
+  if (!builtin && skills.length === 0) return 'Your own set: its texts are used as written.';
+  if (skills.length === 0) return 'Plain instructions; no skills needed.';
   if (found === null) return projectOpen ? 'The service could not check which skills are installed.' : 'Open a project to check which skills are installed.';
-  const missing = missingSkills(setId, found);
-  if (missing.length === 0) return setId === 'matt' ? "All of Matt Pocock's skills were found." : 'All of the Superpowers skills were found.';
-  return `${SKILLS_OWNER[setId]} missing: ${missing.join(', ')}. Sessions are still told to run them.`;
+  const missing = missingSkills(setId, found, stored);
+  if (missing.length === 0)
+    return !builtin ? 'All of the skills this set names were found.' : setId === 'matt' ? "All of Matt Pocock's skills were found." : 'All of the Superpowers skills were found.';
+  return `${SKILLS_OWNER[setId] ?? 'Skills'} missing: ${missing.join(', ')}. Sessions are still told to run them.`;
 };
 
 /** A set's name in a picker, flagged when its skills are known to be missing. */
-export const setOptionLabel = (set: SetInfo, found: readonly string[] | null): string =>
-  found !== null && missingSkills(set.id, found).length > 0 ? `${set.name} (skills missing)` : set.name;
+export const setOptionLabel = (set: SetInfo, found: readonly string[] | null, stored: StoredSets = EMPTY_SETS): string =>
+  found !== null && missingSkills(set.id, found, stored).length > 0 ? `${set.name} (skills missing)` : set.name;
 
 /** Under a built-in skill preset of set `setId` in the Presets tab: which skills it runs. Null for the others. */
 export const presetSkillsNote = (preset: Preset, setId: string, edited: boolean): string | null => {
