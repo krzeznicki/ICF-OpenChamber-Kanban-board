@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Task } from '../src/core/types.ts';
-import { canLinkUnder, canLinkUnderNew, childCandidates, followingMove, followingSetParent, linkChoices, linkConfirm, newChildCandidates, parentTargets, unlinkConfirm } from '../src/panel/link.ts';
+import { canLinkUnder, canLinkUnderNew, childCandidates, followingMove, linkChoices, linkConfirm, newChildCandidates, parentTargets, unlinkConfirm } from '../src/panel/link.ts';
 
 const task = (id: string, over: Partial<Task> = {}): Task => ({
   id,
@@ -155,10 +155,10 @@ test('the link confirm names both tasks; locally it warns about the new id and d
   assert.match(gh.body, /#1/);
 });
 
-test('followingSetParent: a task that came back with a new id is reported once; a kept id is not', async () => {
+test('followingMove (setParent): a task that came back with a new id is reported once; a kept id is not', async () => {
   const moved: string[][] = [];
-  const setParent = followingSetParent(
-    async (id, parentId) => task(id === 'old' ? 'new' : id, { parentId }),
+  const setParent = followingMove(
+    async (id: string, parentId: string) => task(id === 'old' ? 'new' : id, { parentId }),
     async (from, to) => void moved.push([from, to]),
     () => assert.fail('no error expected'),
   );
@@ -167,10 +167,10 @@ test('followingSetParent: a task that came back with a new id is reported once; 
   assert.deepEqual(moved, [['old', 'new']]);
 });
 
-test('followingSetParent: a failing follow-up is reported, the link still resolves; a failing link rejects without a follow-up', async () => {
+test('followingMove (setParent): a failing follow-up is reported, the link still resolves; a failing link rejects without a follow-up', async () => {
   const errors: string[] = [];
-  const ok = followingSetParent(
-    async (id) => task(`${id}-moved`),
+  const ok = followingMove(
+    async (id: string, _parentId: string) => task(`${id}-moved`),
     async () => {
       throw new Error('storage full');
     },
@@ -179,8 +179,8 @@ test('followingSetParent: a failing follow-up is reported, the link still resolv
   assert.equal((await ok('a', 'P')).id, 'a-moved');
   assert.deepEqual(errors, ['a->a-moved: storage full']);
   let followed = false;
-  const bad = followingSetParent(
-    async () => {
+  const bad = followingMove(
+    async (_id: string, _parentId: string): Promise<Task> => {
       throw new Error('INVALID');
     },
     async () => void (followed = true),

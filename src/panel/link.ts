@@ -94,12 +94,6 @@ export const followingMove =
     return task;
   };
 
-export const followingSetParent: (
-  setParent: (id: string, parentId: string) => Promise<Task>,
-  onMoved: (from: string, to: string) => Promise<void>,
-  onError: (from: string, to: string, error: unknown) => void,
-) => (id: string, parentId: string) => Promise<Task> = followingMove;
-
 /** The confirm before unlinking a sub-task from its parent (the parent's sub-task list); locally the task becomes a feature. */
 export const unlinkConfirm = (tracker: TrackerKind, child: Task, parentTitle: string): { title: string; body: string } => ({
   title: `Remove “${child.title}” from “${parentTitle}”?`,
