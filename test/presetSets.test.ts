@@ -34,6 +34,7 @@ import {
   createSettingsStore,
   migrateGlobalLayer,
   parseSettings,
+  presetSetOf,
   resolveSettings,
   resolveStart,
   type SettingsStorage,
@@ -135,6 +136,16 @@ test('the Superpowers set runs the named Superpowers skills, keeping every 0.2 r
   assert.match(t('implement-no-questions'), /assumption/);
   assert.match(t('orchestrate'), /no sub-tasks yet[\s\S]*writing-plans[\s\S]*subagent-driven-development/);
   assert.ok(t('orchestrate').includes('--parent {id}') && t('orchestrate').includes('{cli} claim'));
+  // Existing sub-tasks still get a plan file: subagent-driven-development needs one for its workspace.
+  assert.ok(
+    t('orchestrate').includes(
+      'If this worktree has no plan file for these sub-tasks, write one first under docs/superpowers/plans/ from `{cli} show <id>` of each sub-task (one plan task per sub-task, in dependency order), commit it, and use it as the plan.',
+    ),
+  );
+  assert.ok(t('orchestrate').indexOf('no plan file') < t('orchestrate').indexOf('Then run subagent-driven-development'));
+  // Not every session has a worktree from the board (path A, project folder).
+  assert.ok(t('implement').includes('If the board made a worktree for this session, work in it and do not create another'));
+  assert.ok(t('implement').includes('if you are on main/master, follow the skill\'s rule and ask before building there'));
   assert.match(t('diagnose'), /systematic-debugging[\s\S]*test-driven-development/);
   assert.match(t('diagnose'), /root cause/);
 });
@@ -156,12 +167,23 @@ test('setSkills / missingSkills / defaultSetId: Matt if its skills are found, el
   assert.equal(defaultSetId([]), 'plain');
 });
 
-test('effectiveSetId: a known set as asked, else the default for what was found', () => {
+test('effectiveSetId: the first layer (project, then global) whose set exists, else the default for what was found', () => {
   const { stored, id } = addSet(EMPTY_SETS, 'Mine', null);
-  assert.equal(effectiveSetId(stored, id, []), id);
-  assert.equal(effectiveSetId(stored, 'superpowers', MATT), 'superpowers');
-  assert.equal(effectiveSetId(stored, 'set-deleted', SP), 'superpowers');
-  assert.equal(effectiveSetId(stored, undefined, []), 'plain');
+  assert.equal(effectiveSetId(stored, [id], []), id);
+  assert.equal(effectiveSetId(stored, [undefined, 'superpowers'], MATT), 'superpowers');
+  assert.equal(effectiveSetId(stored, ['set-deleted'], SP), 'superpowers');
+  assert.equal(effectiveSetId(stored, [], []), 'plain');
+  // A deleted set in the project layer falls through to the global choice …
+  assert.equal(effectiveSetId(stored, ['set-deleted', id], MATT), id);
+  assert.equal(effectiveSetId(stored, ['set-deleted', 'plain'], MATT), 'plain');
+  // … and one in the global layer to the default.
+  assert.equal(effectiveSetId(stored, [undefined, 'set-deleted'], MATT), 'matt');
+  assert.equal(effectiveSetId(stored, ['set-gone', 'set-deleted'], SP), 'superpowers');
+  // The same through the settings layers.
+  assert.equal(presetSetOf({ presetSet: id }, { presetSet: 'set-deleted' }, stored, MATT), id);
+  assert.equal(presetSetOf({ presetSet: 'set-deleted' }, {}, stored, SP), 'superpowers');
+  assert.equal(presetSetOf({ presetSet: 'plain' }, { presetSet: 'superpowers' }, stored, MATT), 'superpowers');
+  assert.equal(presetSetOf({}, {}, stored, []), 'plain');
 });
 
 test('resolveSettings: the set is the project choice, else the global one, else the default by skills found', () => {
@@ -330,10 +352,14 @@ test('Settings lines: what each set needs and what was found', () => {
   assert.equal(setStatusLine('set-x', [], true), 'Your own set: its texts are used as written.');
   assert.equal(setStatusLine('matt', null, false), 'Open a project to check which skills are installed.');
   assert.equal(setStatusLine('matt', null, true), 'The service could not check which skills are installed.');
-  assert.equal(presetSkillsNote(inSet('matt', 'implement'), false), "Runs Matt Pocock's skills: /implement, /tdd, /code-review.");
-  assert.equal(presetSkillsNote(inSet('superpowers', 'plan'), false), 'Runs Superpowers skills: brainstorming, writing-plans.');
-  assert.equal(presetSkillsNote(inSet('superpowers', 'plan'), true), 'Your text is used.');
-  assert.equal(presetSkillsNote(inSet('plain', 'plan'), false), null);
+  assert.equal(presetSkillsNote(inSet('matt', 'implement'), 'matt', false), "Runs Matt Pocock's skills: /implement, /tdd, /code-review.");
+  assert.equal(presetSkillsNote(inSet('superpowers', 'plan'), 'superpowers', false), 'Runs Superpowers skills: brainstorming, writing-plans.');
+  assert.equal(presetSkillsNote(inSet('superpowers', 'plan'), 'superpowers', true), 'Your text is used.');
+  assert.equal(presetSkillsNote(inSet('plain', 'plan'), 'plain', false), null);
+  // The set decides the wording, not the first skill's name (Matt's /prototype vs a Superpowers preset).
+  const odd = { id: 'x', name: 'X', text: 'x', builtin: true, skills: ['prototype'] };
+  assert.equal(presetSkillsNote(odd, 'superpowers', false), 'Runs Superpowers skills: prototype.');
+  assert.equal(presetSkillsNote(odd, 'matt', false), "Runs Matt Pocock's skills: /prototype.");
 });
 
 // --- storage ---
@@ -378,4 +404,32 @@ test('store: the old presets key is migrated once and deleted', async () => {
   const other = fakeStorage({ presets: { builtin: {}, custom: [] } });
   assert.deepEqual(await createSettingsStore(other.storage).loadPresets(), EMPTY_SETS);
   assert.equal(other.data.size, 0);
+});
+
+test('store: migrated 0.2 own presets pin the global set to Matt (toggle on or unset), so they stay reachable', async () => {
+  const old = { builtin: {}, custom: [{ id: 'custom-a', name: 'A', text: 'a' }] };
+  const run = async (global: unknown) => {
+    const { data, storage } = fakeStorage({ presets: old, ...(global === undefined ? {} : { 'settings:global': global }) });
+    const store = createSettingsStore(storage);
+    await store.loadPresets();
+    return { global: await store.loadGlobal(), raw: data.get('settings:global') };
+  };
+  assert.deepEqual((await run(undefined)).global, { presetSet: 'matt' });
+  assert.deepEqual((await run({ useMattSkills: true, maxParallel: 2 })).global, { maxParallel: 2, presetSet: 'matt' });
+  assert.deepEqual((await run({ useMattSkills: true })).raw, { presetSet: 'matt' }, 'written, without the old toggle');
+  // Toggle off: Plain, which has them too; a set already chosen stays.
+  assert.deepEqual((await run({ useMattSkills: false })).global, { presetSet: 'plain' });
+  assert.deepEqual((await run({ presetSet: 'superpowers' })).global, { presetSet: 'superpowers' });
+  // Only text edits: no pin (the edits are in Matt and Plain, and the default picks among them or Superpowers).
+  const edits = fakeStorage({ presets: { builtin: { plan: 'P' }, custom: [] } });
+  const store = createSettingsStore(edits.storage);
+  await store.loadPresets();
+  assert.deepEqual(await store.loadGlobal(), {});
+  // Once migrated, a later load pins nothing again.
+  const again = fakeStorage({ presets: old });
+  const s2 = createSettingsStore(again.storage);
+  await s2.loadPresets();
+  await s2.saveGlobal({});
+  await s2.loadPresets();
+  assert.deepEqual(await s2.loadGlobal(), {});
 });

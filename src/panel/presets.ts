@@ -144,9 +144,12 @@ export const defaultSetId = (found: readonly string[]): BuiltinSetId => {
   return 'plain';
 };
 
-/** The set a project uses: the one asked for if it exists (a deleted set does not), else the default. */
-export const effectiveSetId = (stored: StoredSets, requested: string | null | undefined, found: readonly string[]): string =>
-  requested !== null && requested !== undefined && hasSet(stored, requested) ? requested : defaultSetId(found);
+/**
+ * The set a project uses: the first of `requested` (project layer, then global) that exists — a
+ * deleted set is skipped, so the next layer decides — else the default for the skills found.
+ */
+export const effectiveSetId = (stored: StoredSets, requested: ReadonlyArray<string | null | undefined>, found: readonly string[]): string =>
+  requested.find((id): id is string => id !== null && id !== undefined && hasSet(stored, id)) ?? defaultSetId(found);
 
 /** A shipped preset as listed: the user's edit, else its text with the SKILL.md paths known. */
 const resolveShipped = (p: Preset, edit: string | undefined, paths: Readonly<Record<string, string>>): Preset => {
@@ -296,10 +299,9 @@ export const setStatusLine = (setId: string, found: readonly string[] | null, pr
 export const setOptionLabel = (set: SetInfo, found: readonly string[] | null): string =>
   found !== null && missingSkills(set.id, found).length > 0 ? `${set.name} (skills missing)` : set.name;
 
-/** Under a built-in skill preset in the Presets tab: which skills it runs. Null for the others. */
-export const presetSkillsNote = (preset: Preset, edited: boolean): string | null => {
+/** Under a built-in skill preset of set `setId` in the Presets tab: which skills it runs. Null for the others. */
+export const presetSkillsNote = (preset: Preset, setId: string, edited: boolean): string | null => {
   if (!preset.builtin || preset.skills === undefined || preset.skills.length === 0) return null;
   if (edited) return 'Your text is used.';
-  const matt = (MATT_SKILLS as readonly string[]).includes(preset.skills[0] as string);
-  return matt ? `Runs Matt Pocock's skills: ${preset.skills.map((n) => `/${n}`).join(', ')}.` : `Runs Superpowers skills: ${preset.skills.join(', ')}.`;
+  return setId === 'matt' ? `Runs Matt Pocock's skills: ${preset.skills.map((n) => `/${n}`).join(', ')}.` : `Runs Superpowers skills: ${preset.skills.join(', ')}.`;
 };

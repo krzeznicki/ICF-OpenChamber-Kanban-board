@@ -14,11 +14,12 @@ import { archivableIds, archivedShown, archiveTasks, archiveWriteJob, createArch
 import { ApiError, createApi, type Api, type ConfigResult, type ProjectConfig } from './api.ts';
 import { groupTasks, pruneArchived, resolveSession, sessionForTask, sessionTarget, type Column, type SessionLookup } from './columns.ts';
 import { createEditor, type Editor } from './edit.ts';
-import { EMPTY_SETS, effectiveSetId, listPresets, type Preset, type StoredSets } from './presets.ts';
+import { EMPTY_SETS, listPresets, type Preset, type StoredSets } from './presets.ts';
 import {
   createLatestSaver,
   createSettingsStore,
   DEFAULT_SECTIONS,
+  presetSetOf,
   resolveSettings,
   type Sections,
   type Settings,
@@ -137,7 +138,9 @@ let globalLoaded = false;
 
 const loadGlobalSettings = async (): Promise<void> => {
   try {
-    const [global, presets] = await Promise.all([store.loadGlobal(), store.loadPresets()]);
+    // Presets first: migrating 0.2's presets may pin the global set, which loadGlobal then reads.
+    const presets = await store.loadPresets();
+    const global = await store.loadGlobal();
     state.globalSettings = global;
     state.presets = presets;
     globalLoaded = true;
@@ -185,7 +188,8 @@ const settings = (): Settings => {
 /** The presets a start uses: those of the project's preset set (settings presetSet), with each skill's SKILL.md. */
 const presets = (): Preset[] => {
   const skills = state.settingsFor === state.projectId ? state.skills : null;
-  return listPresets(state.presets, effectiveSetId(state.presets, settings().presetSet, skills?.found ?? []), skills?.paths ?? {});
+  const loaded = state.settingsFor !== null && state.settingsFor === state.projectId;
+  return listPresets(state.presets, presetSetOf(state.globalSettings, loaded ? state.projectSettings : {}, state.presets, skills?.found ?? []), skills?.paths ?? {});
 };
 
 /** After any settings change: the hide switch follows, the board and an open detail redraw. */

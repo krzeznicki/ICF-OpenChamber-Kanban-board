@@ -13,7 +13,6 @@ import {
   defaultSetId,
   deletePreset,
   deleteSet,
-  effectiveSetId,
   isEdited,
   listPresets,
   listSets,
@@ -31,6 +30,7 @@ import {
   MAX_PARALLEL_MAX,
   MAX_PARALLEL_MIN,
   parseSettings,
+  presetSetOf,
   resolveSettings,
   type Location,
   type Settings,
@@ -445,7 +445,7 @@ const drawPresets = (
     }
     const buttons = el('div', 'kb-actions');
     head.append(buttons);
-    const note = presetSkillsNote(preset, isEdited(getStored(), current.id, preset.id));
+    const note = presetSkillsNote(preset, current.id, isEdited(getStored(), current.id, preset.id));
     const noteLine = note === null ? null : el('p', 'kb-settings-hint', note);
     if (noteLine !== null) box.append(noteLine);
     const textSlot = el('div', '');
@@ -461,7 +461,7 @@ const drawPresets = (
         const next = setPresetText(getStored(), current.id, preset.id, v);
         setStored(next);
         reset?.update({ disabled: !isEdited(next, current.id, preset.id) });
-        if (noteLine !== null) noteLine.textContent = presetSkillsNote(preset, isEdited(next, current.id, preset.id)) ?? '';
+        if (noteLine !== null) noteLine.textContent = presetSkillsNote(preset, current.id, isEdited(next, current.id, preset.id)) ?? '';
       },
     });
     disposers.push(text.dispose);
@@ -544,7 +544,7 @@ export const openSettings = (initial: SettingsModel, callbacks: SettingsCallback
     const setName = (id: string): string => sets.find((x) => x.id === id)?.name ?? id;
     const setOptions = sets.map((x) => ({ id: x.id, label: setOptionLabel(x, m.skills) }));
     /** The set a layer stack ends up with (a deleted set reads as the default). */
-    const setOf = (project: SettingsLayer): string => effectiveSetId(m.presets, resolveSettings(m.global, project, found).presetSet, found);
+    const setOf = (project: SettingsLayer): string => presetSetOf(m.global, project, m.presets, found);
     const globalSet = setOf({});
     const projectSet = m.project === null ? globalSet : setOf(m.project.layer);
     /** A layer saved with another set redraws the tab: its preset lists and the line under the picker follow. */

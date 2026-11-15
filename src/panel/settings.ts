@@ -3,7 +3,7 @@
 // so they run under node:test; createSettingsStore is the only part that touches storage.
 import type { Task } from '../core/types.ts';
 import { parseArchivedTasks, serializeArchived, type ArchivedTasks } from './archive.ts';
-import { BUILTIN_PRESETS, defaultSetId, EMPTY_SETS, isPristineSets, migrateStoredPresets, parseStoredSets, type Preset, type StoredSets } from './presets.ts';
+import { BUILTIN_PRESETS, defaultSetId, effectiveSetId, EMPTY_SETS, isPristineSets, migrateStoredPresets, parseStoredSets, type Preset, type StoredSets } from './presets.ts';
 import { DEFAULT_SUMMARY_PROMPT } from './summaries.ts';
 
 export type { Preset } from './presets.ts';
@@ -29,7 +29,7 @@ export type Settings = {
   /**
    * The preset set (presets.ts): the project's choice, else the global one, else the default for the
    * skills found (Matt's, else Superpowers, else Plain). A set that no longer exists reads as the
-   * default too (effectiveSetId).
+   * default too: use presetSetOf for the set a start uses.
    */
   presetSet: string;
 };
@@ -158,6 +158,13 @@ const ownVariant = (layers: ReadonlyArray<Partial<StartOptions> | undefined>): s
   }
   return null;
 };
+
+/**
+ * The set a project's starts use: the project layer's set, else the global one, a layer whose set was
+ * deleted being skipped, else the default for the skills found.
+ */
+export const presetSetOf = (global: SettingsLayer, project: SettingsLayer, stored: StoredSets, found: readonly string[]): string =>
+  effectiveSetId(stored, [parseSettings(project).presetSet, parseSettings(global).presetSet], found);
 
 /**
  * Global, then project, over the defaults, field by field. Layers go through parseSettings first.
@@ -316,7 +323,12 @@ export const createSettingsStore = (storage: SettingsStorage) => {
     saveGlobal: (layer: SettingsLayer): Promise<void> => saveLayer(STORAGE_KEYS.global, layer),
     loadProject: async (projectId: string): Promise<SettingsLayer> => parseSettings(await storage.get(STORAGE_KEYS.project(projectId))),
     saveProject: (projectId: string, layer: SettingsLayer): Promise<void> => saveLayer(STORAGE_KEYS.project(projectId), layer),
-    /** The preset sets; 0.2's `presets` key, when still there, is migrated once (written as presetSets, then deleted). */
+    /**
+     * The preset sets; 0.2's `presets` key, when still there, is migrated once (written as presetSets,
+     * then deleted). Its own presets went to the Matt and Plain sets only, so with the 0.2 toggle on
+     * (or unset) and no set chosen, the global set is pinned to Matt to keep them reachable (the
+     * default could be Superpowers). Load this before loadGlobal, which then reads the pin.
+     */
     loadPresets: async (): Promise<StoredSets> => {
       const raw = await storage.get(STORAGE_KEYS.presetSets);
       if (raw !== undefined) return parseStoredSets(raw);
@@ -324,6 +336,11 @@ export const createSettingsStore = (storage: SettingsStorage) => {
       if (old === undefined) return EMPTY_SETS;
       const migrated = migrateStoredPresets(old);
       if (!isPristineSets(migrated)) await storage.set(STORAGE_KEYS.presetSets, migrated as never);
+      if ((migrated.builtin.matt?.custom.length ?? 0) > 0) {
+        const globalRaw = await storage.get(STORAGE_KEYS.global);
+        const global = migrateGlobalLayer(globalRaw);
+        if (global.presetSet === undefined) await storage.set(STORAGE_KEYS.global, { ...global, presetSet: 'matt' } as never);
+      }
       await storage.delete(STORAGE_KEYS.presets);
       return migrated;
     },

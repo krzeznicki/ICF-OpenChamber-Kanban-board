@@ -3131,7 +3131,7 @@ ${GUEST_UI_LOOK_CSS}`;
   ].join("\n");
   var SUPERPOWERS_NOTE = [
     "About the skills: these are Superpowers skills. Load each one named here with your skill tool (it may list them as superpowers:<name>); if it cannot be loaded, read its SKILL.md (listed below) and follow it.",
-    "The board already made this session's worktree and branch: work in it and do not create another (skip using-git-worktrees). Do not run finishing-a-development-branch, and do not merge, push or open a pull request: what happens to the branch is the user's call. Never run a setup skill.",
+    "If the board made a worktree for this session, work in it and do not create another (skip using-git-worktrees); if you are on main/master, follow the skill's rule and ask before building there. Do not run finishing-a-development-branch, and do not merge, push or open a pull request: what happens to the branch is the user's call. Never run a setup skill.",
     "The tracker lives at the project root {root}, not in your worktree, where docs/agents/ and .scratch/ are missing or a copy the board never reads; {tracker} describes it. Make every tracker write through the task-board CLI at the root: new tasks with `{cli} create`, states with `{cli} state` (and `{cli} claim` for sub-tasks). For a note on this task, {note}. The board then follows."
   ].join("\n");
   var withMattSkills = (lines) => [...lines, MATT_NOTE].join("\n");
@@ -3380,6 +3380,7 @@ ${GUEST_UI_LOOK_CSS}`;
       text: withSuperpowers([
         "Break this task down and orchestrate the work with the Superpowers skills.",
         "- If it has no sub-tasks yet, run writing-plans with this task as the spec (`{cli} show {id}` reads it) and commit the plan, then publish each plan task as a sub-task, in order: `{cli} create --title <task title> --parent {id} --blocked-by <ticket ids> --state ready-for-agent --body-file -`, its full text from the plan as the body (leave out --blocked-by when it has none). Skip the plan's question about the execution method: it runs subagent-driven.",
+        "- If this worktree has no plan file for these sub-tasks, write one first under docs/superpowers/plans/ from `{cli} show <id>` of each sub-task (one plan task per sub-task, in dependency order), commit it, and use it as the plan.",
         "- Then run subagent-driven-development over the sub-tasks in dependency order (`{cli} show <id>` reads each): a fresh implementer subagent per sub-task, a task review after each, one whole-branch review at the end, all on this worktree's branch. Give each implementer the CLI line with its --dir.",
         "- Claim each sub-task with `{cli} claim <id>` as its implementer starts, and resolve it with `{cli} state <id> done` once its review is clean.",
         "- Keep working until all sub-tasks are done, then summarise the result and name the branch."
@@ -3483,7 +3484,7 @@ ${GUEST_UI_LOOK_CSS}`;
     if (missingSkills("superpowers", found).length === 0) return "superpowers";
     return "plain";
   };
-  var effectiveSetId = (stored2, requested, found) => requested !== null && requested !== void 0 && hasSet(stored2, requested) ? requested : defaultSetId(found);
+  var effectiveSetId = (stored2, requested, found) => requested.find((id) => id !== null && id !== void 0 && hasSet(stored2, id)) ?? defaultSetId(found);
   var resolveShipped = (p, edit, paths) => {
     if (edit !== void 0) return { ...p, text: edit };
     if (p.skills === void 0) return p;
@@ -3570,11 +3571,10 @@ ${GUEST_UI_LOOK_CSS}`;
     return `${SKILLS_OWNER[setId]} missing: ${missing.join(", ")}. Sessions are still told to run them.`;
   };
   var setOptionLabel = (set2, found) => found !== null && missingSkills(set2.id, found).length > 0 ? `${set2.name} (skills missing)` : set2.name;
-  var presetSkillsNote = (preset, edited) => {
+  var presetSkillsNote = (preset, setId, edited) => {
     if (!preset.builtin || preset.skills === void 0 || preset.skills.length === 0) return null;
     if (edited) return "Your text is used.";
-    const matt = MATT_SKILLS.includes(preset.skills[0]);
-    return matt ? `Runs Matt Pocock's skills: ${preset.skills.map((n) => `/${n}`).join(", ")}.` : `Runs Superpowers skills: ${preset.skills.join(", ")}.`;
+    return setId === "matt" ? `Runs Matt Pocock's skills: ${preset.skills.map((n) => `/${n}`).join(", ")}.` : `Runs Superpowers skills: ${preset.skills.join(", ")}.`;
   };
 
   // src/panel/summaries.ts
@@ -3919,6 +3919,7 @@ ${ref}`,
     }
     return null;
   };
+  var presetSetOf = (global, project2, stored2, found) => effectiveSetId(stored2, [parseSettings(project2).presetSet, parseSettings(global).presetSet], found);
   var resolveSettings = (global, project2, found = []) => {
     const g = parseSettings(global);
     const p = parseSettings(project2);
@@ -4021,7 +4022,12 @@ ${ref}`,
       saveGlobal: (layer) => saveLayer(STORAGE_KEYS.global, layer),
       loadProject: async (projectId) => parseSettings(await storage.get(STORAGE_KEYS.project(projectId))),
       saveProject: (projectId, layer) => saveLayer(STORAGE_KEYS.project(projectId), layer),
-      /** The preset sets; 0.2's `presets` key, when still there, is migrated once (written as presetSets, then deleted). */
+      /**
+       * The preset sets; 0.2's `presets` key, when still there, is migrated once (written as presetSets,
+       * then deleted). Its own presets went to the Matt and Plain sets only, so with the 0.2 toggle on
+       * (or unset) and no set chosen, the global set is pinned to Matt to keep them reachable (the
+       * default could be Superpowers). Load this before loadGlobal, which then reads the pin.
+       */
       loadPresets: async () => {
         const raw = await storage.get(STORAGE_KEYS.presetSets);
         if (raw !== void 0) return parseStoredSets(raw);
@@ -4029,6 +4035,11 @@ ${ref}`,
         if (old === void 0) return EMPTY_SETS;
         const migrated = migrateStoredPresets(old);
         if (!isPristineSets(migrated)) await storage.set(STORAGE_KEYS.presetSets, migrated);
+        if ((migrated.builtin.matt?.custom.length ?? 0) > 0) {
+          const globalRaw = await storage.get(STORAGE_KEYS.global);
+          const global = migrateGlobalLayer(globalRaw);
+          if (global.presetSet === void 0) await storage.set(STORAGE_KEYS.global, { ...global, presetSet: "matt" });
+        }
         await storage.delete(STORAGE_KEYS.presets);
         return migrated;
       },
@@ -4767,7 +4778,7 @@ ${ref}`,
       }
       const buttons = el2("div", "kb-actions");
       head2.append(buttons);
-      const note = presetSkillsNote(preset, isEdited(getStored(), current.id, preset.id));
+      const note = presetSkillsNote(preset, current.id, isEdited(getStored(), current.id, preset.id));
       const noteLine = note === null ? null : el2("p", "kb-settings-hint", note);
       if (noteLine !== null) box.append(noteLine);
       const textSlot = el2("div", "");
@@ -4783,7 +4794,7 @@ ${ref}`,
           const next = setPresetText(getStored(), current.id, preset.id, v2);
           setStored(next);
           reset?.update({ disabled: !isEdited(next, current.id, preset.id) });
-          if (noteLine !== null) noteLine.textContent = presetSkillsNote(preset, isEdited(next, current.id, preset.id)) ?? "";
+          if (noteLine !== null) noteLine.textContent = presetSkillsNote(preset, current.id, isEdited(next, current.id, preset.id)) ?? "";
         }
       });
       disposers.push(text3.dispose);
@@ -4862,7 +4873,7 @@ ${ref}`,
       const sets = listSets(m.presets);
       const setName = (id) => sets.find((x) => x.id === id)?.name ?? id;
       const setOptions = sets.map((x) => ({ id: x.id, label: setOptionLabel(x, m.skills) }));
-      const setOf = (project2) => effectiveSetId(m.presets, resolveSettings(m.global, project2, found).presetSet, found);
+      const setOf = (project2) => presetSetOf(m.global, project2, m.presets, found);
       const globalSet = setOf({});
       const projectSet = m.project === null ? globalSet : setOf(m.project.layer);
       const redrawOnSet = (before, after) => {
@@ -13132,7 +13143,8 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
   var globalLoaded = false;
   var loadGlobalSettings = async () => {
     try {
-      const [global, presets2] = await Promise.all([store.loadGlobal(), store.loadPresets()]);
+      const presets2 = await store.loadPresets();
+      const global = await store.loadGlobal();
       state.globalSettings = global;
       state.presets = presets2;
       globalLoaded = true;
@@ -13170,7 +13182,8 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
   };
   var presets = () => {
     const skills = state.settingsFor === state.projectId ? state.skills : null;
-    return listPresets(state.presets, effectiveSetId(state.presets, settings().presetSet, skills?.found ?? []), skills?.paths ?? {});
+    const loaded = state.settingsFor !== null && state.settingsFor === state.projectId;
+    return listPresets(state.presets, presetSetOf(state.globalSettings, loaded ? state.projectSettings : {}, state.presets, skills?.found ?? []), skills?.paths ?? {});
   };
   var applySettings = () => {
     const hide = settings().hideChildren;

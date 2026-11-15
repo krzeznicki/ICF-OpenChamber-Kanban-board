@@ -19,12 +19,13 @@ const MATT_NOTE = [
 ].join('\n');
 
 /**
- * Closes every Superpowers text: the board already made the session's worktree and branch, what
+ * Closes every Superpowers text: a worktree the board made is used as is (on main/master the skill's
+ * ask-first rule applies), what
  * happens to the branch is the user's call, and tracker writes go through the CLI at the root.
  */
 const SUPERPOWERS_NOTE = [
   'About the skills: these are Superpowers skills. Load each one named here with your skill tool (it may list them as superpowers:<name>); if it cannot be loaded, read its SKILL.md (listed below) and follow it.',
-  "The board already made this session's worktree and branch: work in it and do not create another (skip using-git-worktrees). Do not run finishing-a-development-branch, and do not merge, push or open a pull request: what happens to the branch is the user's call. Never run a setup skill.",
+  "If the board made a worktree for this session, work in it and do not create another (skip using-git-worktrees); if you are on main/master, follow the skill's rule and ask before building there. Do not run finishing-a-development-branch, and do not merge, push or open a pull request: what happens to the branch is the user's call. Never run a setup skill.",
   'The tracker lives at the project root {root}, not in your worktree, where docs/agents/ and .scratch/ are missing or a copy the board never reads; {tracker} describes it. Make every tracker write through the task-board CLI at the root: new tasks with `{cli} create`, states with `{cli} state` (and `{cli} claim` for sub-tasks). For a note on this task, {note}. The board then follows.',
 ].join('\n');
 
@@ -281,6 +282,7 @@ export const SUPERPOWERS_PRESETS: readonly Preset[] = [
     text: withSuperpowers([
       'Break this task down and orchestrate the work with the Superpowers skills.',
       '- If it has no sub-tasks yet, run writing-plans with this task as the spec (`{cli} show {id}` reads it) and commit the plan, then publish each plan task as a sub-task, in order: `{cli} create --title <task title> --parent {id} --blocked-by <ticket ids> --state ready-for-agent --body-file -`, its full text from the plan as the body (leave out --blocked-by when it has none). Skip the plan\'s question about the execution method: it runs subagent-driven.',
+      '- If this worktree has no plan file for these sub-tasks, write one first under docs/superpowers/plans/ from `{cli} show <id>` of each sub-task (one plan task per sub-task, in dependency order), commit it, and use it as the plan.',
       "- Then run subagent-driven-development over the sub-tasks in dependency order (`{cli} show <id>` reads each): a fresh implementer subagent per sub-task, a task review after each, one whole-branch review at the end, all on this worktree's branch. Give each implementer the CLI line with its --dir.",
       '- Claim each sub-task with `{cli} claim <id>` as its implementer starts, and resolve it with `{cli} state <id> done` once its review is clean.',
       '- Keep working until all sub-tasks are done, then summarise the result and name the branch.',
