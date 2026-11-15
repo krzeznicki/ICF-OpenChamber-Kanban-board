@@ -5,7 +5,9 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { GuestSessionEventRequest } from '@openchamber/sdk';
 import type { QueueEntry } from '../src/core/queue.ts';
-import type { Exec } from '../src/core/types.ts';
+import { writeConfig } from '../src/core/config.ts';
+import { createLocalTracker } from '../src/core/localTracker.ts';
+import type { Exec, Task } from '../src/core/types.ts';
 import { RESERVE_MS, takeFromQueue } from '../src/service/queue.ts';
 import { handle, type Deps } from '../src/service/routes.ts';
 import { addLink, linkStatuses, STALE_LINK_MS, unknownSession, type SessionHost } from '../src/service/sessions.ts';
@@ -431,4 +433,59 @@ test('take, then remove while the start is in flight, then the start fails: the 
   // Queued again by the user: a later failure requeues it normally.
   await post(deps, '/queue/add', { directory, entry: entry('a') });
   assert.deepEqual(ids((await post(deps, '/queue/list', { directory })).queue), ['b', 'a']);
+});
+
+test('/tasks/parent links a task under a parent; a changed id carries its session links and queue entry along', async (t) => {
+  const { directory, deps, running } = await setup(t);
+  await writeConfig(directory, 'local');
+  const tracker = createLocalTracker(directory);
+  const a = (await tracker.create({ title: 'A' })).id;
+  const b = (await tracker.create({ title: 'B' })).id;
+  const ticket = (await tracker.create({ title: 'Move me', parentId: a })).id;
+  const stays = (await tracker.create({ title: 'Stays', parentId: a })).id;
+  await running(ticket, 'ses_moved', 'idle');
+  await running(stays, 'ses_stays', 'idle');
+  await post(deps, '/queue/add', { directory, entry: entry(ticket) });
+  await post(deps, '/queue/add', { directory, entry: entry(stays) });
+
+  const r = await handle('POST', '/tasks/parent', { directory, id: ticket, parentId: b }, deps);
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  const task = (r.json as { task: Task }).task;
+  assert.equal(task.id, '.scratch/b/issues/01-move-me.md');
+  assert.equal(task.parentId, b);
+
+  const links = (await handle('POST', '/links/list', { directory }, deps)).json as { links: Array<{ taskId: string; sessionId: string }> };
+  assert.deepEqual(links.links.map((l) => [l.taskId, l.sessionId]), [[task.id, 'ses_moved'], [stays, 'ses_stays']]);
+  assert.deepEqual(ids((await post(deps, '/queue/list', { directory })).queue), [task.id, stays]);
+});
+
+test('/tasks/parent: missing ids are 400; a refused link is 422 and changes nothing', async (t) => {
+  const { directory, deps } = await setup(t);
+  await writeConfig(directory, 'local');
+  const a = (await createLocalTracker(directory).create({ title: 'A' })).id;
+  assert.equal((await handle('POST', '/tasks/parent', { directory, id: a }, deps)).status, 400);
+  assert.equal((await handle('POST', '/tasks/parent', { directory, parentId: a }, deps)).status, 400);
+  const self = await handle('POST', '/tasks/parent', { directory, id: a, parentId: a }, deps);
+  assert.equal(self.status, 422);
+  assert.equal((self.json as { error: { code: string } }).error.code, 'INVALID');
+});
+
+test('/tasks/parent: once the task moved, a failing re-key of its links is logged and the answer is still the moved task', async (t) => {
+  const { directory, deps, logs, root } = await setup(t);
+  await writeConfig(directory, 'local');
+  const tracker = createLocalTracker(directory);
+  const a = (await tracker.create({ title: 'A' })).id;
+  const b = (await tracker.create({ title: 'B' })).id;
+  const ticket = (await tracker.create({ title: 'Move me', parentId: a })).id;
+  await post(deps, '/queue/add', { directory, entry: entry(ticket) });
+  const broken = join(root, 'links-is-a-folder');
+  await mkdir(broken);
+
+  const r = await handle('POST', '/tasks/parent', { directory, id: ticket, parentId: b }, { ...deps, linksFile: broken });
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  const task = (r.json as { task: Task }).task;
+  assert.equal(task.id, '.scratch/b/issues/01-move-me.md');
+  assert.ok(logs.some((m) => m.includes(ticket) && m.includes(task.id)), logs.join('\n'));
+  // The queue is re-keyed on its own, not skipped because the links failed.
+  assert.deepEqual(ids((await post(deps, '/queue/list', { directory })).queue), [task.id]);
 });

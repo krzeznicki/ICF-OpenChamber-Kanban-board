@@ -307,3 +307,20 @@ test('usage lists claim', async (t) => {
   const r = await run(['--help'], await tmp(t));
   assert.match(r.out, /claim <id>/);
 });
+
+test('parent <id> <parentId> moves a ticket under another feature and prints its new id; --help lists it', async (t) => {
+  const { root, ids } = await project(t);
+  const other = await run(['create', '--title', 'Other', '--json'], root);
+  const spec = json<Task>(other).id;
+  const r = await run(['parent', ids[2]!, spec, '--json'], root);
+  assert.equal(r.code, 0, r.err);
+  const task = json<Task>(r);
+  assert.equal(task.id, '.scratch/other/issues/01-third.md');
+  assert.equal(task.parentId, spec);
+  const human = await run(['parent', ids[0]!, spec], root);
+  assert.equal(human.code, 0, human.err);
+  assert.match(human.out, /^\.scratch\/other\/issues\/02-first\.md  \[needs-info\]  First\n$/);
+  assert.equal((await run(['parent', ids[1]!, ids[1]!], root)).code, 4);
+  assert.equal((await run(['parent', ids[1]!], root)).code, 2);
+  assert.match((await run(['--help'], root)).out, /parent <id> <parentId>/);
+});

@@ -2870,6 +2870,11 @@ ${GUEST_UI_LOOK_CSS}`;
       create: (input) => call("POST", "/tasks/create", { input }).then((r) => r.task),
       setState: (id, state2) => call("POST", "/tasks/state", { id, state: state2 }).then((r) => r.task),
       setType: (id, type) => call("POST", "/tasks/type", { id, type }).then((r) => r.task),
+      /**
+       * Makes an existing task a sub-task of `parentId`. The returned task can have a new id (local:
+       * the file moves into the parent's feature); the service has re-keyed its session links and queue entry.
+       */
+      setParent: (id, parentId) => call("POST", "/tasks/parent", { id, parentId }).then((r) => r.task),
       close: (id, withChildren = false) => call("POST", "/tasks/close", { id, withChildren }).then((r) => r.tasks),
       cliPath: () => call("GET", "/cli").then((r) => r.path),
       /** Path B: the service makes the worktree (if asked) and starts the session with this model, agent and thinking level. */
@@ -3033,6 +3038,51 @@ ${GUEST_UI_LOOK_CSS}`;
     return board2;
   };
 
+  // src/panel/link.ts
+  var isOrAbove = (id, from, tasks) => {
+    const seen = /* @__PURE__ */ new Set();
+    for (let up = from; up !== null && !seen.has(up); up = tasks.find((t) => t.id === up)?.parentId ?? null) {
+      if (up === id) return true;
+      seen.add(up);
+    }
+    return false;
+  };
+  var movableLocally = (child, tasks) => child.kind === "ticket" || !tasks.some((t) => t.parentId === child.id);
+  var canLinkUnder = (tracker, child, parent, tasks) => {
+    if (child.id === parent.id || child.state === "done" || parent.state === "done") return false;
+    if (child.parentId === parent.id) return false;
+    if (tracker === "local") return parent.kind === "parent" && movableLocally(child, tasks);
+    return !isOrAbove(child.id, parent.parentId, tasks);
+  };
+  var parentTargets = (tracker, child, tasks) => tasks.filter((p) => canLinkUnder(tracker, child, p, tasks));
+  var childCandidates = (tracker, parent, tasks) => tasks.filter((c) => canLinkUnder(tracker, c, parent, tasks));
+  var canLinkUnderNew = (tracker, child, parentId, tasks) => {
+    if (child.state === "done") return false;
+    if (tracker === "local") return parentId === null && movableLocally(child, tasks);
+    return !isOrAbove(child.id, parentId, tasks);
+  };
+  var newChildCandidates = (tracker, parentId, tasks) => tasks.filter((c) => canLinkUnderNew(tracker, c, parentId, tasks));
+  var linkChoice = (t) => ({ id: t.id, label: t.title, hint: t.id });
+  var linkChoices = (tracker, task, tasks) => ({
+    parents: parentTargets(tracker, task, tasks).map(linkChoice),
+    children: childCandidates(tracker, task, tasks).map(linkChoice)
+  });
+  var followingSetParent = (setParent, onMoved, onError) => async (id, parentId) => {
+    const task = await setParent(id, parentId);
+    if (task.id !== id) {
+      try {
+        await onMoved(id, task.id);
+      } catch (e) {
+        onError(id, task.id, e);
+      }
+    }
+    return task;
+  };
+  var linkConfirm = (tracker, child, parent) => ({
+    title: `Make \u201C${child.title}\u201D a sub-task of \u201C${parent.title}\u201D?`,
+    body: tracker === "local" ? `${child.id} moves into the feature ${parent.id} as its next ticket: it gets a new id and its blockers (both ways) are dropped.` : `${child.id} becomes a sub-task of ${parent.id}, replacing its current parent if it has one.`
+  });
+
   // src/panel/addTask.ts
   var MODEL_PICK = ":model";
   var emptyDraft = (suggest = false) => ({
@@ -3043,9 +3093,10 @@ ${GUEST_UI_LOOK_CSS}`;
     blockedBy: [],
     body: "",
     subtasks: [],
+    existing: [],
     start: {}
   });
-  var isDirty = (draft, initial = emptyDraft()) => draft.title.trim() !== "" || draft.body.trim() !== "" || draft.subtasks.some((row) => row.trim() !== "") || draft.type !== initial.type || draft.parentId !== initial.parentId || draft.state !== initial.state || draft.blockedBy.length > 0 || Object.values(draft.start).some((v2) => v2 !== void 0);
+  var isDirty = (draft, initial = emptyDraft()) => draft.title.trim() !== "" || draft.body.trim() !== "" || draft.subtasks.some((row) => row.trim() !== "") || draft.type !== initial.type || draft.parentId !== initial.parentId || draft.state !== initial.state || draft.blockedBy.length > 0 || draft.existing.length > 0 || Object.values(draft.start).some((v2) => v2 !== void 0);
   var CREATE_STATES = ["needs-triage", "needs-info", "ready-for-agent", "ready-for-human"];
   var choice = (t) => ({ id: t.id, label: t.title, hint: t.id });
   var parentChoices = (tasks) => tasks.filter((t) => t.kind === "parent" && t.state !== "done").map(choice);
@@ -3062,9 +3113,11 @@ ${GUEST_UI_LOOK_CSS}`;
   var canAddSubtask = (task, tracker) => task.state !== "done" && (tracker === "github" || task.kind === "parent");
   var subtaskTitles = (rows) => rows.map((r) => r.trim()).filter((r) => r !== "");
   var subtasksToCreate = (d, tracker) => canHaveSubtasks(tracker, d.parentId) ? subtaskTitles(d.subtasks) : [];
+  var existingSubtaskChoices = (tasks, tracker, parentId) => canHaveSubtasks(tracker, parentId) ? newChildCandidates(tracker, parentId === "" ? null : parentId, tasks).map(choice) : [];
+  var existingToLink = (d, tracker, tasks) => keepOffered(d.existing, existingSubtaskChoices(tasks, tracker, d.parentId));
   var draftKind = (d, tracker) => {
     if (tracker === "local") return d.parentId === "" ? "parent" : "ticket";
-    return subtaskTitles(d.subtasks).length > 0 ? "parent" : "ticket";
+    return subtaskTitles(d.subtasks).length > 0 || d.existing.length > 0 ? "parent" : "ticket";
   };
   var draftType = (d) => d.type === "" || d.type === MODEL_PICK ? null : d.type;
   var validateDraft = (d) => d.title.trim() === "" ? { title: "A title is required" } : {};
@@ -3082,22 +3135,34 @@ ${GUEST_UI_LOOK_CSS}`;
     };
   };
   var messageOf = (e) => e instanceof Error ? e.message : String(e);
-  var createWithSubtasks = async (create, input, subtasks) => {
+  var createWithSubtasks = async (create, input, subtasks, link2) => {
     const task = await create(input);
     const failed = [];
     for (const title of subtasks) {
       try {
         await create({ title, state: "needs-triage", parentId: task.id });
       } catch (e) {
-        failed.push({ title, message: messageOf(e) });
+        failed.push({ title, message: messageOf(e), kind: "create" });
+      }
+    }
+    for (const c of link2?.existing ?? []) {
+      try {
+        await link2.setParent(c.id, task.id);
+      } catch (e) {
+        failed.push({ title: c.label, message: messageOf(e), kind: "link" });
       }
     }
     return { task, failed };
   };
   var partialMessage = (taskId, failed) => {
-    const n = failed.length;
-    const list2 = failed.map((f) => `\u201C${f.title}\u201D (${f.message})`).join("; ");
-    return `Created ${taskId}, but ${n} sub-task${n === 1 ? " was" : "s were"} not created: ${list2}.`;
+    const part = (kind, noun, what) => {
+      const fs = failed.filter((f) => f.kind === kind);
+      const n = fs.length;
+      if (n === 0) return [];
+      return [`${n} ${noun}${n === 1 ? " was" : "s were"} ${what}: ${fs.map((f) => `\u201C${f.title}\u201D (${f.message})`).join("; ")}`];
+    };
+    const parts = [...part("create", "sub-task", "not created"), ...part("link", "existing task", "not linked under it")];
+    return `Created ${taskId}, but ${parts.join("; ")}.`;
   };
 
   // src/core/skills.ts
@@ -4094,6 +4159,13 @@ ${ref}`,
         const clean2 = parseCardOptions(card);
         return put(STORAGE_KEYS.card(projectId, taskId), clean2, Object.keys(clean2).length === 0);
       },
+      /** The task got a new id (a local link moved its file): its start options go under that id, the old key is deleted. */
+      moveCard: async (projectId, from, to) => {
+        const clean2 = parseCardOptions(await storage.get(STORAGE_KEYS.card(projectId, from)));
+        if (Object.keys(clean2).length === 0) return;
+        await storage.set(STORAGE_KEYS.card(projectId, to), clean2);
+        await storage.delete(STORAGE_KEYS.card(projectId, from));
+      },
       loadDetached: async (projectId) => parseDetached(await storage.get(STORAGE_KEYS.detached(projectId))),
       saveDetached: (projectId, marks) => put(STORAGE_KEYS.detached(projectId), Object.fromEntries(marks), marks.size === 0),
       loadArchived: async (projectId) => parseArchivedSessions(await storage.get(STORAGE_KEYS.archivedSessions(projectId))),
@@ -4369,6 +4441,7 @@ ${ref}`,
   });
 
   // src/panel/ui/modal.ts
+  var FILTER_OVER = 8;
   var openModalShell = (options) => {
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const backdrop = document.createElement("div");
@@ -5262,7 +5335,6 @@ ${ref}`,
 
   // src/panel/ui/addModal.ts
   var NONE2 = "";
-  var FILTER_OVER = 8;
   var el3 = (tag, className, text3) => {
     const node = document.createElement(tag);
     node.className = className;
@@ -5324,6 +5396,7 @@ ${ref}`,
     const blockersBox = part("kb-sheet-part kb-add-group");
     const bodySlot = part("kb-add-body");
     const subBox = part("kb-sheet-part kb-add-group");
+    const existingBox = part("kb-sheet-part kb-add-group");
     const startBox = part("kb-sheet-part kb-start");
     const errorSlot = part("kb-add-error");
     const actions = part("kb-actions");
@@ -5372,6 +5445,7 @@ ${ref}`,
         parentSelect.update({ value: id });
         drawBlockers();
         drawSubtasks();
+        drawExisting();
         drawStart();
       }
     });
@@ -5387,6 +5461,54 @@ ${ref}`,
       }
     });
     const fixed = [titleField, typeSelect, stateSelect, parentSelect, bodyField];
+    const mountChecks = (box, offered, filterLabel, filter, setFilter, selected, setSelected, onPick) => {
+      const out = [];
+      const list2 = el3("div", "kb-add-checks");
+      const drawList = () => {
+        const shown = new Set(filterSelectOptions(offered, filter).map((c) => c.id));
+        for (const node of list2.children) {
+          const id = node.dataset.id ?? "";
+          node.hidden = !shown.has(id) && !selected().includes(id);
+        }
+      };
+      if (offered.length > FILTER_OVER) {
+        const filterSlot = el3("div", "kb-add-filter");
+        box.append(filterSlot);
+        const search = mountSearchField(filterSlot, {
+          value: filter,
+          label: filterLabel,
+          placeholder: "Filter",
+          onChange: (v2) => {
+            filter = v2;
+            setFilter(v2);
+            search.update({ value: v2 });
+            drawList();
+          }
+        });
+        out.push(search.dispose);
+      }
+      for (const c of offered) {
+        const cell = el3("div", "kb-add-check");
+        cell.dataset.id = c.id;
+        list2.append(cell);
+        const check = mountCheckbox(cell, {
+          label: c.label,
+          description: c.hint ?? c.id,
+          checked: selected().includes(c.id),
+          disabled: locked(),
+          onChange: (checked) => {
+            const rest = selected().filter((b) => b !== c.id);
+            setSelected(checked ? [...rest, c.id] : rest);
+            check.update({ checked });
+            onPick?.();
+          }
+        });
+        out.push(check.dispose);
+      }
+      box.append(list2);
+      drawList();
+      return out;
+    };
     let blockerDisposers = [];
     let blockerFilter = "";
     const drawBlockers = () => {
@@ -5401,47 +5523,9 @@ ${ref}`,
         blockersBox.append(el3("p", "kb-muted", why));
         return;
       }
-      const list2 = el3("div", "kb-add-checks");
-      const drawList = () => {
-        const shown = new Set(filterSelectOptions(offered, blockerFilter).map((c) => c.id));
-        for (const node of list2.children) {
-          const id = node.dataset.id ?? "";
-          node.hidden = !shown.has(id) && !d.blockedBy.includes(id);
-        }
-      };
-      if (offered.length > FILTER_OVER) {
-        const filterSlot = el3("div", "kb-add-filter");
-        blockersBox.append(filterSlot);
-        const search = mountSearchField(filterSlot, {
-          value: blockerFilter,
-          label: "Filter blockers",
-          placeholder: "Filter",
-          onChange: (v2) => {
-            blockerFilter = v2;
-            search.update({ value: v2 });
-            drawList();
-          }
-        });
-        blockerDisposers.push(search.dispose);
-      }
-      for (const c of offered) {
-        const cell = el3("div", "kb-add-check");
-        cell.dataset.id = c.id;
-        list2.append(cell);
-        const box = mountCheckbox(cell, {
-          label: c.label,
-          description: c.hint ?? c.id,
-          checked: d.blockedBy.includes(c.id),
-          disabled: locked(),
-          onChange: (checked) => {
-            d.blockedBy = checked ? [...d.blockedBy.filter((b) => b !== c.id), c.id] : d.blockedBy.filter((b) => b !== c.id);
-            box.update({ checked });
-          }
-        });
-        blockerDisposers.push(box.dispose);
-      }
-      blockersBox.append(list2);
-      drawList();
+      blockerDisposers = mountChecks(blockersBox, offered, "Filter blockers", blockerFilter, (v2) => blockerFilter = v2, () => d.blockedBy, (ids) => {
+        d.blockedBy = ids;
+      });
     };
     let subDisposers = [];
     const drawSubtasks = (focusRow) => {
@@ -5515,6 +5599,42 @@ ${ref}`,
       );
       if (focusRow !== void 0 && focusRow >= 0) subBox.querySelectorAll("input")[focusRow]?.focus();
     };
+    let existingDisposers = [];
+    let existingFilter = "";
+    const drawExisting = () => {
+      for (const x of existingDisposers) x();
+      existingDisposers = [];
+      existingBox.replaceChildren();
+      const offered = existingSubtaskChoices(model.tasks, model.tracker, d.parentId);
+      d.existing = keepOffered(d.existing, offered);
+      existingBox.hidden = !canHaveSubtasks(model.tracker, d.parentId);
+      if (existingBox.hidden) return;
+      existingBox.append(el3("h3", "kb-settings-heading", "Existing sub-tasks"));
+      if (offered.length === 0) {
+        existingBox.append(el3("p", "kb-muted", model.tracker === "local" ? "No open tickets or features without tickets to move." : "No open issues."));
+        return;
+      }
+      existingBox.append(
+        el3(
+          "p",
+          "kb-muted",
+          model.tracker === "local" ? "Moved into the new feature as its tickets once it is created." : "Linked as sub-issues of the new issue once it is created."
+        )
+      );
+      existingDisposers = mountChecks(
+        existingBox,
+        offered,
+        "Filter existing tasks",
+        existingFilter,
+        (v2) => existingFilter = v2,
+        () => d.existing,
+        (ids) => {
+          d.existing = ids;
+        },
+        drawStart
+        // GitHub: having sub-tasks makes it a parent (orchestrate preset)
+      );
+    };
     let start2 = model.start;
     let startDispose = null;
     let startKey = null;
@@ -5566,6 +5686,7 @@ ${ref}`,
       for (const h of fixed) h.update({ disabled: next || finished });
       drawBlockers();
       drawSubtasks();
+      drawExisting();
       lockStart();
     };
     const submit = () => {
@@ -5578,7 +5699,7 @@ ${ref}`,
       }
       showBanner(null);
       setBusy(true);
-      void callbacks.onSubmit({ ...d, blockedBy: [...d.blockedBy], subtasks: [...d.subtasks], start: { ...d.start } }).then((result) => {
+      void callbacks.onSubmit({ ...d, blockedBy: [...d.blockedBy], subtasks: [...d.subtasks], existing: [...d.existing], start: { ...d.start } }).then((result) => {
         if (!modal.isConnected) return;
         if (result?.kind === "partial") finished = true;
         setBusy(false);
@@ -5587,7 +5708,7 @@ ${ref}`,
           showBanner("error", "Could not create the task", result.message);
           return;
         }
-        showBanner("warning", "Some sub-tasks were not created", result.message);
+        showBanner("warning", "Some sub-tasks were not created or linked", result.message);
         createDisposed = true;
         create.dispose();
         cancel.update({ label: "Close", variant: "default" });
@@ -5605,6 +5726,7 @@ ${ref}`,
     });
     drawBlockers();
     drawSubtasks();
+    drawExisting();
     drawStart();
     titleSlot.querySelector("input")?.focus();
     return {
@@ -5613,7 +5735,7 @@ ${ref}`,
         drawStart();
       },
       dispose: () => {
-        for (const x of [...disposers, ...blockerDisposers, ...subDisposers]) x();
+        for (const x of [...disposers, ...blockerDisposers, ...subDisposers, ...existingDisposers]) x();
         for (const h of fixed) h.dispose();
         startDispose?.();
         errorDispose?.();
@@ -11463,7 +11585,8 @@ ${ref}`,
     settingsSec.content.append(settingsTop, startBox);
     const subList = el5("div", "kb-sheet-part");
     const addBox = el5("div", "kb-sheet-part kb-add-sub");
-    subSec.content.append(subList, addBox);
+    const linkBox = el5("div", "kb-sheet-part kb-add-sub");
+    subSec.content.append(subList, addBox, linkBox);
     modal.append(head, quick, summarySec.box, taskSec.box, subSec.box, settingsSec.box);
     let disposers = [];
     const clear = () => {
@@ -11581,8 +11704,9 @@ ${ref}`,
       else box.append(renderMarkdown(task.body, callbacks.onOpenUrl));
     };
     const drawChildren = (m) => {
-      subSec.box.hidden = m.children.length === 0 && !m.addSubtask;
+      subSec.box.hidden = m.children.length === 0 && !m.addSubtask && m.links.children.length === 0;
       drawAddSubtask(m);
+      drawLinkChild(m);
       if (m.children.length === 0) {
         subSec.label.textContent = "Sub-tasks";
         return;
@@ -11598,6 +11722,7 @@ ${ref}`,
       );
     };
     let quickKey = null;
+    let parentError = null;
     let quickDisposers = [];
     const clearQuick = () => {
       for (const d of quickDisposers) d();
@@ -11606,7 +11731,8 @@ ${ref}`,
     };
     const drawQuick = (m) => {
       const { task } = m;
-      const key = JSON.stringify([task.id, task.state, task.type, m.types, m.labels, m.moves, m.busy]);
+      if (parentError !== null && parentError.taskId !== task.id) parentError = null;
+      const key = JSON.stringify([task.id, task.state, task.type, m.types, m.labels, m.moves, m.busy, m.links.parent, m.links.parents, parentError]);
       if (key === quickKey) return;
       quickKey = key;
       clearQuick();
@@ -11616,6 +11742,40 @@ ${ref}`,
       const typeSlot = el5("div", "kb-field");
       fields.append(stateSlot, typeSlot);
       quick.append(fields);
+      const { parent, parents } = m.links;
+      if (parents.length > 0 || parent !== null) {
+        const parentSlot = el5("div", "kb-field");
+        fields.append(parentSlot);
+        const options2 = parent !== null && !parents.some((p) => p.id === parent.id) ? [parent, ...parents] : parents;
+        disposers2.push(
+          mountSelect(parentSlot, {
+            label: "Parent",
+            value: parent?.id ?? null,
+            placeholder: "No parent",
+            options: options2,
+            searchable: options2.length > FILTER_OVER,
+            disabled: m.busy || parents.length === 0,
+            // only the current parent: shown, nothing to pick
+            onChange: (id) => {
+              if (id === task.parentId) return;
+              const taskId = task.id;
+              quickKey = null;
+              parentError = null;
+              void callbacks.onSetParent(id).then((error2) => {
+                if (disposed || error2 === null) return;
+                parentError = { taskId: current?.task.id ?? taskId, message: error2 };
+                quickKey = null;
+                if (current !== null) drawQuick(current);
+              });
+            }
+          }).dispose
+        );
+      }
+      if (parentError !== null) {
+        const errorSlot = el5("div", "kb-add-error");
+        quick.append(errorSlot);
+        disposers2.push(mountBanner(errorSlot, { tone: "error", title: "Could not change the parent", body: parentError.message }).dispose);
+      }
       disposers2.push(
         mountSelect(stateSlot, {
           label: "State",
@@ -11693,7 +11853,57 @@ ${ref}`,
       if (key === null) return;
       addHandle = mountAddSubtask(addBox, m.types, callbacks.onAddSubtask);
     };
+    let linkKey = null;
+    let linkError = null;
+    let linkDisposers = [];
+    const clearLink = () => {
+      for (const d of linkDisposers) d();
+      linkDisposers = [];
+      linkBox.replaceChildren();
+    };
+    const drawLinkChild = (m) => {
+      const { task } = m;
+      if (linkError !== null && linkError.taskId !== task.id) linkError = null;
+      const offered = m.links.children;
+      const key = JSON.stringify([task.id, offered, m.busy, linkError]);
+      if (key === linkKey) return;
+      linkKey = key;
+      clearLink();
+      linkBox.hidden = offered.length === 0;
+      if (offered.length === 0) return;
+      linkBox.append(el5("h3", "kb-settings-heading", "Link existing task"));
+      const slot = el5("div", "kb-field");
+      const errorSlot = el5("div", "kb-add-error");
+      linkBox.append(slot, errorSlot);
+      linkDisposers.push(
+        mountSelect(slot, {
+          label: "Make a sub-task of this one",
+          value: null,
+          placeholder: "Choose a task",
+          options: offered,
+          searchable: offered.length > FILTER_OVER,
+          disabled: m.busy,
+          onChange: (id) => {
+            const taskId = task.id;
+            linkKey = null;
+            linkError = null;
+            void callbacks.onLinkChild(id).then((error2) => {
+              if (disposed || error2 === null) return;
+              linkError = { taskId, message: error2 };
+              linkKey = null;
+              if (current !== null) drawLinkChild(current);
+            });
+          }
+        }).dispose
+      );
+      if (linkError !== null) {
+        linkDisposers.push(mountBanner(errorSlot, { tone: "error", title: "Could not link the task", body: linkError.message }).dispose);
+      }
+    };
+    let current = null;
+    let disposed = false;
     const draw2 = (m) => {
+      current = m;
       clear();
       modal.setAttribute("aria-label", m.task.title);
       modal.setAttribute("aria-busy", String(m.busy));
@@ -11709,9 +11919,11 @@ ${ref}`,
     return {
       update: draw2,
       dispose: () => {
+        disposed = true;
         clear();
         clearStart();
         clearQuick();
+        clearLink();
         addHandle?.dispose();
         shell.dispose();
       }
@@ -11823,6 +12035,8 @@ ${ref}`,
       case "up": {
         if (press === null || input.pointerId !== press.pointerId) return { press, effect: NONE3 };
         if (!press.dragging) return { press: null, effect: { kind: "open", taskId: press.taskId } };
+        const onto = input.onto ?? null;
+        if (onto !== null && onto !== press.taskId) return { press: null, effect: { kind: "link", taskId: press.taskId, parentId: onto } };
         if (input.to === null) return end(press);
         return { press: null, effect: { kind: "drop", taskId: press.taskId, from: press.from, to: input.to } };
       }
@@ -11836,6 +12050,7 @@ ${ref}`,
 
   // src/panel/ui/dnd.ts
   var COLUMNS2 = ["backlog", "ready", "in_progress", "review", "done"];
+  var OVER = ["is-drop-target", "is-link-target"];
   var columnOf = (node) => {
     const col = node?.closest(".kb-column") ?? null;
     return col !== null && COLUMNS2.includes(col.dataset.column ?? "") ? col : null;
@@ -11847,17 +12062,23 @@ ${ref}`,
   var attachDrag = (container, callbacks) => {
     let press = null;
     let dom = null;
-    const setOver = (col) => {
-      if (dom === null || dom.over === col) return;
-      dom.over?.classList.remove("is-drop-target");
-      dom.over = col;
-      col?.classList.add("is-drop-target");
+    const linkTarget = (node, taskId) => {
+      const card = node?.closest(".kb-card") ?? null;
+      const id = card?.dataset.taskId;
+      if (card === null || id === void 0 || id === taskId || !container.contains(card)) return null;
+      return callbacks.canLink(taskId, id) ? card : null;
+    };
+    const setOver = (node, kind) => {
+      if (dom === null || dom.over === node && node?.classList.contains(kind) === true) return;
+      dom.over?.classList.remove(...OVER);
+      dom.over = node;
+      node?.classList.add(kind);
     };
     const cleanup = (pointerId, taskId) => {
       const d = dom;
       dom = null;
       if (d !== null) {
-        d.over?.classList.remove("is-drop-target");
+        d.over?.classList.remove(...OVER);
         d.ghost?.remove();
         d.card.classList.remove("is-dragging");
       }
@@ -11882,7 +12103,10 @@ ${ref}`,
     const follow = (x, y) => {
       if (dom?.ghost == null) return;
       dom.ghost.style.transform = `translate(${x - dom.dx}px, ${y - dom.dy}px)`;
-      setOver(columnOf(document.elementFromPoint(x, y)));
+      const hit = document.elementFromPoint(x, y);
+      const card = press === null ? null : linkTarget(hit, press.taskId);
+      if (card !== null) setOver(card, "is-link-target");
+      else setOver(columnOf(hit), "is-drop-target");
     };
     const feed = (input, at) => {
       const before = press;
@@ -11893,6 +12117,7 @@ ${ref}`,
       else if (effect.kind === "follow" && at !== void 0) follow(at.x, at.y);
       else if (effect.kind === "open") callbacks.onOpen(effect.taskId);
       else if (effect.kind === "drop") callbacks.onDrop(effect.taskId, effect.from, effect.to);
+      else if (effect.kind === "link") callbacks.onLink(effect.taskId, effect.parentId);
       return effect;
     };
     const onDown = (e) => {
@@ -11930,8 +12155,10 @@ ${ref}`,
       if (effect.kind === "start" || effect.kind === "follow") e.preventDefault();
     };
     const onUp = (e) => {
-      const to = press?.dragging === true ? columnOf(document.elementFromPoint(e.clientX, e.clientY)) : null;
-      feed({ type: "up", pointerId: e.pointerId, to: to?.dataset.column ?? null });
+      const hit = press?.dragging === true ? document.elementFromPoint(e.clientX, e.clientY) : null;
+      const to = columnOf(hit);
+      const onto = press !== null && hit !== null ? linkTarget(hit, press.taskId)?.dataset.taskId ?? null : null;
+      feed({ type: "up", pointerId: e.pointerId, to: to?.dataset.column ?? null, onto });
     };
     const onPointerAbort = (e) => void feed({ type: "abort", pointerId: e.pointerId });
     const onContextMenu = () => void feed({ type: "abort" });
@@ -12058,7 +12285,15 @@ ${ref}`,
         session: sessionView(task),
         children: tasks.filter((t) => t.parentId === task.id).map((t) => ({ id: t.id, title: t.title, state: t.state })),
         addSubtask: canAddSubtask(task, deps.tracker()),
-        archived: deps.archive.has(task)
+        archived: deps.archive.has(task),
+        links: (() => {
+          const parent = task.parentId === null ? null : find(task.parentId);
+          const offered = linkChoices(deps.tracker(), task, tasks);
+          return {
+            parent: task.parentId === null ? null : { id: task.parentId, label: parent?.title ?? task.parentId, hint: task.parentId },
+            ...offered
+          };
+        })()
       };
     };
     const loadCard = (taskId) => {
@@ -12076,9 +12311,11 @@ ${ref}`,
         refreshDetail();
       }).catch((e) => fail2(`Could not read the card's start options: ${errorText2(e)}`));
     };
+    let followed = null;
     const refreshDetail = () => {
       if (detail === null) return;
       const task = find(detail.id);
+      if (task === null && detail.id === followed) return;
       if (task === null) closeDetail();
       else detail.handle.update(detailModel(task));
     };
@@ -12097,6 +12334,42 @@ ${ref}`,
         await deps.reload();
         refreshDetail();
       }
+    };
+    const setParentOf = (api) => followingSetParent(
+      api.setParent,
+      async (from, to) => {
+        follow(from, to);
+        const ctx = deps.start.context();
+        if (ctx !== null) await deps.start.move(ctx.projectId, from, to);
+      },
+      (from, to, e) => fail2(`${from} is now ${to}, but its start options could not follow: ${errorText2(e)}`)
+    );
+    const linkTask = async (childId, parentId) => {
+      const api = deps.api();
+      if (api === null) return "No project is open.";
+      if (moving.has(childId)) return null;
+      moving.add(childId);
+      deps.redraw();
+      refreshDetail();
+      try {
+        const moved = await setParentOf(api)(childId, parentId);
+        info2(moved.id !== childId ? `Linked ${childId} under ${parentId}; it is now ${moved.id}` : `Linked ${childId} under ${parentId}`);
+        return null;
+      } catch (e) {
+        return errorText2(e);
+      } finally {
+        moving.delete(childId);
+        await deps.reload();
+        followed = null;
+        refreshDetail();
+      }
+    };
+    const follow = (from, to) => {
+      if (detail === null || detail.id !== from) return;
+      detail.id = to;
+      followed = to;
+      detail.onFollow(to);
+      if (card !== null && card.taskId === from) card.taskId = to;
     };
     const close = async (task, askChildren) => {
       let withChildren = false;
@@ -12143,6 +12416,15 @@ ${ref}`,
       if (task === null || moving.has(id) || from === to) return;
       apply(task, from, planMove(task, from, to, openChildren(task, deps.tasks())));
     };
+    const link2 = async (id, parentId) => {
+      const child = find(id);
+      const parent = find(parentId);
+      if (child === null || parent === null || moving.has(id)) return;
+      const { title, body } = linkConfirm(deps.tracker(), child, parent);
+      if (await askChoice(title, body, [{ id: "link", label: "Make sub-task" }]) !== "link") return;
+      const error2 = await linkTask(id, parentId);
+      if (error2 !== null) fail2(error2);
+    };
     const closeDetail = () => {
       const d = detail;
       detail = null;
@@ -12150,7 +12432,8 @@ ${ref}`,
       lookup = null;
       d?.handle.dispose();
     };
-    const showDetail = (id) => {
+    const showDetail = (openId) => {
+      let id = openId;
       const task = find(id);
       if (task === null) return;
       closeDetail();
@@ -12172,6 +12455,8 @@ ${ref}`,
           refreshDetail();
           return null;
         },
+        onSetParent: (parentId) => linkTask(id, parentId),
+        onLinkChild: (childId) => linkTask(childId, id),
         onSections: deps.sections.save,
         onUnarchive: () => {
           deps.archive.unarchive(id);
@@ -12204,7 +12489,7 @@ ${ref}`,
         onOpenUrl: (url) => void deps.host.openUrl(url).catch((e) => fail2(errorText2(e))),
         onDismiss: closeDetail
       }, { sections: deps.sections.get() });
-      detail = { id, handle };
+      detail = { id, handle, onFollow: (next) => id = next };
     };
     const closeAdd = () => {
       const m = addModal;
@@ -12217,6 +12502,7 @@ ${ref}`,
       const ctx = deps.start.context();
       const tracker = deps.tracker();
       const subtasks = subtasksToCreate(draft, tracker);
+      const existing = existingToLink(draft, tracker, deps.tasks()).map((id) => ({ id, label: find(id)?.title ?? id }));
       const saveStart = (taskId) => {
         if (ctx === null || Object.keys(draft.start).length === 0) return;
         try {
@@ -12239,7 +12525,8 @@ ${ref}`,
             return task2;
           },
           toNewTask(draft, tracker),
-          subtasks
+          subtasks,
+          { existing, setParent: setParentOf(api) }
         );
       } catch (e) {
         return { kind: "error", message: errorText2(e) };
@@ -12258,7 +12545,7 @@ ${ref}`,
       }
       if (failed.length === 0) {
         closeAdd();
-        const n = subtasks.length;
+        const n = subtasks.length + existing.length;
         void deps.host.toast({ kind: "success", message: n === 0 ? `Created ${task.id}` : `Created ${task.id} with ${n} sub-task${n === 1 ? "" : "s"}` }).catch(() => {
         });
       }
@@ -12296,6 +12583,12 @@ ${ref}`,
     const detachDrag = attachDrag(deps.board.columns, {
       canDrag: (id) => !moving.has(id),
       onDrop: move,
+      canLink: (id, parentId) => {
+        const child = find(id);
+        const parent = find(parentId);
+        return child !== null && parent !== null && canLinkUnder(deps.tracker(), child, parent, deps.tasks());
+      },
+      onLink: (id, parentId) => void link2(id, parentId),
       onOpen: showDetail
     });
     return {
@@ -13181,6 +13474,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
   box-shadow: 0 8px 24px rgb(0 0 0 / 0.25); }
 :root.kb-dragging, :root.kb-dragging * { cursor: grabbing !important; }
 .kb-column.is-drop-target { border-color: var(--oc-primary); box-shadow: inset 0 0 0 1px var(--oc-primary); }
+.kb-card.is-link-target { border-color: var(--oc-primary); border-style: dashed; box-shadow: 0 0 0 2px var(--oc-primary); }
 .kb-add-error:empty { display: none; }
 .kb-fields { display: flex; flex-wrap: wrap; gap: 0.5rem; }
 .kb-field { flex: 1 1 10rem; min-width: 0; }
@@ -13970,7 +14264,12 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
       start: {
         context: startContext,
         load: (projectId, taskId) => store.loadCard(projectId, taskId),
-        save: (projectId, taskId, card) => saver.save(`card:${projectId}:${taskId}`, () => store.saveCard(projectId, taskId, card))
+        save: (projectId, taskId, card) => saver.save(`card:${projectId}:${taskId}`, () => store.saveCard(projectId, taskId, card)),
+        // After any pending save of the old key, so the options moved are the newest.
+        move: async (projectId, from, to) => {
+          await saver.idle();
+          await store.moveCard(projectId, from, to);
+        }
       },
       summary: {
         model: (task) => startContext() === null ? null : { text: summaries.get(task), status: summaries.status(task), auto: summaries.auto() },

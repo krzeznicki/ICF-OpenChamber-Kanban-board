@@ -1,10 +1,11 @@
 // "Add task": a modal on the task modal's shell (ui/modal.ts) with every per-task option: title
-// (required), type, parent, state, blocked by, description (markdown), the card's start options and
-// a list of sub-tasks to create under the new task. What may be offered for the chosen tracker and
-// parent comes from addTask.ts; the editor (edit.ts) runs the creates. The service's error shows
-// inside the modal; when the task was created but some sub-tasks were not, the modal says which
-// and offers only Close. With suggestions on, Type and State start on "Let the model pick"
-// (suggest.ts fills those in after the create).
+// (required), type, parent, state, blocked by, description (markdown), the card's start options,
+// a list of sub-tasks to create under the new task and existing tasks to link under it. What may
+// be offered for the chosen tracker and parent comes from addTask.ts; the editor (edit.ts) runs
+// the creates and the links. The service's error shows inside the modal; when the task was created
+// but some sub-tasks were not created or linked, the modal says which and offers only Close. With
+// suggestions on, Type and State start on "Let the model pick" (suggest.ts fills those in after
+// the create).
 import { filterSelectOptions, mountBanner, mountButton, mountCheckbox, mountSearchField, mountSelect, mountTextField } from '@openchamber/sdk/ui';
 import type { Task, TaskKind, TaskState } from '../../core/types.ts';
 import {
@@ -14,6 +15,7 @@ import {
   draftKind,
   draftType,
   emptyDraft,
+  existingSubtaskChoices,
   isDirty,
   keepOffered,
   MODEL_PICK,
@@ -27,7 +29,7 @@ import type { StartLists } from '../models.ts';
 import type { StartOptions } from '../settings.ts';
 import { mountCloseButton } from './closeButton.ts';
 import { askChoice } from './confirm.ts';
-import { openModalShell } from './modal.ts';
+import { FILTER_OVER, openModalShell } from './modal.ts';
 import { mountStartOptions } from './startOptions.ts';
 
 export type AddModalModel = {
@@ -35,7 +37,7 @@ export type AddModalModel = {
   types: string[];
   /** Open parents (addTask.ts parentChoices). */
   parents: Choice[];
-  /** The listed tasks, for the blocked-by choices. */
+  /** The listed tasks, for the blocked-by and existing sub-task choices. */
   tasks: readonly Task[];
   /** Role -> label in the repo; shown as a hint when it differs. */
   labels: Record<string, string>;
@@ -64,8 +66,6 @@ export type AddModalCallbacks = {
 };
 
 const NONE = '';
-/** Over this many blockers a filter field is shown. */
-const FILTER_OVER = 8;
 
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, className: string, text?: string): HTMLElementTagNameMap[K] => {
   const node = document.createElement(tag);
@@ -140,6 +140,7 @@ export const openAddModal = (
   const blockersBox = part('kb-sheet-part kb-add-group');
   const bodySlot = part('kb-add-body');
   const subBox = part('kb-sheet-part kb-add-group');
+  const existingBox = part('kb-sheet-part kb-add-group');
   const startBox = part('kb-sheet-part kb-start');
   const errorSlot = part('kb-add-error');
   const actions = part('kb-actions');
@@ -190,6 +191,7 @@ export const openAddModal = (
       parentSelect.update({ value: id });
       drawBlockers();
       drawSubtasks();
+      drawExisting();
       drawStart();
     },
   });
@@ -205,6 +207,68 @@ export const openAddModal = (
     },
   });
   const fixed = [titleField, typeSelect, stateSelect, parentSelect, bodyField];
+
+  /**
+   * A checkbox per offered choice, with a filter field over FILTER_OVER of them. Checked ones stay
+   * visible whatever the filter says; picks keep their order. Returns the disposers.
+   */
+  const mountChecks = (
+    box: HTMLElement,
+    offered: readonly Choice[],
+    filterLabel: string,
+    filter: string,
+    setFilter: (v: string) => void,
+    selected: () => string[],
+    setSelected: (ids: string[]) => void,
+    onPick?: () => void,
+  ): Array<() => void> => {
+    const out: Array<() => void> = [];
+    const list = el('div', 'kb-add-checks');
+    const drawList = (): void => {
+      const shown = new Set(filterSelectOptions(offered, filter).map((c) => c.id));
+      for (const node of list.children) {
+        const id = (node as HTMLElement).dataset.id ?? '';
+        (node as HTMLElement).hidden = !shown.has(id) && !selected().includes(id);
+      }
+    };
+    if (offered.length > FILTER_OVER) {
+      const filterSlot = el('div', 'kb-add-filter');
+      box.append(filterSlot);
+      const search = mountSearchField(filterSlot, {
+        value: filter,
+        label: filterLabel,
+        placeholder: 'Filter',
+        onChange: (v) => {
+          filter = v;
+          setFilter(v);
+          search.update({ value: v });
+          drawList();
+        },
+      });
+      out.push(search.dispose);
+    }
+    for (const c of offered) {
+      const cell = el('div', 'kb-add-check');
+      cell.dataset.id = c.id;
+      list.append(cell);
+      const check = mountCheckbox(cell, {
+        label: c.label,
+        description: c.hint ?? c.id,
+        checked: selected().includes(c.id),
+        disabled: locked(),
+        onChange: (checked) => {
+          const rest = selected().filter((b) => b !== c.id);
+          setSelected(checked ? [...rest, c.id] : rest);
+          check.update({ checked });
+          onPick?.();
+        },
+      });
+      out.push(check.dispose);
+    }
+    box.append(list);
+    drawList();
+    return out;
+  };
 
   // --- blocked by: checkboxes of what addTask.ts offers for this parent ---
   let blockerDisposers: Array<() => void> = [];
@@ -226,48 +290,9 @@ export const openAddModal = (
       blockersBox.append(el('p', 'kb-muted', why));
       return;
     }
-    const list = el('div', 'kb-add-checks');
-    const drawList = (): void => {
-      // Checked ones stay visible whatever the filter says.
-      const shown = new Set(filterSelectOptions(offered, blockerFilter).map((c) => c.id));
-      for (const node of list.children) {
-        const id = (node as HTMLElement).dataset.id ?? '';
-        (node as HTMLElement).hidden = !shown.has(id) && !d.blockedBy.includes(id);
-      }
-    };
-    if (offered.length > FILTER_OVER) {
-      const filterSlot = el('div', 'kb-add-filter');
-      blockersBox.append(filterSlot);
-      const search = mountSearchField(filterSlot, {
-        value: blockerFilter,
-        label: 'Filter blockers',
-        placeholder: 'Filter',
-        onChange: (v) => {
-          blockerFilter = v;
-          search.update({ value: v });
-          drawList();
-        },
-      });
-      blockerDisposers.push(search.dispose);
-    }
-    for (const c of offered) {
-      const cell = el('div', 'kb-add-check');
-      cell.dataset.id = c.id;
-      list.append(cell);
-      const box = mountCheckbox(cell, {
-        label: c.label,
-        description: c.hint ?? c.id,
-        checked: d.blockedBy.includes(c.id),
-        disabled: locked(),
-        onChange: (checked) => {
-          d.blockedBy = checked ? [...d.blockedBy.filter((b) => b !== c.id), c.id] : d.blockedBy.filter((b) => b !== c.id);
-          box.update({ checked });
-        },
-      });
-      blockerDisposers.push(box.dispose);
-    }
-    blockersBox.append(list);
-    drawList();
+    blockerDisposers = mountChecks(blockersBox, offered, 'Filter blockers', blockerFilter, (v) => (blockerFilter = v), () => d.blockedBy, (ids) => {
+      d.blockedBy = ids;
+    });
   };
 
   // --- sub-tasks: rows of titles, created under the new task ---
@@ -345,6 +370,44 @@ export const openAddModal = (
     if (focusRow !== undefined && focusRow >= 0) subBox.querySelectorAll('input')[focusRow]?.focus();
   };
 
+  // --- existing sub-tasks: open tasks linked under the new task once it exists (tracker setParent) ---
+  let existingDisposers: Array<() => void> = [];
+  let existingFilter = '';
+  const drawExisting = (): void => {
+    for (const x of existingDisposers) x();
+    existingDisposers = [];
+    existingBox.replaceChildren();
+    const offered = existingSubtaskChoices(model.tasks, model.tracker, d.parentId);
+    d.existing = keepOffered(d.existing, offered);
+    // Where the new task takes no sub-tasks, the Sub-tasks section already says why.
+    existingBox.hidden = !canHaveSubtasks(model.tracker, d.parentId);
+    if (existingBox.hidden) return;
+    existingBox.append(el('h3', 'kb-settings-heading', 'Existing sub-tasks'));
+    if (offered.length === 0) {
+      existingBox.append(el('p', 'kb-muted', model.tracker === 'local' ? 'No open tickets or features without tickets to move.' : 'No open issues.'));
+      return;
+    }
+    existingBox.append(
+      el(
+        'p',
+        'kb-muted',
+        model.tracker === 'local' ? 'Moved into the new feature as its tickets once it is created.' : 'Linked as sub-issues of the new issue once it is created.',
+      ),
+    );
+    existingDisposers = mountChecks(
+      existingBox,
+      offered,
+      'Filter existing tasks',
+      existingFilter,
+      (v) => (existingFilter = v),
+      () => d.existing,
+      (ids) => {
+        d.existing = ids;
+      },
+      drawStart, // GitHub: having sub-tasks makes it a parent (orchestrate preset)
+    );
+  };
+
   // --- start options: redrawn when what they inherit changes (type, kind, the project's settings) ---
   let start = model.start;
   let startDispose: (() => void) | null = null;
@@ -402,6 +465,7 @@ export const openAddModal = (
     for (const h of fixed) h.update({ disabled: next || finished });
     drawBlockers();
     drawSubtasks();
+    drawExisting();
     lockStart();
   };
 
@@ -415,7 +479,7 @@ export const openAddModal = (
     }
     showBanner(null);
     setBusy(true);
-    void callbacks.onSubmit({ ...d, blockedBy: [...d.blockedBy], subtasks: [...d.subtasks], start: { ...d.start } }).then((result) => {
+    void callbacks.onSubmit({ ...d, blockedBy: [...d.blockedBy], subtasks: [...d.subtasks], existing: [...d.existing], start: { ...d.start } }).then((result) => {
       if (!modal.isConnected) return;
       if (result?.kind === 'partial') finished = true;
       setBusy(false);
@@ -424,7 +488,7 @@ export const openAddModal = (
         showBanner('error', 'Could not create the task', result.message);
         return;
       }
-      showBanner('warning', 'Some sub-tasks were not created', result.message);
+      showBanner('warning', 'Some sub-tasks were not created or linked', result.message);
       createDisposed = true;
       create.dispose();
       cancel.update({ label: 'Close', variant: 'default' });
@@ -445,6 +509,7 @@ export const openAddModal = (
 
   drawBlockers();
   drawSubtasks();
+  drawExisting();
   drawStart();
   titleSlot.querySelector('input')?.focus();
 
@@ -454,7 +519,7 @@ export const openAddModal = (
       drawStart();
     },
     dispose: () => {
-      for (const x of [...disposers, ...blockerDisposers, ...subDisposers]) x();
+      for (const x of [...disposers, ...blockerDisposers, ...subDisposers, ...existingDisposers]) x();
       for (const h of fixed) h.dispose();
       startDispose?.();
       errorDispose?.();

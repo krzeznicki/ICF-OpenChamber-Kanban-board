@@ -205,6 +205,23 @@ const blockerRef = (id: string): string => {
   return m ? pad(Number(m[1])) : id;
 };
 
+/** The `Blocked by` value for these ticket numbers; none -> "None (can start immediately)". */
+export const blockersValue = (numbers: number[]): string =>
+  numbers.length > 0 ? numbers.map(pad).join(', ') : NONE_BLOCKERS;
+
+/**
+ * Sets the heading to `# NN: <title>` (a ticket moved to another feature gets that feature's next
+ * number), keeping its line ending. A file with no heading gets one at the top.
+ */
+export const renumberIssue = (text: string, n: number, title: string): string => {
+  const heading = `# ${pad(n)}: ${title.trim()}`;
+  const lines = splitLines(text);
+  const i = headingIndex(lines);
+  if (i < 0) return text.trim() === '' ? `${heading}\n` : `${heading}${text.includes('\r\n') ? '\r\n\r\n' : '\n\n'}${text}`;
+  lines[i] = heading + (lines[i]!.endsWith('\r') ? '\r' : '');
+  return lines.join('\n');
+};
+
 /** A first body block that is a list, heading, fence, quote or table is not a leading paragraph. */
 const NOT_PARAGRAPH = /^\s*(?:[-+]\s|\*\s|\d+[.)]\s|#|```|~~~|>|\|)/;
 

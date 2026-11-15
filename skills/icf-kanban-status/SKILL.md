@@ -25,6 +25,7 @@ Summarise by state for the user: ready, claimed (in progress), waiting (needs-in
 ```sh
 task-board state <id> ready-for-agent   # needs-triage | needs-info | ready-for-agent | ready-for-human | wontfix | done
 task-board close <id> --with-children   # close a feature and all its tickets
+task-board parent <id> <parentId>       # make an existing task a sub-task of another; prints its id (new in a local tracker)
 ```
 
 `done` closes the task. Change a state only when the user asked for it or the work you did justifies it, and say what you changed. The ICF-kanban board in OpenChamber shows the same tasks.

@@ -5,7 +5,10 @@ import type { LabelRole, ProjectConfig } from './config.ts';
 import type { Exec, NewTask, Task, TaskState, Tracker } from './types.ts';
 import { TrackerError } from './types.ts';
 
-/** gh 2.94.0 (released 2026-06-10) added `gh issue create --parent` and `--blocked-by`, which create() uses (checked against its release notes and `gh issue create --help` of 2.103). */
+/**
+ * gh 2.94.0 (released 2026-06-10) added `gh issue create --parent` and `--blocked-by`, which create() uses (checked against its release notes and `gh issue create --help` of 2.103),
+ * and `gh issue edit --parent` (replaces an existing parent), which setParent() uses (checked against pkg/cmd/issue/edit/edit.go at v2.94.0).
+ */
 const MIN_GH: [number, number] = [2, 94];
 const DONE_WINDOW_MS = 30 * 24 * 3600 * 1000;
 const ROLES: readonly LabelRole[] = ['needs-triage', 'needs-info', 'ready-for-agent', 'ready-for-human', 'wontfix'];
@@ -368,6 +371,25 @@ export const createGithubTracker = (root: string, exec: Exec, labels: ProjectCon
       // The state label is left as it is; an assignee stays on later state changes too.
       await run(['issue', 'edit', String(issue.number), '--add-assignee', '@me']);
       return get(task.id);
+    },
+
+    async setParent(id, parentId) {
+      const n = parseNumber(id);
+      const p = parseNumber(parentId);
+      if (n === p) throw new TrackerError('INVALID', `A task cannot be its own parent: ${idOf(n)}`);
+      const found = await graph([n, p], false);
+      for (const k of [n, p]) if ((found.get(k) ?? null) === null) throw new TrackerError('NOT_FOUND', `Issue not found: #${k}`);
+      if (relationsOf(found.get(n)!).parent === p) throw new TrackerError('INVALID', `${idOf(n)} is already a sub-issue of ${idOf(p)}`);
+      // Linking under one of its own descendants would make a cycle: walk up from the would-be parent.
+      const seen = new Set<number>([p]);
+      for (let up = relationsOf(found.get(p)!).parent; up !== null && !seen.has(up); ) {
+        if (up === n) throw new TrackerError('INVALID', `${idOf(p)} is a descendant of ${idOf(n)}; linking would make a cycle`);
+        seen.add(up);
+        up = relationsOf((await graph([up], false)).get(up) ?? null).parent;
+      }
+      // gh replaces an existing parent; the issue keeps its number, so the id does not change.
+      await run(['issue', 'edit', String(n), '--parent', String(p)]);
+      return get(idOf(n));
     },
 
     async close(id, opts) {

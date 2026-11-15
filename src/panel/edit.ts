@@ -3,7 +3,7 @@
 // drags of it are ignored), reports a failure in a toast and reloads the board afterwards.
 import type { HostClient } from '@openchamber/sdk';
 import type { NewTask, Task, TaskState } from '../core/types.ts';
-import { MODEL_PICK, canAddSubtask, createWithSubtasks, parentChoices, partialMessage, subtasksToCreate, toNewTask, type AddDraft } from './addTask.ts';
+import { MODEL_PICK, canAddSubtask, createWithSubtasks, existingToLink, parentChoices, partialMessage, subtasksToCreate, toNewTask, type AddDraft } from './addTask.ts';
 import type { Api } from './api.ts';
 import type { Preset } from './presets.ts';
 import type { StartLists } from './models.ts';
@@ -16,6 +16,7 @@ import type { Board } from './ui/board.ts';
 import { askChoice } from './ui/confirm.ts';
 import { openDetail, type DetailHandle, type DetailModel, type SessionView, type SummaryModel } from './ui/detail.ts';
 import { attachDrag } from './ui/dnd.ts';
+import { canLinkUnder, followingSetParent, linkChoices, linkConfirm } from './link.ts';
 
 export type EditorDeps = {
   host: HostClient;
@@ -61,6 +62,8 @@ export type EditorDeps = {
     context: () => { projectId: string; settings: Settings; presets: Preset[] } | null;
     load: (projectId: string, taskId: string) => Promise<CardOptions>;
     save: (projectId: string, taskId: string, card: CardOptions) => void;
+    /** A task got a new id (a local link moved it): its stored options go under that id, the old key is deleted. */
+    move: (projectId: string, from: string, to: string) => Promise<void>;
   };
   /** The personal summary in the task modal (summaries.ts). */
   summary: {
@@ -96,7 +99,8 @@ const NEW_TASK: Task = {
 
 export const createEditor = (deps: EditorDeps) => {
   const moving = new Set<string>();
-  let detail: { id: string; handle: DetailHandle } | null = null;
+  /** `onFollow`: the open task got a new id (a local link moved it); its handlers use that one. */
+  let detail: { id: string; handle: DetailHandle; onFollow: (id: string) => void } | null = null;
   let addModal: { setStart: (start: AddModalStart | null) => void; dispose: () => void } | null = null;
   /** What the open Add task form offers: the types, and whether "Let the model pick" is there. */
   let addOffer: { types: string[]; suggest: boolean } = { types: [], suggest: false };
@@ -192,6 +196,14 @@ export const createEditor = (deps: EditorDeps) => {
       children: tasks.filter((t) => t.parentId === task.id).map((t) => ({ id: t.id, title: t.title, state: t.state })),
       addSubtask: canAddSubtask(task, deps.tracker()),
       archived: deps.archive.has(task),
+      links: (() => {
+        const parent = task.parentId === null ? null : find(task.parentId);
+        const offered = linkChoices(deps.tracker(), task, tasks);
+        return {
+          parent: task.parentId === null ? null : { id: task.parentId, label: parent?.title ?? task.parentId, hint: task.parentId },
+          ...offered,
+        };
+      })(),
     };
   };
 
@@ -214,10 +226,14 @@ export const createEditor = (deps: EditorDeps) => {
       .catch((e: unknown) => fail(`Could not read the card's start options: ${errorText(e)}`));
   };
 
+  /** The open task's new id after a link moved it, until the reload lists it under that id. */
+  let followed: string | null = null;
+
   /** After a reload: show the fresh task, or close the modal when it left the list. */
   const refreshDetail = (): void => {
     if (detail === null) return;
     const task = find(detail.id);
+    if (task === null && detail.id === followed) return; // moved; the reload in flight lists it
     if (task === null) closeDetail();
     else detail.handle.update(detailModel(task));
   };
@@ -237,6 +253,56 @@ export const createEditor = (deps: EditorDeps) => {
       await deps.reload();
       refreshDetail();
     }
+  };
+
+  /**
+   * The api's setParent as every link of the panel uses it: a task that comes back with a new id
+   * (local: its file moved) is followed by the open modal, and its stored start options move to
+   * that id (the service re-keys its session links and queue entry).
+   */
+  const setParentOf = (api: Api) =>
+    followingSetParent(
+      api.setParent,
+      async (from, to) => {
+        follow(from, to);
+        const ctx = deps.start.context();
+        if (ctx !== null) await deps.start.move(ctx.projectId, from, to);
+      },
+      (from, to, e) => fail(`${from} is now ${to}, but its start options could not follow: ${errorText(e)}`),
+    );
+
+  /**
+   * Links `childId` under `parentId`: the modal's Parent picker and "Link existing task", and a
+   * card dropped onto a card. Resolves to null, or the service's error for the caller to show.
+   */
+  const linkTask = async (childId: string, parentId: string): Promise<string | null> => {
+    const api = deps.api();
+    if (api === null) return 'No project is open.';
+    if (moving.has(childId)) return null;
+    moving.add(childId);
+    deps.redraw();
+    refreshDetail();
+    try {
+      const moved = await setParentOf(api)(childId, parentId);
+      info(moved.id !== childId ? `Linked ${childId} under ${parentId}; it is now ${moved.id}` : `Linked ${childId} under ${parentId}`);
+      return null;
+    } catch (e) {
+      return errorText(e);
+    } finally {
+      moving.delete(childId);
+      await deps.reload();
+      followed = null;
+      refreshDetail();
+    }
+  };
+
+  /** The open modal shows `from`, which now is `to`: it follows (its card options too). */
+  const follow = (from: string, to: string): void => {
+    if (detail === null || detail.id !== from) return;
+    detail.id = to;
+    followed = to;
+    detail.onFollow(to);
+    if (card !== null && card.taskId === from) card.taskId = to;
   };
 
   const close = async (task: Task, askChildren: boolean): Promise<void> => {
@@ -288,6 +354,17 @@ export const createEditor = (deps: EditorDeps) => {
     apply(task, from, planMove(task, from, to, openChildren(task, deps.tasks())));
   };
 
+  /** A card dropped onto an accepting card: confirm, then link it under that card (a failure is a toast). */
+  const link = async (id: string, parentId: string): Promise<void> => {
+    const child = find(id);
+    const parent = find(parentId);
+    if (child === null || parent === null || moving.has(id)) return;
+    const { title, body } = linkConfirm(deps.tracker(), child, parent);
+    if ((await askChoice(title, body, [{ id: 'link', label: 'Make sub-task' }])) !== 'link') return;
+    const error = await linkTask(id, parentId);
+    if (error !== null) fail(error);
+  };
+
   const closeDetail = (): void => {
     const d = detail;
     detail = null;
@@ -296,7 +373,8 @@ export const createEditor = (deps: EditorDeps) => {
     d?.handle.dispose();
   };
 
-  const showDetail = (id: string): void => {
+  const showDetail = (openId: string): void => {
+    let id = openId;
     const task = find(id);
     if (task === null) return;
     closeDetail();
@@ -318,6 +396,8 @@ export const createEditor = (deps: EditorDeps) => {
         refreshDetail();
         return null;
       },
+      onSetParent: (parentId) => linkTask(id, parentId),
+      onLinkChild: (childId) => linkTask(childId, id),
       onSections: deps.sections.save,
       onUnarchive: () => {
         deps.archive.unarchive(id);
@@ -350,7 +430,7 @@ export const createEditor = (deps: EditorDeps) => {
       onOpenUrl: (url) => void deps.host.openUrl(url).catch((e: unknown) => fail(errorText(e))),
       onDismiss: closeDetail,
     }, { sections: deps.sections.get() });
-    detail = { id, handle };
+    detail = { id, handle, onFollow: (next) => (id = next) };
   };
 
   const closeAdd = (): void => {
@@ -366,6 +446,7 @@ export const createEditor = (deps: EditorDeps) => {
     const ctx = deps.start.context();
     const tracker = deps.tracker();
     const subtasks = subtasksToCreate(draft, tracker);
+    const existing = existingToLink(draft, tracker, deps.tasks()).map((id) => ({ id, label: find(id)?.title ?? id }));
     /** Never throws: the task exists by now, so a storage hiccup is a toast, not "could not create". */
     const saveStart = (taskId: string): void => {
       if (ctx === null || Object.keys(draft.start).length === 0) return;
@@ -391,6 +472,7 @@ export const createEditor = (deps: EditorDeps) => {
         },
         toNewTask(draft, tracker),
         subtasks,
+        { existing, setParent: setParentOf(api) },
       );
     } catch (e) {
       return { kind: 'error', message: errorText(e) };
@@ -411,7 +493,7 @@ export const createEditor = (deps: EditorDeps) => {
     }
     if (failed.length === 0) {
       closeAdd();
-      const n = subtasks.length;
+      const n = subtasks.length + existing.length;
       void deps.host
         .toast({ kind: 'success', message: n === 0 ? `Created ${task.id}` : `Created ${task.id} with ${n} sub-task${n === 1 ? '' : 's'}` })
         .catch(() => {});
@@ -456,6 +538,12 @@ export const createEditor = (deps: EditorDeps) => {
   const detachDrag = attachDrag(deps.board.columns, {
     canDrag: (id) => !moving.has(id),
     onDrop: move,
+    canLink: (id, parentId) => {
+      const child = find(id);
+      const parent = find(parentId);
+      return child !== null && parent !== null && canLinkUnder(deps.tracker(), child, parent, deps.tasks());
+    },
+    onLink: (id, parentId) => void link(id, parentId),
     onOpen: showDetail,
   });
 

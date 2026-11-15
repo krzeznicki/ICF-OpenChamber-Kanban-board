@@ -2,6 +2,9 @@
 // Listeners sit on the persistent columns container, so redraws during a drag do not break it:
 // the pointer is captured by the container and a clone follows the pointer. A press that moves
 // less than THRESHOLD pixels is a click and opens the card; Enter or Space on a focused card does too.
+// Released over another card that accepts the dragged task (canLink, from ../link.ts), the task is
+// linked under it instead: such a card is highlighted while the pointer is over it, and the column
+// is not. Any other card is no target, and the drop is the column move.
 // The press/drag transitions live in ../drag.ts (pure, tested); this file only does the DOM side.
 import type { Column } from '../columns.ts';
 import { step, type DragEffect, type DragInput, type Press } from '../drag.ts';
@@ -12,11 +15,17 @@ export type DragCallbacks = {
   /** False while the card's last move is in flight: the press is ignored. */
   canDrag: (taskId: string) => boolean;
   onDrop: (taskId: string, from: Column, to: Column) => void;
+  /** Whether the card parentId accepts taskId as its sub-task (link.ts canLinkUnder). */
+  canLink: (taskId: string, parentId: string) => boolean;
+  /** Released over an accepting card. */
+  onLink: (taskId: string, parentId: string) => void;
   onOpen: (taskId: string) => void;
 };
 
-/** DOM side of the current press: the card, its ghost while dragging, the highlighted column. */
+/** DOM side of the current press: the card, its ghost while dragging, the highlighted column or accepting card. */
 type Dom = { card: HTMLElement; ghost: HTMLElement | null; dx: number; dy: number; width: number; over: HTMLElement | null };
+
+const OVER = ['is-drop-target', 'is-link-target'];
 
 const columnOf = (node: Element | null): HTMLElement | null => {
   const col = node?.closest<HTMLElement>('.kb-column') ?? null;
@@ -33,11 +42,19 @@ export const attachDrag = (container: HTMLElement, callbacks: DragCallbacks): ((
   let press: Press | null = null;
   let dom: Dom | null = null;
 
-  const setOver = (col: HTMLElement | null): void => {
-    if (dom === null || dom.over === col) return;
-    dom.over?.classList.remove('is-drop-target');
-    dom.over = col;
-    col?.classList.add('is-drop-target');
+  /** The card under the pointer that accepts the dragged task, or null. */
+  const linkTarget = (node: Element | null, taskId: string): HTMLElement | null => {
+    const card = node?.closest<HTMLElement>('.kb-card') ?? null;
+    const id = card?.dataset.taskId;
+    if (card === null || id === undefined || id === taskId || !container.contains(card)) return null;
+    return callbacks.canLink(taskId, id) ? card : null;
+  };
+
+  const setOver = (node: HTMLElement | null, kind: 'is-drop-target' | 'is-link-target'): void => {
+    if (dom === null || (dom.over === node && node?.classList.contains(kind) === true)) return;
+    dom.over?.classList.remove(...OVER);
+    dom.over = node;
+    node?.classList.add(kind);
   };
 
   /** Remove every trace of a drag: ghost, highlight, dimmed card, capture. */
@@ -45,7 +62,7 @@ export const attachDrag = (container: HTMLElement, callbacks: DragCallbacks): ((
     const d = dom;
     dom = null;
     if (d !== null) {
-      d.over?.classList.remove('is-drop-target');
+      d.over?.classList.remove(...OVER);
       d.ghost?.remove();
       d.card.classList.remove('is-dragging');
     }
@@ -73,7 +90,10 @@ export const attachDrag = (container: HTMLElement, callbacks: DragCallbacks): ((
   const follow = (x: number, y: number): void => {
     if (dom?.ghost == null) return;
     dom.ghost.style.transform = `translate(${x - dom.dx}px, ${y - dom.dy}px)`;
-    setOver(columnOf(document.elementFromPoint(x, y)));
+    const hit = document.elementFromPoint(x, y);
+    const card = press === null ? null : linkTarget(hit, press.taskId);
+    if (card !== null) setOver(card, 'is-link-target');
+    else setOver(columnOf(hit), 'is-drop-target');
   };
 
   /** Feed one event to the machine and perform its effect. */
@@ -88,6 +108,7 @@ export const attachDrag = (container: HTMLElement, callbacks: DragCallbacks): ((
     else if (effect.kind === 'follow' && at !== undefined) follow(at.x, at.y);
     else if (effect.kind === 'open') callbacks.onOpen(effect.taskId);
     else if (effect.kind === 'drop') callbacks.onDrop(effect.taskId, effect.from, effect.to);
+    else if (effect.kind === 'link') callbacks.onLink(effect.taskId, effect.parentId);
     return effect;
   };
 
@@ -128,8 +149,10 @@ export const attachDrag = (container: HTMLElement, callbacks: DragCallbacks): ((
   };
 
   const onUp = (e: PointerEvent): void => {
-    const to = press?.dragging === true ? columnOf(document.elementFromPoint(e.clientX, e.clientY)) : null;
-    feed({ type: 'up', pointerId: e.pointerId, to: (to?.dataset.column as Column | undefined) ?? null });
+    const hit = press?.dragging === true ? document.elementFromPoint(e.clientX, e.clientY) : null;
+    const to = columnOf(hit);
+    const onto = press !== null && hit !== null ? (linkTarget(hit, press.taskId)?.dataset.taskId ?? null) : null;
+    feed({ type: 'up', pointerId: e.pointerId, to: (to?.dataset.column as Column | undefined) ?? null, onto });
   };
 
   const onPointerAbort = (e: PointerEvent): void => void feed({ type: 'abort', pointerId: e.pointerId });

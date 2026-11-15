@@ -10,6 +10,8 @@ import {
   draftKind,
   draftType,
   emptyDraft,
+  existingSubtaskChoices,
+  existingToLink,
   MODEL_PICK,
   isDirty,
   keepOffered,
@@ -57,7 +59,7 @@ const GITHUB: Task[] = [
 ];
 
 test('emptyDraft starts in needs-triage with nothing chosen', () => {
-  assert.deepEqual(emptyDraft(), { title: '', type: '', parentId: '', state: 'needs-triage', blockedBy: [], body: '', subtasks: [], start: {} });
+  assert.deepEqual(emptyDraft(), { title: '', type: '', parentId: '', state: 'needs-triage', blockedBy: [], body: '', subtasks: [], existing: [], start: {} });
 });
 
 test('CREATE_STATES offers the open states, needs-triage first', () => {
@@ -133,6 +135,40 @@ test('draftKind: what the new task will be, for the inherited start preset', () 
   assert.equal(draftKind(draft(), 'github'), 'ticket');
   assert.equal(draftKind(draft({ subtasks: ['  ', 'x'] }), 'github'), 'parent');
   assert.equal(draftKind(draft({ subtasks: ['  '] }), 'github'), 'ticket');
+  assert.equal(draftKind(draft({ existing: ['#3'] }), 'github'), 'parent');
+  assert.equal(draftKind(draft({ parentId: '.scratch/f/spec.md', existing: ['x'] }), 'local'), 'ticket');
+});
+
+test('existingSubtaskChoices local: a new feature takes open tickets and features without tickets', () => {
+  assert.deepEqual(
+    existingSubtaskChoices(LOCAL, 'local', '').map((c) => c.id),
+    ['.scratch/f/issues/01-a.md', '.scratch/f/issues/03-c.md', '.scratch/g/issues/01-a.md'],
+  );
+  const lone = task({ id: '.scratch/h/spec.md', kind: 'parent', title: 'H', parentId: null });
+  assert.deepEqual(existingSubtaskChoices([...LOCAL, lone], 'local', '').at(-1), { id: lone.id, label: 'H', hint: lone.id });
+});
+
+test('existingSubtaskChoices local: a ticket (parent chosen) takes none', () => {
+  assert.deepEqual(existingSubtaskChoices(LOCAL, 'local', '.scratch/f/spec.md'), []);
+});
+
+test('existingSubtaskChoices github: open issues, not the chosen parent or above it', () => {
+  assert.deepEqual(existingSubtaskChoices(GITHUB, 'github', '').map((c) => c.id), ['#1', '#2', '#3']);
+  assert.deepEqual(existingSubtaskChoices(GITHUB, 'github', '#1').map((c) => c.id), ['#2', '#3']);
+});
+
+test('existingToLink: the picked ids still offered, in pick order; none when the new task may not have sub-tasks', () => {
+  const F1 = '.scratch/f/issues/01-a.md';
+  const G1 = '.scratch/g/issues/01-a.md';
+  assert.deepEqual(existingToLink(draft({ existing: [G1, F1] }), 'local', LOCAL), [G1, F1]);
+  assert.deepEqual(existingToLink(draft({ parentId: '.scratch/f/spec.md', existing: [F1] }), 'local', LOCAL), []);
+  assert.deepEqual(existingToLink(draft({ parentId: '#1', existing: ['#3'] }), 'github', GITHUB), ['#3']);
+});
+
+test('existingToLink drops a stale pick: done since, gone, or above the chosen parent', () => {
+  // F2 is done, a vanished id is not listed, #1 is the chosen parent (a cycle).
+  assert.deepEqual(existingToLink(draft({ existing: ['.scratch/f/issues/02-b.md', '.scratch/gone/spec.md'] }), 'local', LOCAL), []);
+  assert.deepEqual(existingToLink(draft({ parentId: '#2', existing: ['#1', '#3'] }), 'github', GITHUB), ['#3']);
 });
 
 test('subtaskTitles trims and drops empty rows', () => {
@@ -203,7 +239,42 @@ test('createWithSubtasks: a failing sub-task is collected, the rest still run', 
   };
   const r = await createWithSubtasks(create, { title: 'P' }, ['a', 'bad', 'c']);
   assert.equal(r.task.id, 'P');
-  assert.deepEqual(r.failed, [{ title: 'bad', message: 'boom' }]);
+  assert.deepEqual(r.failed, [{ title: 'bad', message: 'boom', kind: 'create' }]);
+});
+
+test('createWithSubtasks: picked existing tasks are linked under the new task after the creates', async () => {
+  const calls: string[] = [];
+  const create = async (input: NewTask): Promise<Task> => {
+    calls.push(`create ${input.title}`);
+    return task({ id: input.parentId === undefined ? '#10' : '#11' });
+  };
+  const setParent = async (id: string, parentId: string): Promise<Task> => {
+    calls.push(`link ${id} ${parentId}`);
+    return task({ id, parentId });
+  };
+  const r = await createWithSubtasks(create, { title: 'P' }, ['a'], {
+    existing: [{ id: '#3', label: 'Loose' }, { id: '#2', label: 'Child' }],
+    setParent,
+  });
+  assert.deepEqual(r.failed, []);
+  assert.deepEqual(calls, ['create P', 'create a', 'link #3 #10', 'link #2 #10']);
+});
+
+test('createWithSubtasks: a failing link is collected, the task stays, the rest still run', async () => {
+  const create = async (): Promise<Task> => task({ id: '#10' });
+  const linked: string[] = [];
+  const setParent = async (id: string): Promise<Task> => {
+    if (id === '#3') throw new Error('nope');
+    linked.push(id);
+    return task({ id });
+  };
+  const r = await createWithSubtasks(create, { title: 'P' }, [], {
+    existing: [{ id: '#3', label: 'Loose' }, { id: '#2', label: 'Child' }],
+    setParent,
+  });
+  assert.equal(r.task.id, '#10');
+  assert.deepEqual(r.failed, [{ title: 'Loose', message: 'nope', kind: 'link' }]);
+  assert.deepEqual(linked, ['#2']);
 });
 
 test('createWithSubtasks: the parent failing rejects, no sub-task is tried', async () => {
@@ -219,12 +290,27 @@ test('createWithSubtasks: the parent failing rejects, no sub-task is tried', asy
 test('partialMessage names the created task and each missing sub-task', () => {
   assert.equal(
     partialMessage('#10', [
-      { title: 'a', message: 'boom' },
-      { title: 'b', message: 'bang' },
+      { title: 'a', message: 'boom', kind: 'create' },
+      { title: 'b', message: 'bang', kind: 'create' },
     ]),
     'Created #10, but 2 sub-tasks were not created: “a” (boom); “b” (bang).',
   );
-  assert.equal(partialMessage('#10', [{ title: 'a', message: 'boom' }]), 'Created #10, but 1 sub-task was not created: “a” (boom).');
+  assert.equal(partialMessage('#10', [{ title: 'a', message: 'boom', kind: 'create' }]), 'Created #10, but 1 sub-task was not created: “a” (boom).');
+});
+
+test('partialMessage names existing tasks that were not linked', () => {
+  assert.equal(
+    partialMessage('#10', [{ title: 'L', message: 'nope', kind: 'link' }]),
+    'Created #10, but 1 existing task was not linked under it: “L” (nope).',
+  );
+  assert.equal(
+    partialMessage('#10', [
+      { title: 'a', message: 'boom', kind: 'create' },
+      { title: 'L', message: 'nope', kind: 'link' },
+      { title: 'M', message: 'no', kind: 'link' },
+    ]),
+    'Created #10, but 1 sub-task was not created: “a” (boom); 2 existing tasks were not linked under it: “L” (nope); “M” (no).',
+  );
 });
 
 test('isDirty: an untouched form (or one changed back, or only blank text) is clean', () => {
@@ -245,6 +331,7 @@ test('isDirty: any typed text or changed choice makes the form dirty', () => {
     { parentId: 'p' },
     { state: 'ready-for-agent' as const },
     { blockedBy: ['b'] },
+    { existing: ['#3'] },
     { start: { model: 'm' } },
   ]) {
     assert.equal(isDirty(draft({ type: 'enhancement', ...over }), initial), true, JSON.stringify(over));

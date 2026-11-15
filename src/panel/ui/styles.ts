@@ -46,6 +46,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
   box-shadow: 0 8px 24px rgb(0 0 0 / 0.25); }
 :root.kb-dragging, :root.kb-dragging * { cursor: grabbing !important; }
 .kb-column.is-drop-target { border-color: var(--oc-primary); box-shadow: inset 0 0 0 1px var(--oc-primary); }
+.kb-card.is-link-target { border-color: var(--oc-primary); border-style: dashed; box-shadow: 0 0 0 2px var(--oc-primary); }
 .kb-add-error:empty { display: none; }
 .kb-fields { display: flex; flex-wrap: wrap; gap: 0.5rem; }
 .kb-field { flex: 1 1 10rem; min-width: 0; }

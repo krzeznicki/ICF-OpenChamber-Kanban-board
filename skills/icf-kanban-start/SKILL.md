@@ -14,6 +14,7 @@ If `docs/agents/issue-tracker.md` is missing, ask the user which tracker they wa
 1. Read it: `task-board show <id>` (body, state, blockers; `--json` for fields). The first line reads `[<state>, claimed]` when someone already claimed it (`"claimed": true` in `--json`).
 2. If it is already claimed, stop and ask the user before going on. If the board started this session and its prompt says you don't need to claim it, skip to step 3. Otherwise claim it before any work: `task-board claim <id>`.
    - Only a `ready-for-agent` ticket can be claimed. On exit code 4, stop and tell the user (the reason is on stderr); do not change the state yourself to get around it.
+   - If the user wants it under another feature or parent issue first: `task-board parent <id> <parentId>`, then go on with the id it prints (in a local tracker the file moves, so the id changes).
 3. Do the work the body describes, including its acceptance criteria and tests.
 4. Finish:
    - Done: `task-board state <id> done` (for a feature with all tickets finished: `task-board close <id> --with-children`).

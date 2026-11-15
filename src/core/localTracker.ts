@@ -1,8 +1,9 @@
 // Tracker over Matt Pocock's local format: `.scratch/<feature>/spec.md` is the parent,
 // `.scratch/<feature>/issues/NN-slug.md` are its tickets. Ids are POSIX paths relative to root.
-import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
+import type { Dirent } from 'node:fs';
+import { mkdir, readdir, readFile, rmdir, stat, unlink, writeFile } from 'node:fs/promises';
 import { join, posix } from 'node:path';
-import { issueFileName, parseIssue, parseSpec, patchLine, renderIssue } from './localFormat.ts';
+import { blockersValue, issueFileName, parseIssue, parseSpec, patchLine, renderIssue, renumberIssue } from './localFormat.ts';
 import type { NewTask, Task, TaskState, Tracker } from './types.ts';
 import { TrackerError } from './types.ts';
 
@@ -231,6 +232,104 @@ export const createLocalTracker = (root: string): Tracker => {
     }
   };
 
+  /** Writes `text` as the feature's next ticket (`NN-<slug of title>.md`, heading renumbered); returns its id. */
+  const writeNextTicket = async (feature: string, title: string, text: string): Promise<string> => {
+    await mkdir(issuesDir(feature), { recursive: true });
+    for (;;) {
+      const files = await issueFiles(issuesDir(feature));
+      const n = files.map(fileNumber).filter(Number.isFinite).reduce((a, b) => Math.max(a, b), 0) + 1;
+      const file = issueFileName(n, title);
+      try {
+        await writeFile(join(issuesDir(feature), file), renumberIssue(text, n, title), { flag: 'wx' });
+      } catch (e) {
+        if ((e as { code?: unknown }).code === 'EEXIST') continue;
+        throw e;
+      }
+      return ticketId(feature, file);
+    }
+  };
+
+  /** The feature's tickets that listed ticket number `n` as a blocker lose it (the number may be reused). */
+  const dropBlocker = async (feature: string, n: number): Promise<void> => {
+    for (const file of await issueFiles(issuesDir(feature))) {
+      const data = await readText(join(issuesDir(feature), file));
+      if (data === null) continue;
+      const numbers = parseIssue(data.text, file).blockedBy;
+      if (!numbers.includes(n)) continue;
+      const rest = numbers.filter((b) => b !== n);
+      await writeFile(join(issuesDir(feature), file), patchLine(data.text, 'Blocked by', blockersValue(rest)));
+    }
+  };
+
+  /** What a feature's folder holds besides spec.md and an empty issues/ (folders end in "/"), sorted. */
+  const extraFiles = async (feature: string): Promise<string[]> => {
+    const list = async (path: string): Promise<Dirent[]> => {
+      try {
+        return await readdir(path, { withFileTypes: true });
+      } catch (e) {
+        if (isNotFound(e)) return [];
+        throw e;
+      }
+    };
+    const out: string[] = [];
+    for (const d of await list(featureDir(feature))) {
+      if (d.name === 'spec.md' && d.isFile()) continue;
+      if (d.name === 'issues' && d.isDirectory()) {
+        for (const i of await list(issuesDir(feature))) out.push(`issues/${i.name}${i.isDirectory() ? '/' : ''}`);
+        continue;
+      }
+      out.push(`${d.name}${d.isDirectory() ? '/' : ''}`);
+    }
+    return out.sort();
+  };
+
+  /** Removes a folder only when it is empty; anything left in it (notes, other files) keeps it. */
+  const removeIfEmpty = async (path: string): Promise<void> => {
+    try {
+      await rmdir(path);
+    } catch (e) {
+      const c = (e as { code?: unknown }).code;
+      if (c !== 'ENOENT' && c !== 'ENOTEMPTY' && c !== 'EEXIST') throw e;
+    }
+  };
+
+  /**
+   * Moves a ticket of another feature, or a feature with no tickets, into `parentId`'s feature as its
+   * next ticket. Its blocker numbers pointed at its old feature's tickets, so they are dropped.
+   */
+  const setParent = async (id: string, parentId: string): Promise<Task> => {
+    const ref = parseId(id);
+    const to = parseId(parentId);
+    if (to.kind !== 'parent') throw new TrackerError('INVALID', `A parent must be a feature (spec.md), not a ticket: ${parentId}`);
+    if (ref.kind === 'parent' && ref.feature === to.feature) throw new TrackerError('INVALID', `A task cannot be its own parent: ${id}`);
+    const task = await get(id);
+    if (!(await featureExists(to.feature))) throw new TrackerError('NOT_FOUND', `Parent not found: ${parentId}`);
+    if (ref.kind === 'ticket' && ref.feature === to.feature) throw new TrackerError('INVALID', `${id} is already a ticket of ${parentId}`);
+    if (ref.kind === 'parent' && (await issueFiles(issuesDir(ref.feature))).length > 0) {
+      throw new TrackerError('INVALID', `${id} has tickets of its own; a feature with tickets cannot become a ticket (two levels only)`);
+    }
+    if (ref.kind === 'parent') {
+      // The folder is removed after the move; anything else in it would stay and list as a feature.
+      const extra = await extraFiles(ref.feature);
+      if (extra.length > 0) {
+        throw new TrackerError('INVALID', `${id} cannot become a ticket: its folder also holds ${extra.join(', ')}; move or remove those first`);
+      }
+    }
+    // A synthesized parent (no spec.md) has no text yet.
+    const text = task.body === '' ? `# ${task.title}\n` : task.body;
+    const newId = await writeNextTicket(to.feature, task.title, patchLine(text, 'Blocked by', blockersValue([])));
+    await unlink(abs(task.id)).catch((e: unknown) => {
+      if (!isNotFound(e)) throw e;
+    });
+    if (ref.kind === 'ticket') {
+      await dropBlocker(ref.feature, fileNumber(ref.file!));
+    } else {
+      await removeIfEmpty(issuesDir(ref.feature));
+      await removeIfEmpty(featureDir(ref.feature));
+    }
+    return get(newId);
+  };
+
   return {
     async list() {
       const now = Date.now();
@@ -257,6 +356,8 @@ export const createLocalTracker = (root: string): Tracker => {
     },
 
     setState,
+
+    setParent,
 
     setType(id, type) {
       return patch(id, 'Type', type.trim());
