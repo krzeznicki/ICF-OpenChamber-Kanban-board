@@ -1,4 +1,4 @@
-// The board shell: a toolbar (project switcher, "Hide sub-tasks", Add task, Refresh), a slot for
+// The board shell: a toolbar (project switcher, "Hide sub-tasks", Add task, Settings, Refresh), a slot for
 // the Add task form, a status slot for banners, spinner and empty states, and the five columns.
 // It draws what main.ts hands it and reports clicks back; it holds no data of its own. Dragging
 // is attached to `columns` by the editor (ui/dnd.ts).
@@ -12,6 +12,7 @@ export type BoardCallbacks = {
   onHideSubtasks: (hide: boolean) => void;
   onRefresh: () => void;
   onAdd: () => void;
+  onSettings: () => void;
 };
 
 export type BoardStatus =
@@ -35,8 +36,9 @@ export const createBoard = (root: HTMLElement, callbacks: BoardCallbacks) => {
   const switchSlot = div('kb-hide');
   const spacer = div('kb-spacer');
   const addSlot = div('kb-add-button');
+  const settingsSlot = div('kb-settings-button');
   const refreshSlot = div('kb-refresh');
-  toolbar.append(projectSlot, switchSlot, spacer, addSlot, refreshSlot);
+  toolbar.append(projectSlot, switchSlot, spacer, addSlot, settingsSlot, refreshSlot);
   const addForm = div('kb-add-slot');
   const status = div('kb-status');
   const columns = div('kb-columns');
@@ -63,6 +65,7 @@ export const createBoard = (root: HTMLElement, callbacks: BoardCallbacks) => {
     },
   });
   const add = mountButton(addSlot, { label: 'Add task', size: 'sm', disabled: true, onClick: callbacks.onAdd });
+  mountButton(settingsSlot, { label: 'Settings', variant: 'outline', size: 'sm', onClick: callbacks.onSettings });
   const refresh = mountButton(refreshSlot, { label: 'Refresh', variant: 'outline', size: 'sm', onClick: callbacks.onRefresh });
 
   let statusDispose: (() => void) | null = null;
@@ -75,6 +78,8 @@ export const createBoard = (root: HTMLElement, callbacks: BoardCallbacks) => {
     addForm,
     /** "Add task" works only while a board is shown. */
     setCanAdd: (enabled: boolean) => add.update({ disabled: !enabled }),
+    /** The "Hide sub-tasks" switch follows the project's settings when they load. */
+    setHideSubtasks: (checked: boolean) => hideSwitch.update({ checked }),
     setProjects: (options: SelectOption[], value: string | null) => {
       project.update({
         options,

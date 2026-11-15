@@ -1,0 +1,244 @@
+// Layered settings: global defaults (per user) → project override (per user) → choice on the card.
+// All of it lives in the extension's instance storage, never in the repo. The resolvers are pure
+// so they run under node:test; createSettingsStore is the only part that touches storage.
+import type { Task } from '../core/types.ts';
+import { BUILTIN_PRESETS, isPristine, parseStoredPresets, type Preset, type StoredPresets } from './presets.ts';
+
+export type { Preset } from './presets.ts';
+
+export type Location = 'worktree' | 'project';
+export type StartOptions = { presetId: string; model: string | null; agent: string | null; location: Location };
+export type SummarySettings = { auto: boolean; language: string; prompt: string };
+export type Settings = {
+  autoStart: boolean;
+  maxParallel: number;
+  defaults: StartOptions;
+  presetByType: Record<string, string>;
+  summary: SummarySettings;
+  hideChildren: boolean;
+  types: string[];
+};
+
+/**
+ * One stored layer (global or project). Nested groups are partial too, so a project can override
+ * one default without repeating the rest. `Partial<Settings>` is assignable to it.
+ */
+export type SettingsLayer = Partial<Omit<Settings, 'defaults' | 'summary'>> & {
+  defaults?: Partial<StartOptions>;
+  summary?: Partial<SummarySettings>;
+};
+
+/** Placeholder: Task 15 replaces it with the real default summary prompt. */
+export const DEFAULT_SUMMARY_PROMPT = 'Summarise this task in a few plain sentences: what is asked and why.';
+
+export const MAX_PARALLEL_MIN = 1;
+export const MAX_PARALLEL_MAX = 10;
+export const FALLBACK_PRESET_ID = 'implement';
+export const LOCATIONS: readonly Location[] = ['worktree', 'project'];
+
+export const DEFAULT_SETTINGS: Settings = {
+  autoStart: true,
+  maxParallel: 3,
+  defaults: { presetId: 'implement', model: null, agent: null, location: 'worktree' },
+  presetByType: { enhancement: 'implement', bug: 'implement', research: 'plan' },
+  summary: { auto: true, language: 'Polish', prompt: DEFAULT_SUMMARY_PROMPT },
+  hideChildren: false,
+  types: ['enhancement', 'bug', 'chore', 'research'],
+};
+
+const record = (v: unknown): Record<string, unknown> | null =>
+  typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
+
+/** Non-blank text, or undefined: empty text in a field means "not set here". */
+const text = (v: unknown): string | undefined => (typeof v === 'string' && v.trim() !== '' ? v.trim() : undefined);
+
+const clampParallel = (n: number): number => Math.min(MAX_PARALLEL_MAX, Math.max(MAX_PARALLEL_MIN, Math.round(n)));
+
+const startPatch = (raw: unknown): Partial<StartOptions> => {
+  const r = record(raw);
+  const out: Partial<StartOptions> = {};
+  if (r === null) return out;
+  const presetId = text(r.presetId);
+  const model = text(r.model);
+  const agent = text(r.agent);
+  if (presetId !== undefined) out.presetId = presetId;
+  if (model !== undefined) out.model = model;
+  if (agent !== undefined) out.agent = agent;
+  if (r.location === 'worktree' || r.location === 'project') out.location = r.location;
+  return out;
+};
+
+/** A card's stored start options; blank or null fields are dropped (they inherit). */
+export const parseCardOptions = (raw: unknown): Partial<StartOptions> => startPatch(raw);
+
+/** A stored layer read defensively: anything of the wrong type is dropped, never thrown. */
+export const parseSettings = (raw: unknown): SettingsLayer => {
+  const r = record(raw);
+  const out: SettingsLayer = {};
+  if (r === null) return out;
+  if (typeof r.autoStart === 'boolean') out.autoStart = r.autoStart;
+  if (typeof r.maxParallel === 'number' && Number.isFinite(r.maxParallel)) out.maxParallel = clampParallel(r.maxParallel);
+  if (typeof r.hideChildren === 'boolean') out.hideChildren = r.hideChildren;
+  if (Array.isArray(r.types)) {
+    const types = [...new Set(r.types.map(text).filter((t): t is string => t !== undefined))];
+    if (types.length > 0) out.types = types;
+  }
+  const defaults = startPatch(r.defaults);
+  if (Object.keys(defaults).length > 0) out.defaults = defaults;
+  const byType = record(r.presetByType);
+  if (byType !== null) {
+    const map: Record<string, string> = {};
+    for (const [type, id] of Object.entries(byType)) {
+      const v = text(id);
+      if (type.trim() !== '' && v !== undefined) map[type] = v;
+    }
+    if (Object.keys(map).length > 0) out.presetByType = map;
+  }
+  const summary = record(r.summary);
+  if (summary !== null) {
+    const s: Partial<SummarySettings> = {};
+    if (typeof summary.auto === 'boolean') s.auto = summary.auto;
+    const language = text(summary.language);
+    if (language !== undefined) s.language = language;
+    // The prompt keeps its own spacing; only a blank one counts as unset.
+    if (typeof summary.prompt === 'string' && summary.prompt.trim() !== '') s.prompt = summary.prompt;
+    if (Object.keys(s).length > 0) out.summary = s;
+  }
+  return out;
+};
+
+/** Global, then project, over the defaults, field by field. Layers go through parseSettings first. */
+export const resolveSettings = (global: SettingsLayer, project: SettingsLayer): Settings => {
+  const g = parseSettings(global);
+  const p = parseSettings(project);
+  const d = DEFAULT_SETTINGS;
+  const maxParallel = p.maxParallel ?? g.maxParallel ?? d.maxParallel;
+  return {
+    autoStart: p.autoStart ?? g.autoStart ?? d.autoStart,
+    maxParallel: clampParallel(maxParallel),
+    defaults: { ...d.defaults, ...g.defaults, ...p.defaults },
+    presetByType: { ...d.presetByType, ...g.presetByType, ...p.presetByType },
+    summary: { ...d.summary, ...g.summary, ...p.summary },
+    hideChildren: p.hideChildren ?? g.hideChildren ?? d.hideChildren,
+    types: [...(p.types ?? g.types ?? d.types)],
+  };
+};
+
+/**
+ * The options a session starts with: the card's choice, else the settings. The preset is the
+ * card's, else the default for the task's type, else defaults.presetId; whichever id is chosen,
+ * one that is not among `presets` (e.g. a deleted custom preset) becomes 'implement'.
+ * `presets` defaults to the built-ins; pass listPresets(...) so custom presets count.
+ */
+export const resolveStart = (
+  s: Settings,
+  task: Task,
+  card: Partial<StartOptions>,
+  presets: readonly Preset[] = BUILTIN_PRESETS,
+): StartOptions => {
+  const c = parseCardOptions(card);
+  const byType = task.type !== null ? s.presetByType[task.type] : undefined;
+  const wanted = c.presetId ?? byType ?? s.defaults.presetId;
+  return {
+    presetId: presets.some((p) => p.id === wanted) ? wanted : FALLBACK_PRESET_ID,
+    model: c.model ?? s.defaults.model,
+    agent: c.agent ?? s.defaults.agent,
+    location: c.location ?? s.defaults.location,
+  };
+};
+
+// --- storage ---
+
+const MAX_KEY = 128;
+
+/** FNV-1a, 32 bit, as 8 hex digits: a stable short tag for a key that is too long. */
+const fnv = (s: string): string => {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(16).padStart(8, '0');
+};
+
+/** Storage keys hold at most 128 characters; a longer one keeps its start and ends in a hash. */
+const fit = (key: string): string => (key.length <= MAX_KEY ? key : `${key.slice(0, MAX_KEY - 9)}~${fnv(key)}`);
+
+export const STORAGE_KEYS = {
+  global: 'settings:global',
+  project: (projectId: string): string => fit(`settings:project:${projectId}`),
+  presets: 'presets',
+  card: (projectId: string, taskId: string): string => fit(`card:${projectId}:${taskId}`),
+} as const;
+
+export type SettingsStorage = {
+  get: (key: string) => Promise<unknown>;
+  set: (key: string, value: never) => Promise<void>;
+  delete: (key: string) => Promise<void>;
+};
+
+const isEmptyLayer = (layer: SettingsLayer): boolean =>
+  Object.entries(layer).every(([, v]) => v === undefined || (record(v) !== null && Object.keys(v as object).length === 0));
+
+/** Reads and writes the layers. Writes are cleaned first; an empty layer deletes its key. */
+export const createSettingsStore = (storage: SettingsStorage) => {
+  const put = async (key: string, value: object, empty: boolean): Promise<void> => {
+    if (empty) await storage.delete(key);
+    else await storage.set(key, value as never);
+  };
+  const saveLayer = (key: string, layer: SettingsLayer): Promise<void> => {
+    const clean = parseSettings(layer);
+    return put(key, clean, isEmptyLayer(clean));
+  };
+  return {
+    loadGlobal: async (): Promise<SettingsLayer> => parseSettings(await storage.get(STORAGE_KEYS.global)),
+    saveGlobal: (layer: SettingsLayer): Promise<void> => saveLayer(STORAGE_KEYS.global, layer),
+    loadProject: async (projectId: string): Promise<SettingsLayer> => parseSettings(await storage.get(STORAGE_KEYS.project(projectId))),
+    saveProject: (projectId: string, layer: SettingsLayer): Promise<void> => saveLayer(STORAGE_KEYS.project(projectId), layer),
+    loadPresets: async (): Promise<StoredPresets> => parseStoredPresets(await storage.get(STORAGE_KEYS.presets)),
+    savePresets: (stored: StoredPresets): Promise<void> => {
+      const clean = parseStoredPresets(stored);
+      return put(STORAGE_KEYS.presets, clean, isPristine(clean));
+    },
+    loadCard: async (projectId: string, taskId: string): Promise<Partial<StartOptions>> =>
+      parseCardOptions(await storage.get(STORAGE_KEYS.card(projectId, taskId))),
+    saveCard: (projectId: string, taskId: string, card: Partial<StartOptions>): Promise<void> => {
+      const clean = parseCardOptions(card);
+      return put(STORAGE_KEYS.card(projectId, taskId), clean, Object.keys(clean).length === 0);
+    },
+  };
+};
+
+export type SettingsStore = ReturnType<typeof createSettingsStore>;
+
+/**
+ * Text fields report every keystroke. This runs at most one save per key at a time; values that
+ * arrive meanwhile are collapsed into the newest, which is saved next. `idle` resolves once
+ * nothing is in flight (tests, and anyone who must read back what was typed).
+ */
+export const createLatestSaver = <T>(save: (key: string, value: T) => Promise<void>, onError: (e: unknown) => void) => {
+  const running = new Map<string, Promise<void>>();
+  const waiting = new Map<string, T>();
+  const pump = (key: string, value: T): Promise<void> => {
+    const p = save(key, value)
+      .catch(onError)
+      .then(() => {
+        running.delete(key);
+        if (!waiting.has(key)) return;
+        const next = waiting.get(key) as T;
+        waiting.delete(key);
+        return pump(key, next);
+      });
+    running.set(key, p);
+    return p;
+  };
+  return {
+    save: (key: string, value: T): void => {
+      if (running.has(key)) waiting.set(key, value);
+      else void pump(key, value);
+    },
+    idle: async (): Promise<void> => {
+      while (running.size > 0) await Promise.all(running.values());
+    },
+  };
+};

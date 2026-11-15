@@ -35,9 +35,9 @@ export const openChildren = (task: Task, tasks: readonly Task[]): number =>
 
 const BASE_TYPES = ['enhancement', 'bug', 'chore', 'research'];
 
-/** Types offered in the selects: the four base ones, then every other type already used, sorted. */
-export const taskTypes = (tasks: readonly Task[]): string[] => {
+/** Types offered in the selects: the base ones (settings' `types`), then every other type already used, sorted. */
+export const taskTypes = (tasks: readonly Task[], base: readonly string[] = BASE_TYPES): string[] => {
   const used = new Set<string>();
-  for (const t of tasks) if (t.type !== null && t.type.trim() !== '' && !BASE_TYPES.includes(t.type)) used.add(t.type);
-  return [...BASE_TYPES, ...[...used].sort()];
+  for (const t of tasks) if (t.type !== null && t.type.trim() !== '' && !base.includes(t.type)) used.add(t.type);
+  return [...base, ...[...used].sort()];
 };

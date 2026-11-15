@@ -67,6 +67,20 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
   background: var(--oc-elevated); color: var(--oc-elevated-fg); border: 1px solid var(--oc-border); border-radius: var(--oc-radius); }
 .kb-confirm-title { margin: 0; font-size: 1em; font-weight: 600; overflow-wrap: anywhere; }
 .kb-confirm-body { margin: 0; color: var(--oc-muted); font-size: 0.9em; }
+.kb-sheet-part { display: flex; flex-direction: column; gap: 0.75rem; }
+.kb-sheet-part:empty, .kb-sheet-part[hidden] { display: none; }
+.kb-start { padding: 0.75rem; border: 1px solid var(--oc-border); border-radius: var(--oc-radius); background: var(--oc-muted-surface); }
+.kb-settings-tabs { display: flex; }
+.kb-settings-body { display: flex; flex-direction: column; gap: 1rem; }
+.kb-settings-section { display: flex; flex-direction: column; gap: 0.5rem; }
+.kb-settings-heading { margin: 0; font-size: 0.95em; font-weight: 600; }
+.kb-settings-hint { margin: 0; color: var(--oc-muted); font-size: 0.85em; }
+.kb-inherit { display: flex; flex-direction: column; gap: 0.125rem; }
+.kb-inherit-reset { display: flex; justify-content: flex-end; }
+.kb-preset { display: flex; flex-direction: column; gap: 0.5rem; padding: 0.75rem;
+  border: 1px solid var(--oc-border); border-radius: var(--oc-radius); background: var(--oc-muted-surface); }
+.kb-preset-head { display: flex; align-items: flex-end; gap: 0.5rem; }
+.kb-preset-head > :first-child { flex: 1 1 auto; min-width: 0; }
 :root[data-oc-surface="panel"] .kb-columns { flex-direction: column; align-items: stretch; overflow-x: visible; }
 :root[data-oc-surface="panel"] .kb-column { flex: 0 0 auto; min-width: 0; }
 `;

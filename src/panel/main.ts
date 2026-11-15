@@ -2,7 +2,8 @@
 // The layout follows ctx.surface through the data-oc-surface attribute applyHostReady sets.
 // Data: projects and sessions from the host, tasks from our service via host.serviceRequest.
 // Writes (drag and drop, detail, Add task) live in edit.ts; onStart below is the one hook for
-// dropping a card on In Progress.
+// dropping a card on In Progress. Settings (global, per project, presets, per card) come from the
+// extension's storage through settings.ts and are edited in the Settings sheet.
 import { connectHost } from '@openchamber/sdk';
 import type { GuestProject, GuestSessionRecord, HostReadyContext } from '@openchamber/sdk';
 import { applyHostReady } from '@openchamber/sdk/ui';
@@ -10,9 +11,12 @@ import type { Task } from '../core/types.ts';
 import { ApiError, createApi, type Api, type ConfigResult, type ProjectConfig } from './api.ts';
 import { groupTasks, type Column } from './columns.ts';
 import { createEditor, type Editor } from './edit.ts';
+import { listPresets, parseStoredPresets, type StoredPresets } from './presets.ts';
+import { createLatestSaver, createSettingsStore, resolveSettings, type Settings, type SettingsLayer } from './settings.ts';
 import { defaultChoice, loadNotice, setupOutcome, type ApiFailure, type NoticeModel, type TrackerChoice } from './setup.ts';
 import { createBoard, type Board } from './ui/board.ts';
 import { mountNotice } from './ui/notice.ts';
+import { openSettings } from './ui/settingsView.ts';
 import { injectStyles } from './ui/styles.ts';
 import { mountWizard } from './ui/wizard.ts';
 
@@ -36,6 +40,11 @@ type State = {
   view: 'none' | 'board' | 'wizard' | 'notice';
   /** Where each drawn task sits, from the last draw. */
   columns: Map<string, Column>;
+  /** Stored settings layers; `settingsFor` is the project whose layer is loaded (null: none yet). */
+  globalSettings: SettingsLayer;
+  projectSettings: SettingsLayer;
+  settingsFor: string | null;
+  presets: StoredPresets;
 };
 
 const state: State = {
@@ -50,6 +59,33 @@ const state: State = {
   lastLoad: 0,
   view: 'none',
   columns: new Map(),
+  globalSettings: {},
+  projectSettings: {},
+  settingsFor: null,
+  presets: parseStoredPresets(undefined),
+};
+
+const store = createSettingsStore(host.storage);
+const fail = (message: string): void => void host.toast({ kind: 'error', message }).catch(() => {});
+// Every field reports each keystroke; only the newest value per key is written.
+const saver = createLatestSaver<() => Promise<void>>(
+  (_key, run) => run(),
+  (e) => fail(`Could not save settings: ${e instanceof Error ? e.message : String(e)}`),
+);
+let settingsSheet: { dispose: () => void } | null = null;
+/** Global settings and presets are read once at start; editing waits for them, so nothing stored is overwritten. */
+let globalLoaded = false;
+
+const loadGlobalSettings = async (): Promise<void> => {
+  try {
+    const [global, presets] = await Promise.all([store.loadGlobal(), store.loadPresets()]);
+    state.globalSettings = global;
+    state.presets = presets;
+    globalLoaded = true;
+    applySettings();
+  } catch (e) {
+    fail(`Could not read the settings: ${e instanceof Error ? e.message : String(e)}`);
+  }
 };
 
 let board: Board;
@@ -59,6 +95,85 @@ let unsubscribeSessions: (() => void) | null = null;
 let generation = 0;
 
 const project = (): GuestProject | null => state.projects.find((p) => p.id === state.projectId) ?? null;
+
+/** The settings in force for the shown project (global only until its layer has loaded). */
+const settings = (): Settings =>
+  resolveSettings(state.globalSettings, state.settingsFor !== null && state.settingsFor === state.projectId ? state.projectSettings : {});
+
+/** After any settings change: the hide switch follows, the board and an open detail redraw. */
+const applySettings = (): void => {
+  const hide = settings().hideChildren;
+  if (hide !== state.hideSubtasks) {
+    state.hideSubtasks = hide;
+    board.setHideSubtasks(hide);
+    draw();
+  }
+  editor.refresh();
+};
+
+const loadProjectSettings = async (id: string): Promise<void> => {
+  try {
+    const layer = await store.loadProject(id);
+    if (state.projectId !== id) return;
+    state.projectSettings = layer;
+    state.settingsFor = id;
+  } catch (e) {
+    if (state.projectId !== id) return;
+    state.projectSettings = {};
+    state.settingsFor = id;
+    fail(`Could not read the project settings: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  applySettings();
+};
+
+const saveProjectSettings = (id: string, layer: SettingsLayer): void => {
+  if (state.settingsFor === id) state.projectSettings = layer;
+  saver.save(`project:${id}`, () => store.saveProject(id, layer));
+};
+
+const closeSettings = (): void => {
+  const sheet = settingsSheet;
+  settingsSheet = null;
+  sheet?.dispose();
+};
+
+const showSettings = (): void => {
+  closeSettings();
+  if (!globalLoaded) {
+    // The first read failed or is still running: try again rather than edit over stored values.
+    void host.toast({ kind: 'info', message: 'Settings are loading, try again in a moment' }).catch(() => {});
+    void loadGlobalSettings();
+    return;
+  }
+  const p = project();
+  const id = p !== null && state.settingsFor === p.id ? p.id : null;
+  settingsSheet = openSettings(
+    {
+      tab: 'global',
+      global: state.globalSettings,
+      project: p !== null && id !== null ? { name: p.name, layer: state.projectSettings } : null,
+      presets: state.presets,
+    },
+    {
+      onGlobal: (layer) => {
+        state.globalSettings = layer;
+        saver.save('global', () => store.saveGlobal(layer));
+        applySettings();
+      },
+      onProject: (layer) => {
+        if (id === null) return;
+        saveProjectSettings(id, layer);
+        applySettings();
+      },
+      onPresets: (stored) => {
+        state.presets = stored;
+        saver.save('presets', () => store.savePresets(stored));
+        editor.refresh();
+      },
+      onDismiss: closeSettings,
+    },
+  );
+};
 
 /** The registered project that contains `dir`, the longest match winning (worktrees sit inside projects). */
 const projectFor = (dir: string | null): GuestProject | null => {
@@ -209,6 +324,10 @@ const selectProject = async (id: string | null): Promise<void> => {
   if (id === state.projectId) return;
   state.projectId = id;
   editor.reset();
+  closeSettings();
+  state.settingsFor = null;
+  state.projectSettings = {};
+  if (id !== null) void loadProjectSettings(id);
   state.sessions = [];
   state.config = null;
   state.tasks = null;
@@ -259,10 +378,14 @@ const start = (ctx: HostReadyContext): void => {
     },
     onHideSubtasks: (hide) => {
       state.hideSubtasks = hide;
+      // The switch is the project's "Hide sub-tasks" setting.
+      const id = state.settingsFor;
+      if (id !== null && id === state.projectId) saveProjectSettings(id, { ...state.projectSettings, hideChildren: hide });
       draw();
     },
     onRefresh: () => void load(),
     onAdd: () => editor.showAdd(),
+    onSettings: showSettings,
   });
   editor = createEditor({
     host,
@@ -278,7 +401,17 @@ const start = (ctx: HostReadyContext): void => {
     reload: load,
     redraw: draw,
     onStart,
+    baseTypes: () => settings().types,
+    start: {
+      context: () => {
+        const id = state.projectId;
+        return id === null || !globalLoaded || state.settingsFor !== id ? null : { projectId: id, settings: settings(), presets: listPresets(state.presets) };
+      },
+      load: (projectId, taskId) => store.loadCard(projectId, taskId),
+      save: (projectId, taskId, card) => saver.save(`card:${projectId}:${taskId}`, () => store.saveCard(projectId, taskId, card)),
+    },
   });
+  void loadGlobalSettings();
   board.setStatus({ kind: 'loading' });
 
   host.onDirectory((dir) => {

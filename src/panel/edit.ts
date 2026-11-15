@@ -4,6 +4,8 @@
 import type { HostClient } from '@openchamber/sdk';
 import type { NewTask, Task, TaskState } from '../core/types.ts';
 import type { Api } from './api.ts';
+import type { Preset } from './presets.ts';
+import { resolveStart, type Settings, type StartOptions } from './settings.ts';
 import { COLUMNS, type Column } from './columns.ts';
 import { openChildren, planMove, taskTypes, type Move } from './moves.ts';
 import { mountAddForm } from './ui/add.ts';
@@ -28,6 +30,15 @@ export type EditorDeps = {
   redraw: () => void;
   /** Dropping on In Progress. Task 12 wires sessions here. */
   onStart: (task: Task) => void;
+  /** The base types offered in the type selects (settings' `types`). */
+  baseTypes: () => string[];
+  /** The card start options in the detail sheet. */
+  start: {
+    /** Null while no project's settings are loaded. */
+    context: () => { projectId: string; settings: Settings; presets: Preset[] } | null;
+    load: (projectId: string, taskId: string) => Promise<Partial<StartOptions>>;
+    save: (projectId: string, taskId: string, card: Partial<StartOptions>) => void;
+  };
 };
 
 const errorText = (e: unknown): string => (e instanceof Error ? e.message : String(e));
@@ -36,6 +47,8 @@ export const createEditor = (deps: EditorDeps) => {
   const moving = new Set<string>();
   let detail: { id: string; handle: DetailHandle } | null = null;
   let addDispose: (() => void) | null = null;
+  /** The open sheet's stored start options; version bumps when they are (re)loaded. */
+  let card: { taskId: string; projectId: string; options: Partial<StartOptions>; version: number } | null = null;
 
   const find = (id: string): Task | null => deps.tasks().find((t) => t.id === id) ?? null;
   const info = (message: string): void => void deps.host.toast({ kind: 'info', message }).catch(() => {});
@@ -45,15 +58,45 @@ export const createEditor = (deps: EditorDeps) => {
     const tasks = deps.tasks();
     const column = deps.columnOf(task.id) ?? (task.state === 'done' ? 'done' : task.state === 'ready-for-agent' ? 'ready' : 'backlog');
     const open = openChildren(task, tasks);
+    const ctx = deps.start.context();
+    const mine = card !== null && ctx !== null && card.taskId === task.id && card.projectId === ctx.projectId ? card : null;
     return {
       task,
       column,
       openChildren: open,
-      types: taskTypes(tasks),
+      types: taskTypes(tasks, deps.baseTypes()),
       labels: deps.labels(),
       moves: COLUMNS.filter(({ id }) => planMove(task, column, id, open).kind !== 'none').map(({ id, title }) => ({ to: id, label: title })),
       busy: moving.has(task.id),
+      start:
+        ctx === null || task.state === 'done'
+          ? null
+          : {
+              presets: ctx.presets,
+              card: mine?.options ?? {},
+              inherited: resolveStart(ctx.settings, task, {}, ctx.presets),
+              version: mine?.version ?? -1,
+            },
     };
+  };
+
+  const loadCard = (taskId: string): void => {
+    const ctx = deps.start.context();
+    if (ctx === null) {
+      card = null;
+      return;
+    }
+    const mine: NonNullable<typeof card> = { taskId, projectId: ctx.projectId, options: {}, version: 0 };
+    card = mine;
+    deps.start
+      .load(ctx.projectId, taskId)
+      .then((options) => {
+        if (card !== mine) return;
+        mine.options = options;
+        mine.version++;
+        refreshDetail();
+      })
+      .catch((e: unknown) => fail(`Could not read the card's start options: ${errorText(e)}`));
   };
 
   /** After a reload: show the fresh task, or close the sheet when it left the list. */
@@ -126,6 +169,7 @@ export const createEditor = (deps: EditorDeps) => {
   const closeDetail = (): void => {
     const d = detail;
     detail = null;
+    card = null;
     d?.handle.dispose();
   };
 
@@ -133,7 +177,13 @@ export const createEditor = (deps: EditorDeps) => {
     const task = find(id);
     if (task === null) return;
     closeDetail();
+    loadCard(id);
     const handle = openDetail(detailModel(task), {
+      onStartOptions: (options) => {
+        if (card === null || card.taskId !== id) return;
+        card.options = options;
+        deps.start.save(card.projectId, id, options);
+      },
       onMove: (to) => {
         const t = find(id);
         if (t !== null) move(id, detailModel(t).column, to);
@@ -181,7 +231,7 @@ export const createEditor = (deps: EditorDeps) => {
     addDispose = mountAddForm(
       deps.board.addForm,
       {
-        types: taskTypes(tasks),
+        types: taskTypes(tasks, deps.baseTypes()),
         parents: tasks.filter((t) => t.kind === 'parent' && t.state !== 'done').map((t) => ({ id: t.id, label: t.title, hint: t.id })),
         tracker: deps.tracker(),
       },
@@ -219,8 +269,13 @@ export const createEditor = (deps: EditorDeps) => {
       closeDetail();
       closeAdd();
     },
-    /** After a reload from elsewhere (poll, Refresh): keep the open sheet current. */
-    refresh: refreshDetail,
+    /** After a reload from elsewhere (poll, Refresh, settings): keep the open sheet current. */
+    refresh: () => {
+      // Settings for another project arrived (switch): the stored card options are someone else's.
+      const ctx = deps.start.context();
+      if (detail !== null && (card === null || ctx === null || card.projectId !== ctx.projectId)) loadCard(detail.id);
+      refreshDetail();
+    },
     dispose: () => {
       detachDrag();
       closeDetail();

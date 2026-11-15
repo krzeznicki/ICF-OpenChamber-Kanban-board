@@ -277,7 +277,7 @@
     const id = request.id.trim().slice(0, GUEST_ATTACH_ID_MAX);
     const title = request.title.trim().slice(0, GUEST_ATTACH_TITLE_MAX);
     const url = request.url.trim().slice(0, GUEST_ATTACH_URL_MAX);
-    const text = request.text?.trim().slice(0, GUEST_ATTACH_TEXT_MAX);
+    const text2 = request.text?.trim().slice(0, GUEST_ATTACH_TEXT_MAX);
     const author = request.author?.trim().slice(0, GUEST_ATTACH_AUTHOR_MAX);
     const kind = request.kind === "pull" ? "pull" : "issue";
     const next = {
@@ -287,8 +287,8 @@
       url,
       kind
     };
-    if (text) {
-      next.text = text;
+    if (text2) {
+      next.text = text2;
     }
     if (author) {
       next.author = author;
@@ -622,8 +622,8 @@
           return;
         }
         Promise.resolve().then(() => handler(message.payload)).then(() => answer({ ok: true }), (error) => {
-          const text = (error instanceof Error ? error.message : String(error)).trim();
-          answer({ ok: false, error: (text || "Action failed.").slice(0, GUEST_RESOLVE_ERROR_MAX) });
+          const text2 = (error instanceof Error ? error.message : String(error)).trim();
+          answer({ ok: false, error: (text2 || "Action failed.").slice(0, GUEST_RESOLVE_ERROR_MAX) });
         });
         return;
       }
@@ -650,23 +650,23 @@
               payload
             });
         };
-        const fail = (text) => answer({ error: (text.trim() || "Could not read the edited file.").slice(0, GUEST_RESOLVE_ERROR_MAX) });
+        const fail2 = (text2) => answer({ error: (text2.trim() || "Could not read the edited file.").slice(0, GUEST_RESOLVE_ERROR_MAX) });
         const handler = fileSnapshotHandler;
         if (!handler) {
-          fail("This extension does not edit files.");
+          fail2("This extension does not edit files.");
           return;
         }
         Promise.resolve().then(() => handler(message.payload.purpose)).then((snapshot) => {
           if (fileEditorPayloadSize(snapshot) > GUEST_FILE_EDITOR_CONTENT_MAX) {
-            fail(`The file is over ${GUEST_FILE_EDITOR_CONTENT_MAX} ${"bytes" in snapshot ? "bytes" : "characters"}.`);
+            fail2(`The file is over ${GUEST_FILE_EDITOR_CONTENT_MAX} ${"bytes" in snapshot ? "bytes" : "characters"}.`);
             return;
           }
           if (snapshot.version.length > GUEST_FILE_EDITOR_VERSION_MAX) {
-            fail(`The snapshot version is over ${GUEST_FILE_EDITOR_VERSION_MAX} characters.`);
+            fail2(`The snapshot version is over ${GUEST_FILE_EDITOR_VERSION_MAX} characters.`);
             return;
           }
           answer({ snapshot: "bytes" in snapshot ? { bytes: snapshot.bytes, version: snapshot.version } : { content: snapshot.content, version: snapshot.version } });
-        }, (error) => fail(error instanceof Error ? error.message : String(error)));
+        }, (error) => fail2(error instanceof Error ? error.message : String(error)));
         return;
       }
       if (message.type === "resolve") {
@@ -685,8 +685,8 @@
           return;
         }
         Promise.resolve().then(() => handler(message.payload)).then((item) => answer({ item: item ? clampAttachRequest(item) : null }), (error) => {
-          const text = (error instanceof Error ? error.message : String(error)).trim();
-          answer({ error: (text || "Command failed.").slice(0, GUEST_RESOLVE_ERROR_MAX) });
+          const text2 = (error instanceof Error ? error.message : String(error)).trim();
+          answer({ error: (text2 || "Command failed.").slice(0, GUEST_RESOLVE_ERROR_MAX) });
         });
         return;
       }
@@ -1092,12 +1092,12 @@
         id: nextId(ids),
         payload: { sha }
       }) : Promise.reject(new HostRequestError("HOST_REJECTED", "Commit id must be 7 to 64 hex characters.")),
-      answerBlock: (text) => request({
+      answerBlock: (text2) => request({
         channel: OPENCHAMBER_SDK_CHANNEL,
         v: OPENCHAMBER_SDK_API_VERSION,
         type: "block-answer",
         id: nextId(ids),
-        payload: { text: text.trim().slice(0, GUEST_BLOCK_ANSWER_MAX) }
+        payload: { text: text2.trim().slice(0, GUEST_BLOCK_ANSWER_MAX) }
       }),
       openSurface: (surfaceId) => request({
         channel: OPENCHAMBER_SDK_CHANNEL,
@@ -1106,12 +1106,12 @@
         id: nextId(ids),
         payload: { surfaceId }
       }),
-      writeClipboard: (text) => request({
+      writeClipboard: (text2) => request({
         channel: OPENCHAMBER_SDK_CHANNEL,
         v: OPENCHAMBER_SDK_API_VERSION,
         type: "clipboard-write",
         id: nextId(ids),
-        payload: { text }
+        payload: { text: text2 }
       }),
       compose: (payload) => request({
         channel: OPENCHAMBER_SDK_CHANNEL,
@@ -1869,8 +1869,8 @@ ${GUEST_UI_LOOK_CSS}`;
     node.type = "button";
     return node;
   };
-  var setText = (node, text) => {
-    const next = text ?? "";
+  var setText = (node, text2) => {
+    const next = text2 ?? "";
     if (node.textContent !== next) {
       node.textContent = next;
     }
@@ -1970,9 +1970,9 @@ ${GUEST_UI_LOOK_CSS}`;
       const invalid = Boolean(props.error);
       field2.dataset.invalid = invalid ? "true" : "false";
       input.setAttribute("aria-invalid", invalid ? "true" : "false");
-      const text = props.error ?? props.helper ?? "";
-      setText(note, text);
-      note.hidden = text === "";
+      const text2 = props.error ?? props.helper ?? "";
+      setText(note, text2);
+      note.hidden = text2 === "";
     };
     const onInput = () => {
       props.onChange(input.value);
@@ -2298,11 +2298,11 @@ ${GUEST_UI_LOOK_CSS}`;
     if (role === "checkbox") {
       control.append(icon("check", 12));
     }
-    const text = el("span", "oc-sdk-check-text");
+    const text2 = el("span", "oc-sdk-check-text");
     const label = el("span", "oc-sdk-check-label");
     const description = el("span", "oc-sdk-check-desc");
-    text.append(label, description);
-    node.append(control, text);
+    text2.append(label, description);
+    node.append(control, text2);
     root.append(node);
     const paint = () => {
       node.setAttribute("aria-checked", props.checked ? "true" : "false");
@@ -2330,6 +2330,66 @@ ${GUEST_UI_LOOK_CSS}`;
     };
   };
   var mountSwitch = (root, initial) => mountToggle(root, initial, "switch");
+
+  // node_modules/@openchamber/sdk/dist/ui/tabs.js
+  var mountTabs = (root, initial) => {
+    ensureStyle(UI_CSS);
+    let props = initial;
+    const track = el("div", "oc-sdk oc-sdk-tabs");
+    track.setAttribute("role", "tablist");
+    root.append(track);
+    const paint = () => {
+      clearNode(track);
+      track.dataset.track = props.trackBackground ? "true" : "false";
+      for (const item of props.items) {
+        const tab = button("oc-sdk-tab");
+        tab.setAttribute("role", "tab");
+        const active2 = item.id === props.activeId;
+        tab.setAttribute("aria-selected", active2 ? "true" : "false");
+        tab.tabIndex = active2 ? 0 : -1;
+        tab.dataset.id = item.id;
+        const label = el("span");
+        label.textContent = item.label;
+        tab.append(label);
+        if (item.count !== void 0) {
+          const count = el("span", "oc-sdk-tab-count");
+          count.textContent = String(item.count);
+          tab.append(count);
+        }
+        tab.addEventListener("click", () => {
+          if (item.id !== props.activeId)
+            props.onChange(item.id);
+        });
+        track.append(tab);
+      }
+    };
+    const onKeyDown = (event) => {
+      const step2 = navigationKey(event, "horizontal");
+      if (!step2) {
+        return;
+      }
+      const next = moveListSelection(props.items, props.activeId, step2);
+      if (next && next !== props.activeId) {
+        event.preventDefault();
+        props.onChange(next);
+        const tab = track.querySelector(`[data-id="${CSS.escape(next)}"]`);
+        if (tab instanceof HTMLElement)
+          tab.focus();
+      }
+    };
+    track.addEventListener("keydown", onKeyDown);
+    paint();
+    return {
+      update: (next) => {
+        props = { ...props, ...next };
+        paint();
+      },
+      dispose: () => {
+        track.removeEventListener("keydown", onKeyDown);
+        track.remove();
+      }
+    };
+  };
 
   // node_modules/@openchamber/sdk/dist/ui/badge.js
   var applyTone = (node, tone2) => {
@@ -2378,9 +2438,9 @@ ${GUEST_UI_LOOK_CSS}`;
       setAttr(list, "aria-activedescendant", id ? rowId(id) : null);
       list.querySelector('[data-active="true"]')?.scrollIntoView({ block: "nearest" });
     };
-    const span = (className, text) => {
+    const span = (className, text2) => {
       const node = el("span", className);
-      node.textContent = text;
+      node.textContent = text2;
       return node;
     };
     const paint = () => {
@@ -2520,12 +2580,12 @@ ${GUEST_UI_LOOK_CSS}`;
     ensureStyle(UI_CSS);
     let props = initial;
     const node = el("div", "oc-sdk oc-sdk-banner");
-    const text = el("div", "oc-sdk-banner-text");
+    const text2 = el("div", "oc-sdk-banner-text");
     const title = el("div", "oc-sdk-banner-title");
     const body = el("div", "oc-sdk-banner-body");
     const slot = el("div", "oc-sdk-banner-action");
-    text.append(title, body);
-    node.append(text, slot);
+    text2.append(title, body);
+    node.append(text2, slot);
     root.append(node);
     let action = null;
     const paint = () => {
@@ -2619,9 +2679,9 @@ ${GUEST_UI_LOOK_CSS}`;
       this.code = code;
     }
   };
-  var parse = (text) => {
+  var parse = (text2) => {
     try {
-      return JSON.parse(text);
+      return JSON.parse(text2);
     } catch {
       return null;
     }
@@ -2742,6 +2802,288 @@ ${GUEST_UI_LOOK_CSS}`;
     return board2;
   };
 
+  // src/panel/presets.ts
+  var BUILTIN_PRESETS = [
+    {
+      id: "plan",
+      name: "Plan",
+      builtin: true,
+      text: [
+        "Plan this task before changing any code.",
+        "- Read the task and the code it touches.",
+        "- Write a short plan: the steps, the files to change, how you will test it, and the open questions.",
+        "- Ask the user to approve the plan and answer the questions. Do not write code until they do."
+      ].join("\n")
+    },
+    {
+      id: "prototype",
+      name: "Prototype",
+      builtin: true,
+      text: [
+        "Build a quick, throwaway prototype that answers the question in this task.",
+        "- Keep it small and apart from production code.",
+        "- Skip polish, tests and edge cases unless the question is about them.",
+        "- Finish with the answer, what the prototype shows, and what a real implementation would need."
+      ].join("\n")
+    },
+    {
+      id: "implement",
+      name: "Implement",
+      builtin: true,
+      text: [
+        "Implement this task.",
+        "- Read the task and the code it touches first.",
+        "- Write or update tests with the change and run them until they pass.",
+        "- Keep the change focused on the task; note anything else you find instead of fixing it.",
+        "- When a decision is unclear, ask the user before going on.",
+        "- Finish with a short summary of what changed and how you tested it."
+      ].join("\n")
+    },
+    {
+      id: "implement-no-questions",
+      name: "Implement without questions",
+      builtin: true,
+      text: [
+        "Implement this task without stopping to ask questions.",
+        "- Read the task and the code it touches first.",
+        "- Write or update tests with the change and run them until they pass.",
+        "- When a decision is unclear, choose the simplest reasonable option and go on.",
+        "- Finish with a short summary of what changed, how you tested it, and every assumption you made."
+      ].join("\n")
+    },
+    {
+      id: "orchestrate",
+      name: "Break down and orchestrate",
+      builtin: true,
+      text: [
+        "Break this task down and orchestrate the work.",
+        "- If it has no sub-tasks yet, split it into small tickets and create them with the task-board CLI.",
+        "- Hand each ticket to a subagent; start a ticket only when the tickets blocking it are done.",
+        "- Move each ticket with the task-board CLI as it starts and finishes.",
+        "- Keep working until all sub-tasks are done, then summarise the result."
+      ].join("\n")
+    }
+  ];
+  var BUILTIN_IDS = new Set(BUILTIN_PRESETS.map((p) => p.id));
+  var builtinText = (id) => BUILTIN_PRESETS.find((p) => p.id === id)?.text;
+  var record = (v2) => typeof v2 === "object" && v2 !== null && !Array.isArray(v2) ? v2 : null;
+  var parseStoredPresets = (raw) => {
+    const r = record(raw);
+    const builtin = {};
+    const custom = [];
+    const b = record(r?.builtin);
+    if (b !== null) {
+      for (const [id, text2] of Object.entries(b)) if (BUILTIN_IDS.has(id) && typeof text2 === "string") builtin[id] = text2;
+    }
+    if (Array.isArray(r?.custom)) {
+      const seen = /* @__PURE__ */ new Set();
+      for (const item of r.custom) {
+        const c = record(item);
+        if (c === null || typeof c.id !== "string" || c.id === "" || BUILTIN_IDS.has(c.id) || seen.has(c.id)) continue;
+        if (typeof c.name !== "string" || typeof c.text !== "string") continue;
+        seen.add(c.id);
+        custom.push({ id: c.id, name: c.name, text: c.text });
+      }
+    }
+    return { builtin, custom };
+  };
+  var listPresets = (stored) => [
+    ...BUILTIN_PRESETS.map((p) => ({ ...p, text: stored.builtin[p.id] ?? p.text })),
+    ...stored.custom.map((c) => ({ ...c, builtin: false }))
+  ];
+  var isEdited = (stored, id) => Object.hasOwn(stored.builtin, id);
+  var isPristine = (stored) => Object.keys(stored.builtin).length === 0 && stored.custom.length === 0;
+  var setPresetText = (stored, id, text2) => {
+    const original = builtinText(id);
+    if (original !== void 0) {
+      const builtin = { ...stored.builtin };
+      if (text2 === original) delete builtin[id];
+      else builtin[id] = text2;
+      return { ...stored, builtin };
+    }
+    return { ...stored, custom: stored.custom.map((c) => c.id === id ? { ...c, text: text2 } : c) };
+  };
+  var resetPreset = (stored, id) => {
+    if (!isEdited(stored, id)) return stored;
+    const builtin = { ...stored.builtin };
+    delete builtin[id];
+    return { ...stored, builtin };
+  };
+  var UNTITLED = "Untitled preset";
+  var slug = (name) => name.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "preset";
+  var addPreset = (stored, name) => {
+    const trimmed = name.trim();
+    const base = `custom-${slug(trimmed)}`;
+    const taken = new Set(stored.custom.map((c) => c.id));
+    let id = base;
+    for (let n = 2; taken.has(id); n++) id = `${base}-${n}`;
+    return { id, stored: { ...stored, custom: [...stored.custom, { id, name: trimmed === "" ? UNTITLED : trimmed, text: "" }] } };
+  };
+  var renamePreset = (stored, id, name) => {
+    if (BUILTIN_IDS.has(id)) return stored;
+    const trimmed = name.trim();
+    return { ...stored, custom: stored.custom.map((c) => c.id === id ? { ...c, name: trimmed === "" ? UNTITLED : trimmed } : c) };
+  };
+  var deletePreset = (stored, id) => BUILTIN_IDS.has(id) ? stored : { ...stored, custom: stored.custom.filter((c) => c.id !== id) };
+
+  // src/panel/settings.ts
+  var DEFAULT_SUMMARY_PROMPT = "Summarise this task in a few plain sentences: what is asked and why.";
+  var MAX_PARALLEL_MIN = 1;
+  var MAX_PARALLEL_MAX = 10;
+  var FALLBACK_PRESET_ID = "implement";
+  var DEFAULT_SETTINGS = {
+    autoStart: true,
+    maxParallel: 3,
+    defaults: { presetId: "implement", model: null, agent: null, location: "worktree" },
+    presetByType: { enhancement: "implement", bug: "implement", research: "plan" },
+    summary: { auto: true, language: "Polish", prompt: DEFAULT_SUMMARY_PROMPT },
+    hideChildren: false,
+    types: ["enhancement", "bug", "chore", "research"]
+  };
+  var record2 = (v2) => typeof v2 === "object" && v2 !== null && !Array.isArray(v2) ? v2 : null;
+  var text = (v2) => typeof v2 === "string" && v2.trim() !== "" ? v2.trim() : void 0;
+  var clampParallel = (n) => Math.min(MAX_PARALLEL_MAX, Math.max(MAX_PARALLEL_MIN, Math.round(n)));
+  var startPatch = (raw) => {
+    const r = record2(raw);
+    const out = {};
+    if (r === null) return out;
+    const presetId = text(r.presetId);
+    const model = text(r.model);
+    const agent = text(r.agent);
+    if (presetId !== void 0) out.presetId = presetId;
+    if (model !== void 0) out.model = model;
+    if (agent !== void 0) out.agent = agent;
+    if (r.location === "worktree" || r.location === "project") out.location = r.location;
+    return out;
+  };
+  var parseCardOptions = (raw) => startPatch(raw);
+  var parseSettings = (raw) => {
+    const r = record2(raw);
+    const out = {};
+    if (r === null) return out;
+    if (typeof r.autoStart === "boolean") out.autoStart = r.autoStart;
+    if (typeof r.maxParallel === "number" && Number.isFinite(r.maxParallel)) out.maxParallel = clampParallel(r.maxParallel);
+    if (typeof r.hideChildren === "boolean") out.hideChildren = r.hideChildren;
+    if (Array.isArray(r.types)) {
+      const types = [...new Set(r.types.map(text).filter((t) => t !== void 0))];
+      if (types.length > 0) out.types = types;
+    }
+    const defaults = startPatch(r.defaults);
+    if (Object.keys(defaults).length > 0) out.defaults = defaults;
+    const byType = record2(r.presetByType);
+    if (byType !== null) {
+      const map = {};
+      for (const [type, id] of Object.entries(byType)) {
+        const v2 = text(id);
+        if (type.trim() !== "" && v2 !== void 0) map[type] = v2;
+      }
+      if (Object.keys(map).length > 0) out.presetByType = map;
+    }
+    const summary = record2(r.summary);
+    if (summary !== null) {
+      const s = {};
+      if (typeof summary.auto === "boolean") s.auto = summary.auto;
+      const language = text(summary.language);
+      if (language !== void 0) s.language = language;
+      if (typeof summary.prompt === "string" && summary.prompt.trim() !== "") s.prompt = summary.prompt;
+      if (Object.keys(s).length > 0) out.summary = s;
+    }
+    return out;
+  };
+  var resolveSettings = (global, project2) => {
+    const g = parseSettings(global);
+    const p = parseSettings(project2);
+    const d = DEFAULT_SETTINGS;
+    const maxParallel = p.maxParallel ?? g.maxParallel ?? d.maxParallel;
+    return {
+      autoStart: p.autoStart ?? g.autoStart ?? d.autoStart,
+      maxParallel: clampParallel(maxParallel),
+      defaults: { ...d.defaults, ...g.defaults, ...p.defaults },
+      presetByType: { ...d.presetByType, ...g.presetByType, ...p.presetByType },
+      summary: { ...d.summary, ...g.summary, ...p.summary },
+      hideChildren: p.hideChildren ?? g.hideChildren ?? d.hideChildren,
+      types: [...p.types ?? g.types ?? d.types]
+    };
+  };
+  var resolveStart = (s, task, card, presets = BUILTIN_PRESETS) => {
+    const c = parseCardOptions(card);
+    const byType = task.type !== null ? s.presetByType[task.type] : void 0;
+    const wanted = c.presetId ?? byType ?? s.defaults.presetId;
+    return {
+      presetId: presets.some((p) => p.id === wanted) ? wanted : FALLBACK_PRESET_ID,
+      model: c.model ?? s.defaults.model,
+      agent: c.agent ?? s.defaults.agent,
+      location: c.location ?? s.defaults.location
+    };
+  };
+  var MAX_KEY = 128;
+  var fnv = (s) => {
+    let h = 2166136261;
+    for (let i = 0; i < s.length; i++) {
+      h ^= s.charCodeAt(i);
+      h = Math.imul(h, 16777619);
+    }
+    return (h >>> 0).toString(16).padStart(8, "0");
+  };
+  var fit = (key) => key.length <= MAX_KEY ? key : `${key.slice(0, MAX_KEY - 9)}~${fnv(key)}`;
+  var STORAGE_KEYS = {
+    global: "settings:global",
+    project: (projectId) => fit(`settings:project:${projectId}`),
+    presets: "presets",
+    card: (projectId, taskId) => fit(`card:${projectId}:${taskId}`)
+  };
+  var isEmptyLayer = (layer) => Object.entries(layer).every(([, v2]) => v2 === void 0 || record2(v2) !== null && Object.keys(v2).length === 0);
+  var createSettingsStore = (storage) => {
+    const put = async (key, value, empty) => {
+      if (empty) await storage.delete(key);
+      else await storage.set(key, value);
+    };
+    const saveLayer = (key, layer) => {
+      const clean = parseSettings(layer);
+      return put(key, clean, isEmptyLayer(clean));
+    };
+    return {
+      loadGlobal: async () => parseSettings(await storage.get(STORAGE_KEYS.global)),
+      saveGlobal: (layer) => saveLayer(STORAGE_KEYS.global, layer),
+      loadProject: async (projectId) => parseSettings(await storage.get(STORAGE_KEYS.project(projectId))),
+      saveProject: (projectId, layer) => saveLayer(STORAGE_KEYS.project(projectId), layer),
+      loadPresets: async () => parseStoredPresets(await storage.get(STORAGE_KEYS.presets)),
+      savePresets: (stored) => {
+        const clean = parseStoredPresets(stored);
+        return put(STORAGE_KEYS.presets, clean, isPristine(clean));
+      },
+      loadCard: async (projectId, taskId) => parseCardOptions(await storage.get(STORAGE_KEYS.card(projectId, taskId))),
+      saveCard: (projectId, taskId, card) => {
+        const clean = parseCardOptions(card);
+        return put(STORAGE_KEYS.card(projectId, taskId), clean, Object.keys(clean).length === 0);
+      }
+    };
+  };
+  var createLatestSaver = (save, onError) => {
+    const running = /* @__PURE__ */ new Map();
+    const waiting = /* @__PURE__ */ new Map();
+    const pump = (key, value) => {
+      const p = save(key, value).catch(onError).then(() => {
+        running.delete(key);
+        if (!waiting.has(key)) return;
+        const next = waiting.get(key);
+        waiting.delete(key);
+        return pump(key, next);
+      });
+      running.set(key, p);
+      return p;
+    };
+    return {
+      save: (key, value) => {
+        if (running.has(key)) waiting.set(key, value);
+        else void pump(key, value);
+      },
+      idle: async () => {
+        while (running.size > 0) await Promise.all(running.values());
+      }
+    };
+  };
+
   // src/panel/moves.ts
   var planMove = (task, from, to, openChildren2) => {
     if (from === to) return { kind: "none", reason: "The task is already in this column" };
@@ -2760,10 +3102,10 @@ ${GUEST_UI_LOOK_CSS}`;
   };
   var openChildren = (task, tasks) => tasks.filter((t) => t.parentId === task.id && t.state !== "done").length;
   var BASE_TYPES = ["enhancement", "bug", "chore", "research"];
-  var taskTypes = (tasks) => {
+  var taskTypes = (tasks, base = BASE_TYPES) => {
     const used = /* @__PURE__ */ new Set();
-    for (const t of tasks) if (t.type !== null && t.type.trim() !== "" && !BASE_TYPES.includes(t.type)) used.add(t.type);
-    return [...BASE_TYPES, ...[...used].sort()];
+    for (const t of tasks) if (t.type !== null && t.type.trim() !== "" && !base.includes(t.type)) used.add(t.type);
+    return [...base, ...[...used].sort()];
   };
 
   // src/panel/ui/add.ts
@@ -2900,12 +3242,12 @@ ${GUEST_UI_LOOK_CSS}`;
     const head = document.createElement("h2");
     head.className = "kb-confirm-title";
     head.textContent = title;
-    const text = document.createElement("p");
-    text.className = "kb-confirm-body";
-    text.textContent = body;
+    const text2 = document.createElement("p");
+    text2.className = "kb-confirm-body";
+    text2.textContent = body;
     const actions = document.createElement("div");
     actions.className = "kb-actions";
-    box.append(head, text, actions);
+    box.append(head, text2, actions);
     backdrop.append(box);
     const disposers = [];
     const done = (answer) => {
@@ -2932,61 +3274,532 @@ ${GUEST_UI_LOOK_CSS}`;
     actions.querySelector("button")?.focus();
   });
 
-  // src/panel/ui/detail.ts
-  var STATES = ["needs-triage", "needs-info", "ready-for-agent", "ready-for-human", "wontfix", "done"];
-  var el2 = (tag, className, text) => {
+  // src/panel/ui/settingsView.ts
+  var el2 = (tag, className, text2) => {
     const node = document.createElement(tag);
     node.className = className;
-    if (text !== void 0) node.textContent = text;
+    if (text2 !== void 0) node.textContent = text2;
+    return node;
+  };
+  var LOCATION_LABELS = { worktree: "New worktree", project: "Project folder" };
+  var INHERIT = "";
+  var mountInheritSelect = (slot, disposers, props) => {
+    const select = mountSelect(slot, {
+      label: props.label,
+      value: props.value ?? INHERIT,
+      options: [{ id: INHERIT, label: props.inheritLabel }, ...props.options],
+      onChange: (id) => {
+        select.update({ value: id });
+        props.onChange(id === INHERIT ? void 0 : id);
+      }
+    });
+    disposers.push(select.dispose);
+  };
+  var mountInheritText = (slot, disposers, props) => {
+    const fieldSlot = el2("div", "kb-inherit-field");
+    const resetSlot = el2("div", "kb-inherit-reset");
+    const wrap = el2("div", "kb-inherit");
+    wrap.append(fieldSlot, resetSlot);
+    slot.append(wrap);
+    const report = (v2) => {
+      field2.update({ value: v2 });
+      reset.update({ disabled: v2 === "" });
+      props.onChange(v2.trim() === "" ? void 0 : v2);
+    };
+    const field2 = mountTextField(fieldSlot, {
+      label: props.label,
+      value: props.value ?? "",
+      placeholder: props.placeholder,
+      ...props.helper !== void 0 ? { helper: props.helper } : {},
+      ...props.multiline === true ? { multiline: true, rows: 6 } : {},
+      ...props.mono === true ? { mono: true } : {},
+      onChange: report
+    });
+    const reset = mountButton(resetSlot, {
+      label: props.resetLabel,
+      variant: "ghost",
+      size: "xs",
+      disabled: (props.value ?? "") === "",
+      onClick: () => report("")
+    });
+    disposers.push(field2.dispose, reset.dispose);
+  };
+  var onOff = (b) => b ? "On" : "Off";
+  var presetName = (presets, id) => presets.find((p) => p.id === id)?.name ?? id;
+  var presetOptions = (presets) => presets.map((p) => ({ id: p.id, label: p.name }));
+  var drawLayerForm = (root, disposers, opts) => {
+    const layer = structuredClone(parseSettings(opts.layer));
+    const { base, inheritWord, presets } = opts;
+    const emit = () => opts.onChange(parseSettings(layer));
+    const inherit = (shown) => `${inheritWord} (${shown})`;
+    const section = (title, hint) => {
+      const s = el2("section", "kb-settings-section");
+      s.append(el2("h3", "kb-settings-heading", title));
+      if (hint !== void 0) s.append(el2("p", "kb-settings-hint", hint));
+      root.append(s);
+      return s;
+    };
+    const row = (parent) => {
+      const r = el2("div", "kb-fields");
+      parent.append(r);
+      return r;
+    };
+    const cell = (parent) => {
+      const c = el2("div", "kb-field");
+      parent.append(c);
+      return c;
+    };
+    const bool = (parent, label, get, set, b) => mountInheritSelect(cell(parent), disposers, {
+      label,
+      value: get() === void 0 ? void 0 : get() ? "on" : "off",
+      inheritLabel: inherit(onOff(b)),
+      options: [
+        { id: "on", label: "On" },
+        { id: "off", label: "Off" }
+      ],
+      onChange: (v2) => {
+        set(v2 === void 0 ? void 0 : v2 === "on");
+        emit();
+      }
+    });
+    const defaults = () => layer.defaults ??= {};
+    const summary = () => layer.summary ??= {};
+    const start2 = section("Starting agents", "Moving a card to In Progress starts a session with these options unless the card sets its own.");
+    const r1 = row(start2);
+    bool(r1, "Start at once", () => layer.autoStart, (v2) => layer.autoStart = v2, base.autoStart);
+    mountInheritSelect(cell(r1), disposers, {
+      label: "Sessions at a time",
+      value: layer.maxParallel === void 0 ? void 0 : String(layer.maxParallel),
+      inheritLabel: inherit(String(base.maxParallel)),
+      options: Array.from({ length: MAX_PARALLEL_MAX - MAX_PARALLEL_MIN + 1 }, (_, i) => {
+        const n = String(MAX_PARALLEL_MIN + i);
+        return { id: n, label: n };
+      }),
+      onChange: (v2) => {
+        layer.maxParallel = v2 === void 0 ? void 0 : Number(v2);
+        emit();
+      }
+    });
+    const r2 = row(start2);
+    mountInheritSelect(cell(r2), disposers, {
+      label: "Default preset",
+      value: layer.defaults?.presetId,
+      inheritLabel: inherit(presetName(presets, base.defaults.presetId)),
+      options: presetOptions(presets),
+      onChange: (v2) => {
+        defaults().presetId = v2;
+        emit();
+      }
+    });
+    mountInheritSelect(cell(r2), disposers, {
+      label: "Location",
+      value: layer.defaults?.location,
+      inheritLabel: inherit(LOCATION_LABELS[base.defaults.location]),
+      options: Object.keys(LOCATION_LABELS).map((id) => ({ id, label: LOCATION_LABELS[id] })),
+      onChange: (v2) => {
+        defaults().location = v2;
+        emit();
+      }
+    });
+    const r3 = row(start2);
+    mountInheritText(cell(r3), disposers, {
+      label: "Model",
+      value: layer.defaults?.model ?? void 0,
+      placeholder: base.defaults.model ?? "Your current model",
+      resetLabel: inheritWord,
+      helper: "provider/model, e.g. anthropic/claude-sonnet-5-5",
+      mono: true,
+      onChange: (v2) => {
+        defaults().model = v2 ?? null;
+        emit();
+      }
+    });
+    mountInheritText(cell(r3), disposers, {
+      label: "Agent",
+      value: layer.defaults?.agent ?? void 0,
+      placeholder: base.defaults.agent ?? "Your current agent",
+      resetLabel: inheritWord,
+      helper: "e.g. build or plan",
+      mono: true,
+      onChange: (v2) => {
+        defaults().agent = v2 ?? null;
+        emit();
+      }
+    });
+    const types = layer.types ?? base.types;
+    const byType = section("Preset per type", "Used when a card sets no preset. Unset types use the default preset.");
+    const r4 = row(byType);
+    for (const type of types) {
+      const inherited = base.presetByType[type];
+      mountInheritSelect(cell(r4), disposers, {
+        label: type,
+        value: layer.presetByType?.[type],
+        inheritLabel: inherit(inherited !== void 0 ? presetName(presets, inherited) : "default preset"),
+        options: presetOptions(presets),
+        onChange: (v2) => {
+          const map = { ...layer.presetByType };
+          if (v2 === void 0) delete map[type];
+          else map[type] = v2;
+          layer.presetByType = map;
+          emit();
+        }
+      });
+    }
+    const board2 = section("Board");
+    const r5 = row(board2);
+    bool(r5, "Hide sub-tasks", () => layer.hideChildren, (v2) => layer.hideChildren = v2, base.hideChildren);
+    mountInheritText(cell(r5), disposers, {
+      label: "Types",
+      value: layer.types?.join(", "),
+      placeholder: base.types.join(", "),
+      resetLabel: inheritWord,
+      helper: "Comma-separated. Applies the next time this sheet opens.",
+      onChange: (v2) => {
+        const list = v2?.split(",").map((t) => t.trim()).filter((t) => t !== "");
+        layer.types = list === void 0 || list.length === 0 ? void 0 : list;
+        emit();
+      }
+    });
+    const sum = section("Summaries");
+    const r6 = row(sum);
+    bool(r6, "Summarise automatically", () => layer.summary?.auto, (v2) => summary().auto = v2, base.summary.auto);
+    mountInheritText(cell(r6), disposers, {
+      label: "Language",
+      value: layer.summary?.language,
+      placeholder: base.summary.language,
+      resetLabel: inheritWord,
+      onChange: (v2) => {
+        summary().language = v2;
+        emit();
+      }
+    });
+    mountInheritText(sum, disposers, {
+      label: "Prompt",
+      value: layer.summary?.prompt,
+      placeholder: base.summary.prompt,
+      resetLabel: inheritWord,
+      multiline: true,
+      onChange: (v2) => {
+        summary().prompt = v2;
+        emit();
+      }
+    });
+  };
+  var drawPresets = (root, disposers, getStored, setStored, redraw) => {
+    root.append(
+      el2("p", "kb-settings-hint", "A preset is a block of instructions added to the agent\u2019s start prompt. Built-ins can be edited and reset.")
+    );
+    for (const preset of listPresets(getStored())) {
+      const box = el2("section", "kb-preset");
+      root.append(box);
+      const head = el2("div", "kb-preset-head");
+      box.append(head);
+      if (preset.builtin) {
+        head.append(el2("h3", "kb-settings-heading", preset.name));
+      } else {
+        const nameSlot = el2("div", "kb-field");
+        head.append(nameSlot);
+        const name = mountTextField(nameSlot, {
+          label: "Name",
+          value: preset.name,
+          onChange: (v2) => {
+            name.update({ value: v2 });
+            setStored(renamePreset(getStored(), preset.id, v2));
+          }
+        });
+        disposers.push(name.dispose);
+      }
+      const buttons = el2("div", "kb-actions");
+      head.append(buttons);
+      const textSlot = el2("div", "");
+      box.append(textSlot);
+      let reset = null;
+      const text2 = mountTextField(textSlot, {
+        ...preset.builtin ? {} : { label: "Instructions" },
+        value: preset.text,
+        multiline: true,
+        rows: 5,
+        onChange: (v2) => {
+          text2.update({ value: v2 });
+          const next = setPresetText(getStored(), preset.id, v2);
+          setStored(next);
+          reset?.update({ disabled: !isEdited(next, preset.id) });
+        }
+      });
+      disposers.push(text2.dispose);
+      if (preset.builtin) {
+        reset = mountButton(buttons, {
+          label: "Reset",
+          variant: "ghost",
+          size: "xs",
+          disabled: !isEdited(getStored(), preset.id),
+          onClick: () => {
+            setStored(resetPreset(getStored(), preset.id));
+            redraw();
+          }
+        });
+        disposers.push(reset.dispose);
+      } else {
+        disposers.push(
+          mountButton(buttons, {
+            label: "Delete",
+            variant: "ghost",
+            size: "xs",
+            onClick: () => {
+              void askChoice(`Delete \u201C${preset.name}\u201D?`, "Cards that use it start with Implement instead.", [
+                { id: "delete", label: "Delete", variant: "destructive" }
+              ]).then((answer) => {
+                if (answer !== "delete") return;
+                setStored(deletePreset(getStored(), preset.id));
+                redraw();
+              });
+            }
+          }).dispose
+        );
+      }
+    }
+    const add = el2("div", "kb-actions kb-actions-start");
+    root.append(add);
+    disposers.push(
+      mountButton(add, {
+        label: "Add preset",
+        variant: "outline",
+        size: "sm",
+        onClick: () => {
+          setStored(addPreset(getStored(), "New preset").stored);
+          redraw();
+        }
+      }).dispose
+    );
+  };
+  var openSettings = (initial, callbacks) => {
+    const backdrop = el2("div", "kb-backdrop");
+    const sheet = el2("aside", "kb-sheet kb-settings");
+    sheet.setAttribute("role", "dialog");
+    sheet.setAttribute("aria-modal", "true");
+    sheet.setAttribute("aria-label", "Settings");
+    sheet.tabIndex = -1;
+    const head = el2("div", "kb-sheet-head");
+    const titles = el2("div", "kb-sheet-titles");
+    titles.append(el2("h2", "kb-sheet-title", "Settings"));
+    const closeSlot = el2("div", "kb-sheet-x");
+    head.append(titles, closeSlot);
+    const tabsSlot = el2("div", "kb-settings-tabs");
+    const body = el2("div", "kb-settings-body");
+    sheet.append(head, tabsSlot, body);
+    backdrop.append(sheet);
+    document.body.append(backdrop);
+    const m = structuredClone(initial);
+    const fixed = [];
+    let disposers = [];
+    fixed.push(mountButton(closeSlot, { label: "Done", variant: "ghost", size: "sm", onClick: callbacks.onDismiss }).dispose);
+    const draw2 = () => {
+      for (const d of disposers) d();
+      disposers = [];
+      body.replaceChildren();
+      const presets = listPresets(m.presets);
+      if (m.tab === "global") {
+        drawLayerForm(body, disposers, {
+          layer: m.global,
+          base: DEFAULT_SETTINGS,
+          inheritWord: "Default",
+          presets,
+          onChange: (layer) => {
+            m.global = layer;
+            callbacks.onGlobal(layer);
+          }
+        });
+      } else if (m.tab === "project") {
+        const project2 = m.project;
+        if (project2 === null) {
+          disposers.push(mountEmpty(body, { title: "No project", body: "Open a project to change its settings." }).dispose);
+        } else {
+          body.append(el2("p", "kb-settings-hint", `Only for ${project2.name}. Unset fields use the global settings.`));
+          drawLayerForm(body, disposers, {
+            layer: project2.layer,
+            base: resolveSettings(m.global, {}),
+            inheritWord: "Use global",
+            presets,
+            onChange: (layer) => {
+              project2.layer = layer;
+              callbacks.onProject(layer);
+            }
+          });
+        }
+      } else {
+        drawPresets(
+          body,
+          disposers,
+          () => m.presets,
+          (s) => {
+            m.presets = s;
+            callbacks.onPresets(s);
+          },
+          draw2
+        );
+      }
+    };
+    const tabs = mountTabs(tabsSlot, {
+      items: [
+        { id: "global", label: "Global" },
+        { id: "project", label: "This project" },
+        { id: "presets", label: "Presets" }
+      ],
+      activeId: m.tab,
+      onChange: (id) => {
+        m.tab = id;
+        tabs.update({ activeId: id });
+        draw2();
+      }
+    });
+    fixed.push(tabs.dispose);
+    const onKey = (e) => {
+      if (e.key === "Escape" && !e.defaultPrevented) callbacks.onDismiss();
+    };
+    backdrop.addEventListener("click", (e) => {
+      if (e.target === backdrop) callbacks.onDismiss();
+    });
+    document.addEventListener("keydown", onKey);
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    draw2();
+    sheet.focus();
+    return {
+      dispose: () => {
+        document.removeEventListener("keydown", onKey);
+        for (const d of [...disposers, ...fixed]) d();
+        backdrop.remove();
+        if (previous?.isConnected) previous.focus();
+      }
+    };
+  };
+
+  // src/panel/ui/detail.ts
+  var STATES = ["needs-triage", "needs-info", "ready-for-agent", "ready-for-human", "wontfix", "done"];
+  var el3 = (tag, className, text2) => {
+    const node = document.createElement(tag);
+    node.className = className;
+    if (text2 !== void 0) node.textContent = text2;
     return node;
   };
   var openDetail = (initial, callbacks) => {
-    const backdrop = el2("div", "kb-backdrop");
-    const sheet = el2("aside", "kb-sheet");
+    const backdrop = el3("div", "kb-backdrop");
+    const sheet = el3("aside", "kb-sheet");
     sheet.setAttribute("role", "dialog");
     sheet.setAttribute("aria-modal", "true");
     sheet.tabIndex = -1;
+    const top = el3("div", "kb-sheet-part");
+    const startBox = el3("section", "kb-sheet-part kb-start");
+    const bodyBox = el3("div", "kb-sheet-part");
+    sheet.append(top, startBox, bodyBox);
     backdrop.append(sheet);
     document.body.append(backdrop);
     let disposers = [];
     const clear = () => {
       for (const d of disposers) d();
       disposers = [];
-      sheet.replaceChildren();
+      top.replaceChildren();
+      bodyBox.replaceChildren();
+    };
+    let startDisposers = [];
+    let startKey = null;
+    const clearStart = () => {
+      for (const d of startDisposers) d();
+      startDisposers = [];
+      startBox.replaceChildren();
+    };
+    const drawStart = (taskId, start2) => {
+      const key = start2 === null ? null : JSON.stringify([taskId, start2.version, start2.inherited, start2.presets.map((p) => [p.id, p.name])]);
+      if (key === startKey) return;
+      startKey = key;
+      clearStart();
+      startBox.hidden = start2 === null;
+      if (start2 === null) return;
+      const card = { ...start2.card };
+      const emit = () => callbacks.onStartOptions({ ...card });
+      const name = (id) => start2.presets.find((p) => p.id === id)?.name ?? id;
+      startBox.append(el3("h3", "kb-settings-heading", "Start options"));
+      const row1 = el3("div", "kb-fields");
+      const row2 = el3("div", "kb-fields");
+      const cells = [0, 1, 2, 3].map(() => el3("div", "kb-field"));
+      row1.append(cells[0], cells[1]);
+      row2.append(cells[2], cells[3]);
+      startBox.append(row1, row2);
+      mountInheritSelect(cells[0], startDisposers, {
+        label: "Preset",
+        value: card.presetId,
+        inheritLabel: `Default (${name(start2.inherited.presetId)})`,
+        options: start2.presets.map((p) => ({ id: p.id, label: p.name })),
+        onChange: (v2) => {
+          card.presetId = v2;
+          emit();
+        }
+      });
+      mountInheritSelect(cells[1], startDisposers, {
+        label: "Location",
+        value: card.location,
+        inheritLabel: `Default (${LOCATION_LABELS[start2.inherited.location]})`,
+        options: Object.keys(LOCATION_LABELS).map((id) => ({ id, label: LOCATION_LABELS[id] })),
+        onChange: (v2) => {
+          card.location = v2;
+          emit();
+        }
+      });
+      mountInheritText(cells[2], startDisposers, {
+        label: "Model",
+        value: card.model ?? void 0,
+        placeholder: start2.inherited.model ?? "Your current model",
+        resetLabel: "Default",
+        mono: true,
+        onChange: (v2) => {
+          card.model = v2 ?? null;
+          emit();
+        }
+      });
+      mountInheritText(cells[3], startDisposers, {
+        label: "Agent",
+        value: card.agent ?? void 0,
+        placeholder: start2.inherited.agent ?? "Your current agent",
+        resetLabel: "Default",
+        mono: true,
+        onChange: (v2) => {
+          card.agent = v2 ?? null;
+          emit();
+        }
+      });
     };
     const draw2 = (m) => {
       clear();
       const { task } = m;
       sheet.setAttribute("aria-label", task.title);
       sheet.setAttribute("aria-busy", String(m.busy));
-      const head = el2("div", "kb-sheet-head");
-      const titles = el2("div", "kb-sheet-titles");
-      titles.append(el2("h2", "kb-sheet-title", task.title), el2("div", "kb-card-id", task.id));
-      const closeSlot = el2("div", "kb-sheet-x");
+      const head = el3("div", "kb-sheet-head");
+      const titles = el3("div", "kb-sheet-titles");
+      titles.append(el3("h2", "kb-sheet-title", task.title), el3("div", "kb-card-id", task.id));
+      const closeSlot = el3("div", "kb-sheet-x");
       head.append(titles, closeSlot);
       disposers.push(mountButton(closeSlot, { label: "Done", variant: "ghost", size: "sm", onClick: callbacks.onDismiss }).dispose);
-      sheet.append(head);
-      const badges = el2("div", "kb-badges");
+      top.append(head);
+      const badges = el3("div", "kb-badges");
       if (task.kind === "parent") disposers.push(mountBadge(badges, { label: "parent", tone: "primary" }).dispose);
       if (m.busy) {
-        const spin = el2("span", "kb-inline-spin");
+        const spin = el3("span", "kb-inline-spin");
         badges.append(spin);
         disposers.push(mountSpinner(spin, { size: "sm", label: "Saving" }).dispose);
       }
-      sheet.append(badges);
-      const meta = el2("dl", "kb-meta");
+      top.append(badges);
+      const meta = el3("dl", "kb-meta");
       const row = (term, value) => {
-        meta.append(el2("dt", "", term), el2("dd", "", value));
+        meta.append(el3("dt", "", term), el3("dd", "", value));
       };
       if (task.parentId !== null) row("Parent", task.parentId);
       if (task.blockedBy.length > 0) row("Blocked by", task.blockedBy.join(", "));
       if (m.openChildren > 0) row("Open sub-tasks", String(m.openChildren));
-      if (meta.childElementCount > 0) sheet.append(meta);
-      const fields = el2("div", "kb-fields");
-      const stateSlot = el2("div", "kb-field");
-      const typeSlot = el2("div", "kb-field");
+      if (meta.childElementCount > 0) top.append(meta);
+      const fields = el3("div", "kb-fields");
+      const stateSlot = el3("div", "kb-field");
+      const typeSlot = el3("div", "kb-field");
       fields.append(stateSlot, typeSlot);
-      sheet.append(fields);
+      top.append(fields);
       disposers.push(
         mountSelect(stateSlot, {
           label: "State",
@@ -3015,16 +3828,16 @@ ${GUEST_UI_LOOK_CSS}`;
         }).dispose
       );
       if (m.moves.length > 0) {
-        const moveRow = el2("div", "kb-actions kb-actions-start");
-        moveRow.append(el2("span", "kb-actions-label", "Move to"));
+        const moveRow = el3("div", "kb-actions kb-actions-start");
+        moveRow.append(el3("span", "kb-actions-label", "Move to"));
         for (const { to, label } of m.moves) {
           disposers.push(
             mountButton(moveRow, { label, variant: "outline", size: "xs", disabled: m.busy, onClick: () => callbacks.onMove(to) }).dispose
           );
         }
-        sheet.append(moveRow);
+        top.append(moveRow);
       }
-      const actions = el2("div", "kb-actions kb-actions-start");
+      const actions = el3("div", "kb-actions kb-actions-start");
       if (task.state !== "done") {
         disposers.push(
           mountButton(actions, { label: "Close", variant: "secondary", size: "sm", disabled: m.busy, onClick: () => callbacks.onClose(false) }).dispose
@@ -3047,10 +3860,11 @@ ${GUEST_UI_LOOK_CSS}`;
           mountButton(actions, { label: "Open on GitHub", variant: "ghost", size: "sm", onClick: () => callbacks.onOpenUrl(url) }).dispose
         );
       }
-      if (actions.childElementCount > 0) sheet.append(actions);
-      const body = el2("pre", "kb-detail-body", task.body.trim() === "" ? "No description." : task.body);
+      if (actions.childElementCount > 0) top.append(actions);
+      drawStart(task.id, m.start);
+      const body = el3("pre", "kb-detail-body", task.body.trim() === "" ? "No description." : task.body);
       if (task.body.trim() === "") body.classList.add("is-empty");
-      sheet.append(body);
+      bodyBox.append(body);
     };
     const onKey = (e) => {
       if (e.key === "Escape" && !e.defaultPrevented) callbacks.onDismiss();
@@ -3067,6 +3881,7 @@ ${GUEST_UI_LOOK_CSS}`;
       dispose: () => {
         document.removeEventListener("keydown", onKey);
         clear();
+        clearStart();
         backdrop.remove();
         if (previous?.isConnected) previous.focus();
       }
@@ -3246,24 +4061,48 @@ ${GUEST_UI_LOOK_CSS}`;
     const moving = /* @__PURE__ */ new Set();
     let detail = null;
     let addDispose = null;
+    let card = null;
     const find = (id) => deps.tasks().find((t) => t.id === id) ?? null;
     const info = (message) => void deps.host.toast({ kind: "info", message }).catch(() => {
     });
-    const fail = (message) => void deps.host.toast({ kind: "error", message }).catch(() => {
+    const fail2 = (message) => void deps.host.toast({ kind: "error", message }).catch(() => {
     });
     const detailModel = (task) => {
       const tasks = deps.tasks();
       const column = deps.columnOf(task.id) ?? (task.state === "done" ? "done" : task.state === "ready-for-agent" ? "ready" : "backlog");
       const open = openChildren(task, tasks);
+      const ctx = deps.start.context();
+      const mine = card !== null && ctx !== null && card.taskId === task.id && card.projectId === ctx.projectId ? card : null;
       return {
         task,
         column,
         openChildren: open,
-        types: taskTypes(tasks),
+        types: taskTypes(tasks, deps.baseTypes()),
         labels: deps.labels(),
         moves: COLUMNS.filter(({ id }) => planMove(task, column, id, open).kind !== "none").map(({ id, title }) => ({ to: id, label: title })),
-        busy: moving.has(task.id)
+        busy: moving.has(task.id),
+        start: ctx === null || task.state === "done" ? null : {
+          presets: ctx.presets,
+          card: mine?.options ?? {},
+          inherited: resolveStart(ctx.settings, task, {}, ctx.presets),
+          version: mine?.version ?? -1
+        }
       };
+    };
+    const loadCard = (taskId) => {
+      const ctx = deps.start.context();
+      if (ctx === null) {
+        card = null;
+        return;
+      }
+      const mine = { taskId, projectId: ctx.projectId, options: {}, version: 0 };
+      card = mine;
+      deps.start.load(ctx.projectId, taskId).then((options) => {
+        if (card !== mine) return;
+        mine.options = options;
+        mine.version++;
+        refreshDetail();
+      }).catch((e) => fail2(`Could not read the card's start options: ${errorText2(e)}`));
     };
     const refreshDetail = () => {
       if (detail === null) return;
@@ -3280,7 +4119,7 @@ ${GUEST_UI_LOOK_CSS}`;
       try {
         await action(api);
       } catch (e) {
-        fail(errorText2(e));
+        fail2(errorText2(e));
       } finally {
         moving.delete(id);
         await deps.reload();
@@ -3328,13 +4167,20 @@ ${GUEST_UI_LOOK_CSS}`;
     const closeDetail = () => {
       const d = detail;
       detail = null;
+      card = null;
       d?.handle.dispose();
     };
     const showDetail = (id) => {
       const task = find(id);
       if (task === null) return;
       closeDetail();
+      loadCard(id);
       const handle = openDetail(detailModel(task), {
+        onStartOptions: (options) => {
+          if (card === null || card.taskId !== id) return;
+          card.options = options;
+          deps.start.save(card.projectId, id, options);
+        },
         onMove: (to) => {
           const t = find(id);
           if (t !== null) move(id, detailModel(t).column, to);
@@ -3361,7 +4207,7 @@ ${GUEST_UI_LOOK_CSS}`;
             if (answer === "all") void run(id, (api) => api.close(id, true));
           });
         },
-        onOpenUrl: (url) => void deps.host.openUrl(url).catch((e) => fail(errorText2(e))),
+        onOpenUrl: (url) => void deps.host.openUrl(url).catch((e) => fail2(errorText2(e))),
         onDismiss: closeDetail
       });
       detail = { id, handle };
@@ -3380,7 +4226,7 @@ ${GUEST_UI_LOOK_CSS}`;
       addDispose = mountAddForm(
         deps.board.addForm,
         {
-          types: taskTypes(tasks),
+          types: taskTypes(tasks, deps.baseTypes()),
           parents: tasks.filter((t) => t.kind === "parent" && t.state !== "done").map((t) => ({ id: t.id, label: t.title, hint: t.id })),
           tracker: deps.tracker()
         },
@@ -3417,8 +4263,12 @@ ${GUEST_UI_LOOK_CSS}`;
         closeDetail();
         closeAdd();
       },
-      /** After a reload from elsewhere (poll, Refresh): keep the open sheet current. */
-      refresh: refreshDetail,
+      /** After a reload from elsewhere (poll, Refresh, settings): keep the open sheet current. */
+      refresh: () => {
+        const ctx = deps.start.context();
+        if (detail !== null && (card === null || ctx === null || card.projectId !== ctx.projectId)) loadCard(detail.id);
+        refreshDetail();
+      },
       dispose: () => {
         detachDrag();
         closeDetail();
@@ -3543,8 +4393,9 @@ ${GUEST_UI_LOOK_CSS}`;
     const switchSlot = div("kb-hide");
     const spacer = div("kb-spacer");
     const addSlot = div("kb-add-button");
+    const settingsSlot = div("kb-settings-button");
     const refreshSlot = div("kb-refresh");
-    toolbar.append(projectSlot, switchSlot, spacer, addSlot, refreshSlot);
+    toolbar.append(projectSlot, switchSlot, spacer, addSlot, settingsSlot, refreshSlot);
     const addForm = div("kb-add-slot");
     const status = div("kb-status");
     const columns = div("kb-columns");
@@ -3570,6 +4421,7 @@ ${GUEST_UI_LOOK_CSS}`;
       }
     });
     const add = mountButton(addSlot, { label: "Add task", size: "sm", disabled: true, onClick: callbacks.onAdd });
+    mountButton(settingsSlot, { label: "Settings", variant: "outline", size: "sm", onClick: callbacks.onSettings });
     const refresh = mountButton(refreshSlot, { label: "Refresh", variant: "outline", size: "sm", onClick: callbacks.onRefresh });
     let statusDispose = null;
     let cardDisposers = [];
@@ -3580,6 +4432,8 @@ ${GUEST_UI_LOOK_CSS}`;
       addForm,
       /** "Add task" works only while a board is shown. */
       setCanAdd: (enabled) => add.update({ disabled: !enabled }),
+      /** The "Hide sub-tasks" switch follows the project's settings when they load. */
+      setHideSubtasks: (checked) => hideSwitch.update({ checked }),
       setProjects: (options, value) => {
         project2.update({
           options,
@@ -3720,6 +4574,20 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
   background: var(--oc-elevated); color: var(--oc-elevated-fg); border: 1px solid var(--oc-border); border-radius: var(--oc-radius); }
 .kb-confirm-title { margin: 0; font-size: 1em; font-weight: 600; overflow-wrap: anywhere; }
 .kb-confirm-body { margin: 0; color: var(--oc-muted); font-size: 0.9em; }
+.kb-sheet-part { display: flex; flex-direction: column; gap: 0.75rem; }
+.kb-sheet-part:empty, .kb-sheet-part[hidden] { display: none; }
+.kb-start { padding: 0.75rem; border: 1px solid var(--oc-border); border-radius: var(--oc-radius); background: var(--oc-muted-surface); }
+.kb-settings-tabs { display: flex; }
+.kb-settings-body { display: flex; flex-direction: column; gap: 1rem; }
+.kb-settings-section { display: flex; flex-direction: column; gap: 0.5rem; }
+.kb-settings-heading { margin: 0; font-size: 0.95em; font-weight: 600; }
+.kb-settings-hint { margin: 0; color: var(--oc-muted); font-size: 0.85em; }
+.kb-inherit { display: flex; flex-direction: column; gap: 0.125rem; }
+.kb-inherit-reset { display: flex; justify-content: flex-end; }
+.kb-preset { display: flex; flex-direction: column; gap: 0.5rem; padding: 0.75rem;
+  border: 1px solid var(--oc-border); border-radius: var(--oc-radius); background: var(--oc-muted-surface); }
+.kb-preset-head { display: flex; align-items: flex-end; gap: 0.5rem; }
+.kb-preset-head > :first-child { flex: 1 1 auto; min-width: 0; }
 :root[data-oc-surface="panel"] .kb-columns { flex-direction: column; align-items: stretch; overflow-x: visible; }
 :root[data-oc-surface="panel"] .kb-column { flex: 0 0 auto; min-width: 0; }
 `;
@@ -3733,10 +4601,10 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
   };
 
   // src/panel/ui/wizard.ts
-  var element = (tag, className, text) => {
+  var element = (tag, className, text2) => {
     const node = document.createElement(tag);
     node.className = className;
-    if (text !== void 0) node.textContent = text;
+    if (text2 !== void 0) node.textContent = text2;
     return node;
   };
   var mountWizard = (root, props) => {
@@ -3804,13 +4672,107 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     hideSubtasks: false,
     lastLoad: 0,
     view: "none",
-    columns: /* @__PURE__ */ new Map()
+    columns: /* @__PURE__ */ new Map(),
+    globalSettings: {},
+    projectSettings: {},
+    settingsFor: null,
+    presets: parseStoredPresets(void 0)
+  };
+  var store = createSettingsStore(host.storage);
+  var fail = (message) => void host.toast({ kind: "error", message }).catch(() => {
+  });
+  var saver = createLatestSaver(
+    (_key, run) => run(),
+    (e) => fail(`Could not save settings: ${e instanceof Error ? e.message : String(e)}`)
+  );
+  var settingsSheet = null;
+  var globalLoaded = false;
+  var loadGlobalSettings = async () => {
+    try {
+      const [global, presets] = await Promise.all([store.loadGlobal(), store.loadPresets()]);
+      state.globalSettings = global;
+      state.presets = presets;
+      globalLoaded = true;
+      applySettings();
+    } catch (e) {
+      fail(`Could not read the settings: ${e instanceof Error ? e.message : String(e)}`);
+    }
   };
   var board;
   var editor;
   var unsubscribeSessions = null;
   var generation = 0;
   var project = () => state.projects.find((p) => p.id === state.projectId) ?? null;
+  var settings = () => resolveSettings(state.globalSettings, state.settingsFor !== null && state.settingsFor === state.projectId ? state.projectSettings : {});
+  var applySettings = () => {
+    const hide = settings().hideChildren;
+    if (hide !== state.hideSubtasks) {
+      state.hideSubtasks = hide;
+      board.setHideSubtasks(hide);
+      draw();
+    }
+    editor.refresh();
+  };
+  var loadProjectSettings = async (id) => {
+    try {
+      const layer = await store.loadProject(id);
+      if (state.projectId !== id) return;
+      state.projectSettings = layer;
+      state.settingsFor = id;
+    } catch (e) {
+      if (state.projectId !== id) return;
+      state.projectSettings = {};
+      state.settingsFor = id;
+      fail(`Could not read the project settings: ${e instanceof Error ? e.message : String(e)}`);
+    }
+    applySettings();
+  };
+  var saveProjectSettings = (id, layer) => {
+    if (state.settingsFor === id) state.projectSettings = layer;
+    saver.save(`project:${id}`, () => store.saveProject(id, layer));
+  };
+  var closeSettings = () => {
+    const sheet = settingsSheet;
+    settingsSheet = null;
+    sheet?.dispose();
+  };
+  var showSettings = () => {
+    closeSettings();
+    if (!globalLoaded) {
+      void host.toast({ kind: "info", message: "Settings are loading, try again in a moment" }).catch(() => {
+      });
+      void loadGlobalSettings();
+      return;
+    }
+    const p = project();
+    const id = p !== null && state.settingsFor === p.id ? p.id : null;
+    settingsSheet = openSettings(
+      {
+        tab: "global",
+        global: state.globalSettings,
+        project: p !== null && id !== null ? { name: p.name, layer: state.projectSettings } : null,
+        presets: state.presets
+      },
+      {
+        onGlobal: (layer) => {
+          state.globalSettings = layer;
+          saver.save("global", () => store.saveGlobal(layer));
+          applySettings();
+        },
+        onProject: (layer) => {
+          if (id === null) return;
+          saveProjectSettings(id, layer);
+          applySettings();
+        },
+        onPresets: (stored) => {
+          state.presets = stored;
+          saver.save("presets", () => store.savePresets(stored));
+          editor.refresh();
+        },
+        onDismiss: closeSettings
+      }
+    );
+  };
   var projectFor = (dir) => {
     if (dir === null) return null;
     let best = null;
@@ -3944,6 +4906,10 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     if (id === state.projectId) return;
     state.projectId = id;
     editor.reset();
+    closeSettings();
+    state.settingsFor = null;
+    state.projectSettings = {};
+    if (id !== null) void loadProjectSettings(id);
     state.sessions = [];
     state.config = null;
     state.tasks = null;
@@ -3985,10 +4951,13 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
       },
       onHideSubtasks: (hide) => {
         state.hideSubtasks = hide;
+        const id = state.settingsFor;
+        if (id !== null && id === state.projectId) saveProjectSettings(id, { ...state.projectSettings, hideChildren: hide });
         draw();
       },
       onRefresh: () => void load(),
-      onAdd: () => editor.showAdd()
+      onAdd: () => editor.showAdd(),
+      onSettings: showSettings
     });
     editor = createEditor({
       host,
@@ -4003,8 +4972,18 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
       columnOf: (id) => state.columns.get(id) ?? null,
       reload: load,
       redraw: draw,
-      onStart
+      onStart,
+      baseTypes: () => settings().types,
+      start: {
+        context: () => {
+          const id = state.projectId;
+          return id === null || !globalLoaded || state.settingsFor !== id ? null : { projectId: id, settings: settings(), presets: listPresets(state.presets) };
+        },
+        load: (projectId, taskId) => store.loadCard(projectId, taskId),
+        save: (projectId, taskId, card) => saver.save(`card:${projectId}:${taskId}`, () => store.saveCard(projectId, taskId, card))
+      }
     });
+    void loadGlobalSettings();
     board.setStatus({ kind: "loading" });
     host.onDirectory((dir) => {
       state.hostDirectory = dir;
