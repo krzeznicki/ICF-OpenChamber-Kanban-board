@@ -625,6 +625,22 @@ var createGithubTracker = (root, exec, labels) => {
     await swapLabels(issue.number, issue.labels.includes(label) ? null : label, remove);
     return get(idOf(issue.number));
   };
+  const subtree = async (n, rel) => {
+    const out = [];
+    const seen = /* @__PURE__ */ new Set([n]);
+    const walk = async (at, r) => {
+      if (r.childCount > r.children.length) {
+        throw new TrackerError("INVALID", `${idOf(at)} has ${r.childCount} sub-issues, more than can be deleted at once; delete some of them first`);
+      }
+      const fresh = r.children.map((c) => c.number).filter((c) => !seen.has(c));
+      for (const c of fresh) seen.add(c);
+      const found = fresh.length === 0 ? /* @__PURE__ */ new Map() : await graph(fresh, false);
+      for (const c of fresh) await walk(c, relationsOf(found.get(c) ?? null));
+      out.push(at);
+    };
+    await walk(n, rel);
+    return out;
+  };
   return {
     preflight: ready,
     setupLabels: () => ensureLabels([...stateLabels, ...CATEGORIES]),
@@ -678,6 +694,18 @@ var createGithubTracker = (root, exec, labels) => {
       await swapLabels(issue.number, issue.labels.includes(label) ? null : label, remove);
       return get(idOf(issue.number));
     },
+    async edit(id, changes) {
+      const n = parseNumber(id);
+      if (changes.title !== void 0 && (typeof changes.title !== "string" || changes.title.trim() === "")) {
+        throw new TrackerError("INVALID", "Title is required");
+      }
+      if (changes.body !== void 0 && typeof changes.body !== "string") throw new TrackerError("INVALID", "The description must be a string");
+      const args = ["issue", "edit", String(n)];
+      if (changes.title !== void 0) args.push("--title", changes.title.trim());
+      if (changes.body !== void 0) args.push("--body", changes.body);
+      if (args.length > 3) await run(args);
+      return get(idOf(n));
+    },
     async claim(id) {
       const { task, issue } = await load(parseNumber(id));
       if (task.kind === "parent") throw new TrackerError("INVALID", `Only a sub-task can be claimed, not a parent issue: ${task.id}`);
@@ -699,6 +727,33 @@ var createGithubTracker = (root, exec, labels) => {
         up = relationsOf((await graph([up], false)).get(up) ?? null).parent;
       }
       await run(["issue", "edit", String(n), "--parent", String(p)]);
+      return get(idOf(n));
+    },
+    async remove(id, opts) {
+      const { issue, rel } = await load(parseNumber(id));
+      const numbers = opts.withChildren ? await subtree(issue.number, rel) : [issue.number];
+      const deleted = [];
+      for (const n of numbers) {
+        const args = ["issue", "delete", String(n), "--yes"];
+        const r = await run(args, true);
+        if (r.code !== 0) {
+          const detail = (r.stderr || r.stdout).trim();
+          const done = deleted.length > 0 ? ` (already deleted: ${deleted.join(", ")})` : "";
+          if (/permission|must have admin|FORBIDDEN/i.test(detail)) {
+            throw new TrackerError("FAILED", `Only repository admins can delete GitHub issues; close it instead${done}. gh: ${detail}`);
+          }
+          throw new TrackerError("FAILED", `${failed(args, r).message}${done}`);
+        }
+        deleted.push(idOf(n));
+      }
+      return deleted;
+    },
+    async removeParent(id) {
+      const n = parseNumber(id);
+      const found = (await graph([n], false)).get(n) ?? null;
+      if (found === null) throw new TrackerError("NOT_FOUND", `Issue not found: ${idOf(n)}`);
+      if (relationsOf(found).parent === null) throw new TrackerError("INVALID", `${idOf(n)} has no parent issue to remove`);
+      await run(["issue", "edit", String(n), "--remove-parent"]);
       return get(idOf(n));
     },
     async close(id, opts) {
@@ -878,17 +933,41 @@ var renumberIssue = (text, n, title) => {
   lines[i] = heading + (lines[i].endsWith("\r") ? "\r" : "");
   return lines.join("\n");
 };
+var setTitle = (text, title, keepNumber) => {
+  const lines = splitLines(text);
+  const i = headingIndex(lines);
+  if (i < 0) return text.trim() === "" ? `# ${title.trim()}
+` : `# ${title.trim()}${text.includes("\r\n") ? "\r\n\r\n" : "\n\n"}${text}`;
+  const prefix = keepNumber ? /^# (\d+:\s*)/.exec(content(lines[i]))?.[1] ?? "" : "";
+  lines[i] = `# ${prefix}${title.trim()}` + (lines[i].endsWith("\r") ? "\r" : "");
+  return lines.join("\n");
+};
+var specFromIssue = (text, title) => {
+  const lines = splitLines(text);
+  const i = headingIndex(lines);
+  const heading = `# ${title.trim()}`;
+  if (i < 0) lines.unshift(heading, "");
+  else lines[i] = heading + (lines[i].endsWith("\r") ? "\r" : "");
+  const blocked = headerFields(lines).find((f) => f.field === "Blocked by");
+  if (blocked !== void 0) {
+    const blank = (k) => k >= 0 && k < lines.length && content(lines[k]).trim() === "";
+    const from = blocked.index;
+    lines.splice(from, blank(from + 1) && blank(from - 1) ? 2 : 1);
+  }
+  return lines.join("\n");
+};
 var NOT_PARAGRAPH = /^\s*(?:[-+]\s|\*\s|\d+[.)]\s|#|```|~~~|>|\|)/;
+var splitLead = (body) => {
+  if (body === "" || NOT_PARAGRAPH.test(body)) return { lead: "", rest: body };
+  const cut = body.search(/\n[ \t]*\n/);
+  const lead = cut < 0 ? body : body.slice(0, cut);
+  if (lead.split("\n").some((l) => matchField(l) !== null || /^\s{0,3}(#|```|~~~)/.test(l))) return { lead: "", rest: body };
+  return { lead, rest: cut < 0 ? "" : body.slice(cut).replace(/^\s*\n/, "") };
+};
+var normalizeBody = (body) => body.replace(/\r\n/g, "\n").replace(/^\s*\n/, "").replace(/\s+$/, "");
 var renderIssue = (n, input) => {
   const blockers = (input.blockedBy ?? []).map(blockerRef);
-  const body = (input.body ?? "").replace(/\r\n/g, "\n").replace(/^\s*\n/, "").replace(/\s+$/, "");
-  let lead = "";
-  let rest = body;
-  if (body !== "" && !NOT_PARAGRAPH.test(body)) {
-    const cut = body.search(/\n[ \t]*\n/);
-    lead = cut < 0 ? body : body.slice(0, cut);
-    rest = cut < 0 ? "" : body.slice(cut).replace(/^\s*\n/, "");
-  }
+  const { lead, rest } = splitLead(normalizeBody(input.body ?? ""));
   const parts = [`# ${pad(n)}: ${input.title.trim()}`];
   if (lead !== "") parts.push(lead);
   parts.push(`**Blocked by:** ${blockers.length > 0 ? blockers.join(", ") : NONE_BLOCKERS}`);
@@ -896,6 +975,47 @@ var renderIssue = (n, input) => {
   parts.push(`**Status:** ${fromState(input.state ?? "needs-triage")}`);
   if (rest !== "") parts.push(rest);
   return parts.join("\n\n") + "\n";
+};
+var TAIL = /^## (?:Comments|Answer)\s*$/i;
+var splitParts = (text) => {
+  const lines = splitLines(text).map(content);
+  const tailAt = plainLines(lines, false).find(([, c]) => TAIL.test(c))?.[0] ?? lines.length;
+  const head = headingIndex(lines);
+  const fieldAt = new Set(headerFields(lines).filter((f) => f.index < tailAt).map((f) => f.index));
+  const kept = [];
+  let removed = false;
+  for (let i = 0; i < tailAt; i++) {
+    if (i === head || fieldAt.has(i)) {
+      removed = true;
+      continue;
+    }
+    const blank = lines[i].trim() === "";
+    if (blank && (kept.length === 0 || removed && kept[kept.length - 1].trim() === "")) continue;
+    kept.push(lines[i]);
+    if (!blank) removed = false;
+  }
+  return {
+    heading: head >= 0 && head < tailAt ? lines[head] : null,
+    fields: [...fieldAt].sort((a, b) => a - b).map((i) => lines[i]),
+    description: kept.join("\n").replace(/\s+$/, ""),
+    tail: tailAt < lines.length ? lines.slice(tailAt).join("\n").replace(/\s+$/, "") : null
+  };
+};
+var withDescription = (text, description) => {
+  const p = splitParts(text);
+  const { lead, rest } = splitLead(normalizeBody(description));
+  const parts = [];
+  if (p.heading !== null) parts.push(p.heading);
+  if (lead !== "") parts.push(lead);
+  if (p.fields.length > 0) parts.push(p.fields.join(fieldsTight(text) ? "\n" : "\n\n"));
+  if (rest !== "") parts.push(rest);
+  if (p.tail !== null) parts.push(p.tail);
+  const out = parts.join("\n\n") + "\n";
+  return text.includes("\r\n") ? out.replace(/\n/g, "\r\n") : out;
+};
+var fieldsTight = (text) => {
+  const f = headerFields(splitLines(text));
+  return f.length > 1 && f.every((x, i) => i === 0 || x.index === f[i - 1].index + 1);
 };
 var slugify = (title) => {
   const slug = title.replace(/[łŁ]/g, "l").normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60).replace(/-+$/, "");
@@ -1047,28 +1167,48 @@ var createLocalTracker = (root) => {
     return get(task.id);
   };
   const setState = (id, state2) => patch(id, "Status", statusWord(state2));
+  const edit = async (id, changes) => {
+    if (changes.title !== void 0 && (typeof changes.title !== "string" || changes.title.trim() === "")) {
+      throw new TrackerError("INVALID", "Title is required");
+    }
+    const task = await get(id);
+    const ref = parseId(task.id);
+    let text = task.body === "" && ref.kind === "parent" ? `# ${task.title}
+` : task.body;
+    if (changes.title !== void 0) text = setTitle(text, changes.title, ref.kind === "ticket");
+    if (changes.body !== void 0) {
+      if (typeof changes.body !== "string") throw new TrackerError("INVALID", "The description must be a string");
+      text = withDescription(text, changes.body);
+    }
+    if (text !== task.body) await writeFile2(abs(task.id), text);
+    return get(task.id);
+  };
   const slugOf = (title) => issueFileName(0, title).slice(3, -3);
-  const createParent = async (input) => {
-    const slug = slugOf(input.title);
+  const newFeature = async (title) => {
+    const slug = slugOf(title);
     await mkdir2(join2(root, SCRATCH), { recursive: true });
     for (let i = 1; ; i++) {
       const feature = i === 1 ? slug : `${slug}-${i}`;
       try {
         await mkdir2(featureDir(feature));
+        return feature;
       } catch (e) {
         if (e.code === "EEXIST") continue;
         throw e;
       }
-      const parts = [`# ${input.title.trim()}`];
-      const fields = [];
-      if (input.type !== void 0 && input.type.trim() !== "") fields.push(`**Type:** ${input.type.trim()}`);
-      if (input.state !== void 0) fields.push(`**Status:** ${statusWord(input.state)}`);
-      if (fields.length > 0) parts.push(fields.join("\n"));
-      const body = (input.body ?? "").replace(/\r\n/g, "\n").trim();
-      if (body !== "") parts.push(body);
-      await writeFile2(abs(specId(feature)), parts.join("\n\n") + "\n", { flag: "wx" });
-      return get(specId(feature));
     }
+  };
+  const createParent = async (input) => {
+    const feature = await newFeature(input.title);
+    const parts = [`# ${input.title.trim()}`];
+    const fields = [];
+    if (input.type !== void 0 && input.type.trim() !== "") fields.push(`**Type:** ${input.type.trim()}`);
+    if (input.state !== void 0) fields.push(`**Status:** ${statusWord(input.state)}`);
+    if (fields.length > 0) parts.push(fields.join("\n"));
+    const body = (input.body ?? "").replace(/\r\n/g, "\n").trim();
+    if (body !== "") parts.push(body);
+    await writeFile2(abs(specId(feature)), parts.join("\n\n") + "\n", { flag: "wx" });
+    return get(specId(feature));
   };
   const createTicket = async (input, parentId) => {
     const ref = parseId(parentId);
@@ -1151,6 +1291,9 @@ var createLocalTracker = (root) => {
       if (c !== "ENOENT" && c !== "ENOTEMPTY" && c !== "EEXIST") throw e;
     }
   };
+  const unlinkIfThere = (path) => unlink(path).catch((e) => {
+    if (!isNotFound2(e)) throw e;
+  });
   const setParent = async (id, parentId) => {
     const ref = parseId(id);
     const to = parseId(parentId);
@@ -1171,9 +1314,7 @@ var createLocalTracker = (root) => {
     const text = task.body === "" ? `# ${task.title}
 ` : task.body;
     const newId = await writeNextTicket(to.feature, task.title, patchLine(text, "Blocked by", blockersValue([])));
-    await unlink(abs(task.id)).catch((e) => {
-      if (!isNotFound2(e)) throw e;
-    });
+    await unlinkIfThere(abs(task.id));
     if (ref.kind === "ticket") {
       await dropBlocker(ref.feature, fileNumber(ref.file));
     } else {
@@ -1182,7 +1323,49 @@ var createLocalTracker = (root) => {
     }
     return get(newId);
   };
+  const remove = async (id, opts) => {
+    const task = await get(id);
+    const ref = parseId(task.id);
+    if (ref.kind === "ticket") {
+      await unlinkIfThere(abs(task.id));
+      await dropBlocker(ref.feature, fileNumber(ref.file));
+      await removeIfEmpty(issuesDir(ref.feature));
+      return [task.id];
+    }
+    const tickets = await issueFiles(issuesDir(ref.feature));
+    if (tickets.length > 0 && !opts.withChildren) {
+      throw new TrackerError("INVALID", `${id} has ${tickets.length} sub-task${tickets.length === 1 ? "" : "s"}; delete them with it (withChildren) or move them first`);
+    }
+    const ticketEntries = new Set(tickets.map((f) => `issues/${f}`));
+    const extra = (await extraFiles(ref.feature)).filter((f) => !ticketEntries.has(f));
+    if (extra.length > 0) {
+      throw new TrackerError("INVALID", `${id} cannot be deleted: its folder also holds ${extra.join(", ")}; move or remove those first`);
+    }
+    const deleted = [];
+    for (const file of tickets) {
+      await unlinkIfThere(join2(issuesDir(ref.feature), file));
+      deleted.push(ticketId(ref.feature, file));
+    }
+    await unlinkIfThere(abs(task.id));
+    await removeIfEmpty(issuesDir(ref.feature));
+    await removeIfEmpty(featureDir(ref.feature));
+    return [...deleted, task.id];
+  };
+  const removeParent = async (id) => {
+    const ref = parseId(id);
+    if (ref.kind === "parent") throw new TrackerError("INVALID", `${id} is a feature; it has no parent to remove`);
+    const task = await get(id);
+    let text = specFromIssue(task.body, task.title);
+    if (task.claimed) text = patchLine(text, "Status", "ready-for-agent");
+    const feature = await newFeature(task.title);
+    await writeFile2(abs(specId(feature)), text, { flag: "wx" });
+    await unlinkIfThere(abs(task.id));
+    await dropBlocker(ref.feature, fileNumber(ref.file));
+    await removeIfEmpty(issuesDir(ref.feature));
+    return get(specId(feature));
+  };
   return {
+    remove,
     async list() {
       const now = Date.now();
       const out = [];
@@ -1205,7 +1388,9 @@ var createLocalTracker = (root) => {
       return input.parentId === void 0 ? createParent(input) : createTicket(input, input.parentId);
     },
     setState,
+    edit,
     setParent,
+    removeParent,
     setType(id, type) {
       return patch(id, "Type", type.trim());
     },
@@ -1679,6 +1864,13 @@ var renameLinks = (file, project, from, to) => serial(file, async () => {
   data.projects[project] = list.map((l) => l.taskId === from ? { ...l, taskId: to } : l);
   await writeJson(file, data);
 });
+var removeLinks = (file, project, taskId) => serial(file, async () => {
+  const data = await readLinksFile(file);
+  const list = data.projects[project] ?? [];
+  if (!list.some((l) => l.taskId === taskId)) return;
+  data.projects[project] = list.filter((l) => l.taskId !== taskId);
+  await writeJson(file, data);
+});
 var STATUS_CHECK_MAX = 50;
 var STATUS_CONCURRENCY = 8;
 var unknownSession = (e) => {
@@ -1824,6 +2016,10 @@ var newTask = (v) => {
   }
   return task;
 };
+var withChildrenOf = (body) => {
+  const w = body.withChildren;
+  return w === void 0 ? false : typeof w === "boolean" ? w : invalid('"withChildren" must be a boolean');
+};
 var defaultCliPath = () => fileURLToPath(new URL("../build/cli/task-board.mjs", import.meta.url));
 var linksFile = (deps2) => deps2.linksFile ?? defaultLinksFile();
 var queueFile = (deps2) => deps2.queueFile ?? defaultQueueFile();
@@ -1866,11 +2062,20 @@ var start = async (dir, input, deps2) => {
     release(queueFile(deps2), dir, input.taskId);
   }
 };
+var logOf = (deps2) => deps2.log ?? ((m) => console.error(m));
+var errorText = (e) => e instanceof Error ? e.message : String(e);
+var bestEffort = async (deps2, message3, action) => {
+  try {
+    await action();
+  } catch (e) {
+    logOf(deps2)(`${message3}: ${errorText(e)}`);
+  }
+};
 var liveLinks = async (dir, deps2) => withStatus(await listLinks(linksFile(deps2), dir), deps2.sessions);
 var ERROR_MAX2 = 500;
 var drainProject = async (dir, deps2) => {
   const { taken } = await takeFromQueue(queueFile(deps2), dir, { links: () => liveLinks(dir, deps2) });
-  const log = deps2.log ?? ((m) => console.error(m));
+  const log = logOf(deps2);
   await Promise.all(
     taken.map(async (e) => {
       try {
@@ -1920,6 +2125,12 @@ var agentList = (deps2) => {
 var defaultSkills = null;
 var skillDetector = (deps2) => deps2.skills ?? (defaultSkills ??= createSkillDetector());
 var tracker = (dir, deps2) => openTracker(dir, deps2.exec);
+var followMove = async (id, task, dir, deps2) => {
+  if (task.id === id) return;
+  const rekey = (what, action) => bestEffort(deps2, `icf-kanban: ${id} is now ${task.id}, but its ${what} could not follow`, action);
+  await rekey("session links", () => renameLinks(linksFile(deps2), dir, id, task.id));
+  await rekey("queue entry", () => renameInQueue(queueFile(deps2), dir, id, task.id));
+};
 var existingConfig = async (dir) => {
   try {
     return await readConfig(dir);
@@ -1996,34 +2207,54 @@ var POST = {
     const type = str(body, "type");
     return { task: await (await tracker(dir, deps2)).setType(id, type) };
   },
+  /** Title and/or description (the tracker checks a blank title); the task keeps its id. */
+  "/tasks/edit": async (body, dir, deps2) => {
+    const id = str(body, "id");
+    const changes = {};
+    for (const key of ["title", "body"]) {
+      const v = body[key];
+      if (v === void 0) continue;
+      changes[key] = typeof v === "string" ? v : invalid(`"${key}" must be a string`);
+    }
+    if (Object.keys(changes).length === 0) return invalid('Give "title", "body" or both');
+    return { task: await (await tracker(dir, deps2)).edit(id, changes) };
+  },
   /**
    * Links an existing task under an existing parent. The answer's task can have a new id (local:
-   * the file moved); the task's session links and queue entry are re-keyed to it first. The move is
-   * done by then, so a failing re-key is logged and the answer is still the moved task.
+   * the file moved); the task's session links and queue entry are re-keyed to it first.
    */
   "/tasks/parent": async (body, dir, deps2) => {
     const id = str(body, "id");
     const parentId = str(body, "parentId");
     const task = await (await tracker(dir, deps2)).setParent(id, parentId);
-    if (task.id !== id) {
-      const log = deps2.log ?? ((m) => console.error(m));
-      const rekey = async (what, action) => {
-        try {
-          await action();
-        } catch (e) {
-          log(`icf-kanban: ${id} is now ${task.id}, but its ${what} could not follow: ${e instanceof Error ? e.message : String(e)}`);
-        }
-      };
-      await rekey("session links", () => renameLinks(linksFile(deps2), dir, id, task.id));
-      await rekey("queue entry", () => renameInQueue(queueFile(deps2), dir, id, task.id));
-    }
+    await followMove(id, task, dir, deps2);
+    return { task };
+  },
+  /** Unlinks a sub-task from its parent; a changed id (local: it became a feature) is re-keyed as in /tasks/parent. */
+  "/tasks/unparent": async (body, dir, deps2) => {
+    const id = str(body, "id");
+    const task = await (await tracker(dir, deps2)).removeParent(id);
+    await followMove(id, task, dir, deps2);
     return { task };
   },
   "/tasks/close": async (body, dir, deps2) => {
     const id = str(body, "id");
-    const w = body.withChildren;
-    const withChildren = w === void 0 ? false : typeof w === "boolean" ? w : invalid('"withChildren" must be a boolean');
-    return { tasks: await (await tracker(dir, deps2)).close(id, { withChildren }) };
+    return { tasks: await (await tracker(dir, deps2)).close(id, { withChildren: withChildrenOf(body) }) };
+  },
+  /**
+   * Deletes the task (and with `withChildren` its sub-tasks); answers every deleted id. Their session
+   * links and queue entries go too. The delete is done by then, so a failing cleanup is only logged,
+   * each on its own (a broken links file does not keep the queue entry).
+   */
+  "/tasks/delete": async (body, dir, deps2) => {
+    const id = str(body, "id");
+    const deleted = await (await tracker(dir, deps2)).remove(id, { withChildren: withChildrenOf(body) });
+    for (const taskId of deleted) {
+      const why = (what) => `icf-kanban: ${taskId} was deleted, but its ${what} could not be removed`;
+      await bestEffort(deps2, why("session links"), () => removeLinks(linksFile(deps2), dir, taskId));
+      await bestEffort(deps2, why("queue entry"), () => removeFromQueue(queueFile(deps2), dir, taskId));
+    }
+    return { deleted };
   },
   "/sessions/start": async (body, dir, deps2) => {
     const taskId = str(body, "taskId");
@@ -2097,7 +2328,7 @@ var handle = async (method, path, body, deps2) => {
   } catch (e) {
     if (e instanceof InvalidRequest) return error(400, "INVALID", e.message);
     if (e instanceof TrackerError) return error(422, e.code, e.message);
-    return error(500, "FAILED", e instanceof Error ? e.message : String(e));
+    return error(500, "FAILED", errorText(e));
   }
 };
 

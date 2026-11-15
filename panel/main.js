@@ -1243,11 +1243,11 @@
         }
         return result;
       }),
-      writeFile: (path, content) => {
+      writeFile: (path, content2) => {
         if (!isGuestFilePath(path)) {
           return rejectBadFilePath();
         }
-        if (content.length > GUEST_FILE_CONTENT_MAX) {
+        if (content2.length > GUEST_FILE_CONTENT_MAX) {
           return Promise.reject(new HostRequestError("FILE_TOO_LARGE", `Content is over ${GUEST_FILE_CONTENT_MAX} characters.`));
         }
         return send({
@@ -1255,7 +1255,7 @@
           v: OPENCHAMBER_SDK_API_VERSION,
           type: "file-write",
           id: nextId(ids),
-          payload: { path, content }
+          payload: { path, content: content2 }
         }).then((result) => {
           if (!isFileWriteResult(result)) {
             throw new HostRequestError("HOST_REJECTED", "Host did not confirm the write.");
@@ -2783,7 +2783,7 @@ ${GUEST_UI_LOOK_CSS}`;
     }
     return out;
   };
-  var createArchiveSync = () => {
+  var createStorageSync = () => {
     let edits = 0;
     let written = 0;
     return {
@@ -2870,11 +2870,17 @@ ${GUEST_UI_LOOK_CSS}`;
       create: (input) => call("POST", "/tasks/create", { input }).then((r) => r.task),
       setState: (id, state2) => call("POST", "/tasks/state", { id, state: state2 }).then((r) => r.task),
       setType: (id, type) => call("POST", "/tasks/type", { id, type }).then((r) => r.task),
+      /** Title and/or description; the id stays. */
+      edit: (id, changes) => call("POST", "/tasks/edit", { id, ...changes }).then((r) => r.task),
       /**
        * Makes an existing task a sub-task of `parentId`. The returned task can have a new id (local:
        * the file moves into the parent's feature); the service has re-keyed its session links and queue entry.
        */
       setParent: (id, parentId) => call("POST", "/tasks/parent", { id, parentId }).then((r) => r.task),
+      /** Deletes the task for good (with `withChildren` its sub-tasks too); resolves to every deleted id. The service drops their links and queue entries. */
+      remove: (id, withChildren = false) => call("POST", "/tasks/delete", { id, withChildren }).then((r) => r.deleted),
+      /** Unlinks a sub-task from its parent; like setParent the returned task can have a new id (local: it became a feature). */
+      removeParent: (id) => call("POST", "/tasks/unparent", { id }).then((r) => r.task),
       close: (id, withChildren = false) => call("POST", "/tasks/close", { id, withChildren }).then((r) => r.tasks),
       cliPath: () => call("GET", "/cli").then((r) => r.path),
       /** Path B: the service makes the worktree (if asked) and starts the session with this model, agent and thinking level. */
@@ -2896,6 +2902,34 @@ ${GUEST_UI_LOOK_CSS}`;
       /** Atomically removes and returns the entries that may start now. */
       takeFromQueue: (maxParallel, starting, running) => call("POST", "/queue/take", { maxParallel, starting, running })
     };
+  };
+
+  // src/panel/order.ts
+  var applyOrder = (tasks, order2) => {
+    const rank = new Map(order2.map((id, i) => [id, i]));
+    const ranked = tasks.filter((t) => rank.has(t.id)).sort((a, b) => rank.get(a.id) - rank.get(b.id));
+    return [...ranked, ...tasks.filter((t) => !rank.has(t.id))];
+  };
+  var reorder = (order2, column, taskId, before) => {
+    const rest = column.filter((id) => id !== taskId);
+    const at = before === null || before === taskId ? -1 : rest.indexOf(before);
+    const block2 = before === taskId ? [...column] : at === -1 ? [...rest, taskId] : [...rest.slice(0, at), taskId, ...rest.slice(at)];
+    const inColumn = new Set(column);
+    const first = order2.findIndex((id) => inColumn.has(id));
+    const others = order2.filter((id) => !inColumn.has(id));
+    const cut = first === -1 ? others.length : order2.slice(0, first).filter((id) => !inColumn.has(id)).length;
+    return [...others.slice(0, cut), ...block2, ...others.slice(cut)];
+  };
+  var ORDER_MAX = 500;
+  var parseOrder = (raw) => Array.isArray(raw) ? [...new Set(raw.filter((id) => typeof id === "string" && id !== ""))].slice(0, ORDER_MAX) : [];
+  var renameInOrder = (order2, from, to) => order2.includes(from) ? order2.filter((id) => id !== to).map((id) => id === from ? to : id) : [...order2];
+  var pruneOrder = (order2, tasks) => {
+    const listed = new Set(tasks.map((t) => t.id));
+    return order2.filter((id) => listed.has(id));
+  };
+  var forgetInOrder = (order2, ids) => {
+    const gone = new Set(ids);
+    return order2.filter((id) => !gone.has(id));
   };
 
   // src/panel/columns.ts
@@ -3067,8 +3101,8 @@ ${GUEST_UI_LOOK_CSS}`;
     parents: parentTargets(tracker, task, tasks).map(linkChoice),
     children: childCandidates(tracker, task, tasks).map(linkChoice)
   });
-  var followingSetParent = (setParent, onMoved, onError) => async (id, parentId) => {
-    const task = await setParent(id, parentId);
+  var followingMove = (op, onMoved, onError) => async (id, ...rest) => {
+    const task = await op(id, ...rest);
     if (task.id !== id) {
       try {
         await onMoved(id, task.id);
@@ -3078,6 +3112,10 @@ ${GUEST_UI_LOOK_CSS}`;
     }
     return task;
   };
+  var unlinkConfirm = (tracker, child, parentTitle) => ({
+    title: `Remove \u201C${child.title}\u201D from \u201C${parentTitle}\u201D?`,
+    body: tracker === "local" ? `${child.id} moves out into its own feature (spec.md): it gets a new id and its blockers (both ways) are dropped.` : `${child.id} stops being a sub-task; the issue keeps its number.`
+  });
   var linkConfirm = (tracker, child, parent) => ({
     title: `Make \u201C${child.title}\u201D a sub-task of \u201C${parent.title}\u201D?`,
     body: tracker === "local" ? `${child.id} moves into the feature ${parent.id} as its next ticket: it gets a new id and its blockers (both ways) are dropped.` : `${child.id} becomes a sub-task of ${parent.id}, replacing its current parent if it has one.`
@@ -3111,6 +3149,10 @@ ${GUEST_UI_LOOK_CSS}`;
   };
   var canHaveSubtasks = (tracker, parentId) => tracker === "github" || parentId === "";
   var canAddSubtask = (task, tracker) => task.state !== "done" && (tracker === "github" || task.kind === "parent");
+  var subtaskModes = (canAdd, existing) => [
+    ...canAdd ? ["new"] : [],
+    ...existing > 0 ? ["existing"] : []
+  ];
   var subtaskTitles = (rows) => rows.map((r) => r.trim()).filter((r) => r !== "");
   var subtasksToCreate = (d, tracker) => canHaveSubtasks(tracker, d.parentId) ? subtaskTitles(d.subtasks) : [];
   var existingSubtaskChoices = (tasks, tracker, parentId) => canHaveSubtasks(tracker, parentId) ? newChildCandidates(tracker, parentId === "" ? null : parentId, tasks).map(choice) : [];
@@ -3951,7 +3993,9 @@ ${ref}`,
     maxParallel: 3,
     defaults: { presetId: "implement", model: null, agent: null, variant: null, location: "worktree" },
     presetByType: { enhancement: "implement", bug: DIAGNOSE_PRESET_ID, research: "plan" },
-    summary: { auto: true, language: "Polish", prompt: DEFAULT_SUMMARY_PROMPT },
+    // Defaults are never stored (only what the user types is), so changing one (Polish until 0.3.1)
+    // moves users who never set the field and keeps every explicit choice.
+    summary: { auto: true, language: "English", prompt: DEFAULT_SUMMARY_PROMPT },
     hideChildren: false,
     types: ["enhancement", "bug", "chore", "research"],
     presetSet: defaultSetId([]),
@@ -4051,8 +4095,8 @@ ${ref}`,
   var suggestEnabled = (globalLoaded2, global) => globalLoaded2 && resolveSettings(global, {}).suggestFields;
   var resolveStart = (s, task, card, presets2 = BUILTIN_PRESETS) => {
     const c = parseCardOptions(card);
-    const byKind = task.kind === "parent" ? ORCHESTRATE_PRESET_ID : void 0;
     const byType = task.type !== null ? s.presetByType[task.type] : void 0;
+    const byKind = task.kind === "parent" && !(task.type === "bug" && byType !== void 0) ? ORCHESTRATE_PRESET_ID : void 0;
     const wanted = c.presetId ?? byKind ?? byType ?? s.defaults.presetId;
     const model = c.model ?? s.defaults.model;
     return {
@@ -4091,6 +4135,8 @@ ${ref}`,
     archivedSessions: (projectId) => fit(`archivedSessions:${projectId}`),
     /** Per project: done tasks the user archived ("Archive done", archive.ts), `{ id, archivedAt }[]`. */
     archivedTasks: (projectId) => fit(`archivedTasks:${projectId}`),
+    /** Per project: the manual card order, task ids (order.ts). */
+    taskOrder: (projectId) => fit(`taskOrder:${projectId}`),
     /** Which sections of the task modal are open (one entry for every task and project). */
     detailSections: "detail-sections"
   };
@@ -4166,12 +4212,16 @@ ${ref}`,
         await storage.set(STORAGE_KEYS.card(projectId, to), clean2);
         await storage.delete(STORAGE_KEYS.card(projectId, from));
       },
+      /** The task was deleted: its start options go. */
+      forgetCard: (projectId, taskId) => storage.delete(STORAGE_KEYS.card(projectId, taskId)),
       loadDetached: async (projectId) => parseDetached(await storage.get(STORAGE_KEYS.detached(projectId))),
       saveDetached: (projectId, marks) => put(STORAGE_KEYS.detached(projectId), Object.fromEntries(marks), marks.size === 0),
       loadArchived: async (projectId) => parseArchivedSessions(await storage.get(STORAGE_KEYS.archivedSessions(projectId))),
       saveArchived: (projectId, ids) => ids.size === 0 ? storage.delete(STORAGE_KEYS.archivedSessions(projectId)) : storage.set(STORAGE_KEYS.archivedSessions(projectId), [...ids].slice(-ARCHIVED_MAX)),
       loadArchivedTasks: async (projectId) => parseArchivedTasks(await storage.get(STORAGE_KEYS.archivedTasks(projectId))),
       saveArchivedTasks: (projectId, marks) => put(STORAGE_KEYS.archivedTasks(projectId), serializeArchived(marks), marks.size === 0),
+      loadOrder: async (projectId) => parseOrder(await storage.get(STORAGE_KEYS.taskOrder(projectId))),
+      saveOrder: (projectId, order2) => put(STORAGE_KEYS.taskOrder(projectId), order2.slice(0, ORDER_MAX), order2.length === 0),
       loadSections: async () => parseSections(await storage.get(STORAGE_KEYS.detailSections)),
       saveSections: (sections2) => {
         const clean2 = parseSections(sections2);
@@ -9145,13 +9195,13 @@ ${ref}`,
       state2.parentType = oldParentType;
       return false;
     }
-    const content = asciiTrim(state2.getLines(startLine, nextLine, state2.blkIndent, false));
+    const content2 = asciiTrim(state2.getLines(startLine, nextLine, state2.blkIndent, false));
     state2.line = nextLine + 1;
     const token_o = state2.push("heading_open", "h" + String(level), 1);
     token_o.markup = String.fromCharCode(marker);
     token_o.map = [startLine, state2.line];
     const token_i = state2.push("inline", "", 0);
-    token_i.content = content;
+    token_i.content = content2;
     token_i.map = [startLine, state2.line - 1];
     token_i.children = [];
     const token_c = state2.push("heading_close", "h" + String(level), -1);
@@ -9184,12 +9234,12 @@ ${ref}`,
         break;
       }
     }
-    const content = asciiTrim(state2.getLines(startLine, nextLine, state2.blkIndent, false));
+    const content2 = asciiTrim(state2.getLines(startLine, nextLine, state2.blkIndent, false));
     state2.line = nextLine;
     const token_o = state2.push("paragraph_open", "p", 1);
     token_o.map = [startLine, state2.line];
     const token_i = state2.push("inline", "", 0);
-    token_i.content = content;
+    token_i.content = content2;
     token_i.map = [startLine, state2.line];
     token_i.children = [];
     state2.push("paragraph_close", "p", -1);
@@ -9894,7 +9944,7 @@ ${ref}`,
 
   // node_modules/markdown-it/lib/rules_inline/image.mjs
   function image(state2, silent) {
-    let code2, content, label, pos, ref, res, title, start2;
+    let code2, content2, label, pos, ref, res, title, start2;
     let href = "";
     const oldPos = state2.pos;
     const max = state2.posMax;
@@ -9983,10 +10033,10 @@ ${ref}`,
       title = ref.title;
     }
     if (!silent) {
-      content = state2.src.slice(labelStart, labelEnd);
+      content2 = state2.src.slice(labelStart, labelEnd);
       const tokens = [];
       state2.md.inline.parse(
-        content,
+        content2,
         state2.md,
         state2.env,
         tokens
@@ -9995,7 +10045,7 @@ ${ref}`,
       const attrs = [["src", href], ["alt", ""]];
       token.attrs = attrs;
       token.children = tokens;
-      token.content = content;
+      token.content = content2;
       if (title) {
         attrs.push(["title", title]);
       }
@@ -11547,8 +11597,89 @@ ${ref}`,
     return box;
   };
 
+  // src/panel/ui/editForm.ts
+  var div2 = (className) => {
+    const d = document.createElement("div");
+    d.className = className;
+    return d;
+  };
+  var mountEditForm = (box, initial, onSave, onDone) => {
+    const titleSlot = div2("kb-field");
+    const bodySlot = div2("kb-field");
+    const errorSlot = div2("kb-add-error");
+    const actions = div2("kb-actions kb-actions-start");
+    box.append(titleSlot, bodySlot, errorSlot, actions);
+    const draft = { ...initial };
+    let busy = false;
+    let disposed = false;
+    let errorDispose = null;
+    const titleField = mountTextField(titleSlot, {
+      label: "Title",
+      value: draft.title,
+      onChange: (v2) => {
+        draft.title = v2;
+        titleField.update({ value: v2, ...v2.trim() !== "" ? { error: void 0 } : {} });
+      }
+    });
+    const bodyField = mountTextField(bodySlot, {
+      label: "Description",
+      value: draft.body,
+      multiline: true,
+      rows: 12,
+      placeholder: "Markdown",
+      onChange: (v2) => {
+        draft.body = v2;
+        bodyField.update({ value: v2 });
+      }
+    });
+    const save = mountButton(actions, { label: "Save", size: "sm", onClick: () => submit() });
+    const cancel = mountButton(actions, { label: "Cancel", size: "sm", variant: "outline", onClick: () => !busy && onDone() });
+    const showError = (message2) => {
+      errorDispose?.();
+      errorDispose = null;
+      if (message2 !== null) errorDispose = mountBanner(errorSlot, { tone: "error", title: "Could not save the task", body: message2 }).dispose;
+    };
+    const setBusy = (next) => {
+      busy = next;
+      save.update({ loading: next, disabled: next });
+      cancel.update({ disabled: next });
+      titleField.update({ disabled: next });
+      bodyField.update({ disabled: next });
+    };
+    const submit = () => {
+      if (busy) return;
+      if (draft.title.trim() === "") {
+        titleField.update({ error: "A title is required" });
+        titleSlot.querySelector("input")?.focus();
+        return;
+      }
+      showError(null);
+      setBusy(true);
+      void onSave({ ...draft }).then((error2) => {
+        if (disposed) return;
+        setBusy(false);
+        if (error2 === null) onDone();
+        else showError(error2);
+      });
+    };
+    titleSlot.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter" || e.isComposing) return;
+      e.preventDefault();
+      submit();
+    });
+    return () => {
+      disposed = true;
+      errorDispose?.();
+      titleField.dispose();
+      bodyField.dispose();
+      save.dispose();
+      cancel.dispose();
+    };
+  };
+
   // src/panel/ui/detail.ts
   var NO_TYPE = "";
+  var NO_PARENT = "";
   var STATES = ["needs-triage", "needs-info", "ready-for-agent", "ready-for-human", "wontfix", "done"];
   var stateTone = (state2) => state2 === "done" ? "success" : state2 === "ready-for-agent" ? "primary" : state2 === "wontfix" ? "neutral" : state2 === "ready-for-human" ? "info" : "warning";
   var el5 = (tag, className, text3) => {
@@ -11567,14 +11698,14 @@ ${ref}`,
       const box = el5("details", "kb-section");
       box.open = open[key];
       const label = el5("summary", "kb-section-head", title);
-      const content = el5("div", "kb-section-body");
-      box.append(label, content);
+      const content2 = el5("div", "kb-section-body");
+      box.append(label, content2);
       box.addEventListener("toggle", () => {
         if (box.open === open[key]) return;
         open[key] = box.open;
         callbacks.onSections({ ...open });
       });
-      return { box, label, content };
+      return { box, label, content: content2 };
     };
     const summarySec = section("summary", "Summary");
     const taskSec = section("task", "Task");
@@ -11583,10 +11714,13 @@ ${ref}`,
     const settingsTop = el5("div", "kb-sheet-part");
     const startBox = el5("section", "kb-sheet-part kb-start");
     settingsSec.content.append(settingsTop, startBox);
-    const subList = el5("div", "kb-sheet-part");
-    const addBox = el5("div", "kb-sheet-part kb-add-sub");
-    const linkBox = el5("div", "kb-sheet-part kb-add-sub");
-    subSec.content.append(subList, addBox, linkBox);
+    const subList = el5("div", "kb-sheet-part kb-sub-rows");
+    const adderBox = el5("div", "kb-sheet-part kb-add-sub");
+    const adderHead = el5("div", "kb-add-sub-head");
+    const addBox = el5("div", "kb-sheet-part");
+    const linkBox = el5("div", "kb-sheet-part");
+    adderBox.append(adderHead, addBox, linkBox);
+    subSec.content.append(subList, adderBox);
     modal.append(head, quick, summarySec.box, taskSec.box, subSec.box, settingsSec.box);
     let disposers = [];
     const clear = () => {
@@ -11646,6 +11780,12 @@ ${ref}`,
       }
       row.append(badges);
       const session = el5("div", "kb-modal-session");
+      if (editing === null) {
+        disposers.push(
+          mountButton(session, { label: "Edit", variant: "ghost", size: "sm", disabled: m.busy, onClick: () => startEdit(m) }).dispose
+        );
+        disposers.push(mountButton(session, { label: "Delete", variant: "ghost", size: "sm", disabled: m.busy, onClick: callbacks.onDelete }).dispose);
+      }
       if (m.archived) {
         disposers.push(mountButton(session, { label: "Unarchive", variant: "outline", size: "sm", onClick: callbacks.onUnarchive }).dispose);
       }
@@ -11685,8 +11825,32 @@ ${ref}`,
       }
     };
     let taskKey = null;
+    let editing = null;
+    const stopEdit = () => {
+      editing?.dispose();
+      editing = null;
+      taskKey = null;
+    };
+    const startEdit = (m) => {
+      if (editing !== null) return;
+      const box = taskSec.content;
+      box.replaceChildren();
+      taskKey = null;
+      editing = {
+        taskId: m.task.id,
+        dispose: mountEditForm(box, m.text, (draft) => callbacks.onEdit(m.text, draft), () => {
+          stopEdit();
+          if (current !== null) draw2(current);
+        })
+      };
+      taskSec.box.open = true;
+      if (current !== null) draw2(current);
+      box.querySelector("input")?.focus();
+    };
     const drawTask = (m) => {
       const { task } = m;
+      if (editing !== null && editing.taskId !== task.id) stopEdit();
+      if (editing !== null) return;
       const key = JSON.stringify([task.id, task.body, task.parentId, task.blockedBy, m.openChildren]);
       if (key === taskKey) return;
       taskKey = key;
@@ -11703,23 +11867,51 @@ ${ref}`,
       if (task.body.trim() === "") box.append(el5("p", "kb-muted", "No description."));
       else box.append(renderMarkdown(task.body, callbacks.onOpenUrl));
     };
+    let unlinkError = null;
     const drawChildren = (m) => {
       subSec.box.hidden = m.children.length === 0 && !m.addSubtask && m.links.children.length === 0;
-      drawAddSubtask(m);
-      drawLinkChild(m);
+      drawAdder(m);
       if (m.children.length === 0) {
         subSec.label.textContent = "Sub-tasks";
         return;
       }
       const done = m.children.filter((c) => c.state === "done").length;
       subSec.label.textContent = `Sub-tasks (${done}/${m.children.length} done)`;
-      disposers.push(
-        mountList(subList, {
-          items: m.children.map((c) => ({ id: c.id, title: c.title, subtitle: c.id, badge: { label: c.state, tone: stateTone(c.state) } })),
-          onSelect: callbacks.onOpenTask,
-          ariaLabel: "Sub-tasks"
-        }).dispose
-      );
+      if (unlinkError !== null && unlinkError.taskId !== m.task.id) unlinkError = null;
+      for (const c of m.children) {
+        const row = el5("div", "kb-sub-row");
+        const item = el5("div", "kb-sub-row-item");
+        const action = el5("div", "kb-sub-row-action");
+        row.append(item, action);
+        subList.append(row);
+        disposers.push(
+          mountList(item, {
+            items: [{ id: c.id, title: c.title, subtitle: c.id, badge: { label: c.state, tone: stateTone(c.state) } }],
+            onSelect: callbacks.onOpenTask,
+            ariaLabel: `Sub-task ${c.title}`
+          }).dispose,
+          mountButton(action, {
+            label: "Unlink",
+            variant: "ghost",
+            size: "xs",
+            disabled: m.busy,
+            onClick: () => {
+              const taskId = m.task.id;
+              unlinkError = null;
+              void callbacks.onUnlinkChild(c.id).then((error2) => {
+                if (disposed || error2 === null) return;
+                unlinkError = { taskId, message: error2 };
+                if (current !== null) draw2(current);
+              });
+            }
+          }).dispose
+        );
+      }
+      if (unlinkError !== null) {
+        const errorSlot = el5("div", "kb-add-error");
+        subList.append(errorSlot);
+        disposers.push(mountBanner(errorSlot, { tone: "error", title: "Could not unlink the sub-task", body: unlinkError.message }).dispose);
+      }
     };
     let quickKey = null;
     let parentError = null;
@@ -11746,7 +11938,8 @@ ${ref}`,
       if (parents.length > 0 || parent !== null) {
         const parentSlot = el5("div", "kb-field");
         fields.append(parentSlot);
-        const options2 = parent !== null && !parents.some((p) => p.id === parent.id) ? [parent, ...parents] : parents;
+        const listed = parent !== null && !parents.some((p) => p.id === parent.id) ? [parent, ...parents] : parents;
+        const options2 = parent !== null ? [{ id: NO_PARENT, label: "No parent", hint: "Unlink from the parent" }, ...listed] : listed;
         disposers2.push(
           mountSelect(parentSlot, {
             label: "Parent",
@@ -11754,14 +11947,14 @@ ${ref}`,
             placeholder: "No parent",
             options: options2,
             searchable: options2.length > FILTER_OVER,
-            disabled: m.busy || parents.length === 0,
-            // only the current parent: shown, nothing to pick
+            disabled: m.busy,
             onChange: (id) => {
               if (id === task.parentId) return;
               const taskId = task.id;
               quickKey = null;
               parentError = null;
-              void callbacks.onSetParent(id).then((error2) => {
+              const change = id === NO_PARENT ? callbacks.onRemoveParent() : callbacks.onSetParent(id);
+              void change.then((error2) => {
                 if (disposed || error2 === null) return;
                 parentError = { taskId: current?.task.id ?? taskId, message: error2 };
                 quickKey = null;
@@ -11849,7 +12042,6 @@ ${ref}`,
       addHandle?.dispose();
       addHandle = null;
       addBox.replaceChildren();
-      addBox.hidden = key === null;
       if (key === null) return;
       addHandle = mountAddSubtask(addBox, m.types, callbacks.onAddSubtask);
     };
@@ -11869,9 +12061,7 @@ ${ref}`,
       if (key === linkKey) return;
       linkKey = key;
       clearLink();
-      linkBox.hidden = offered.length === 0;
       if (offered.length === 0) return;
-      linkBox.append(el5("h3", "kb-settings-heading", "Link existing task"));
       const slot = el5("div", "kb-field");
       const errorSlot = el5("div", "kb-add-error");
       linkBox.append(slot, errorSlot);
@@ -11900,6 +12090,81 @@ ${ref}`,
         linkDisposers.push(mountBanner(errorSlot, { tone: "error", title: "Could not link the task", body: linkError.message }).dispose);
       }
     };
+    let adder = null;
+    let adderKey = null;
+    let adderDisposers = [];
+    const clearAdderHead = () => {
+      for (const d of adderDisposers) d();
+      adderDisposers = [];
+      adderHead.replaceChildren();
+    };
+    const drawAdder = (m) => {
+      const existing = m.links.children.length;
+      const modes = subtaskModes(m.addSubtask, existing);
+      if (adder !== null && (adder.taskId !== m.task.id || modes.length === 0)) adder = null;
+      if (adder !== null && !modes.includes(adder.mode)) adder = { taskId: adder.taskId, mode: modes[0] };
+      adderBox.hidden = modes.length === 0;
+      const key = JSON.stringify([m.task.id, modes, existing, adder]);
+      if (key !== adderKey) {
+        adderKey = key;
+        clearAdderHead();
+        const redraw = () => {
+          if (current !== null) drawAdder(current);
+        };
+        if (adder === null) {
+          const actions = el5("div", "kb-actions kb-actions-start");
+          adderHead.append(actions);
+          adderDisposers.push(
+            mountButton(actions, {
+              label: "Add sub-task",
+              variant: "outline",
+              size: "xs",
+              onClick: () => {
+                adder = { taskId: m.task.id, mode: modes[0] };
+                redraw();
+                if (adder.mode === "new") addBox.querySelector("input")?.focus();
+              }
+            }).dispose
+          );
+        } else {
+          const open2 = adder;
+          const pick = el5("div", "kb-add-sub-modes");
+          const cancel = el5("div", "kb-add-sub-cancel");
+          adderHead.append(pick, cancel);
+          if (modes.length > 1) {
+            const tabs = mountTabs(pick, {
+              items: [
+                { id: "new", label: "New task" },
+                { id: "existing", label: "Existing tasks", count: existing }
+              ],
+              activeId: open2.mode,
+              onChange: (id) => {
+                adder = { taskId: open2.taskId, mode: id };
+                redraw();
+              }
+            });
+            adderDisposers.push(tabs.dispose);
+          } else {
+            pick.append(el5("h3", "kb-settings-heading", open2.mode === "new" ? "New sub-task" : "Existing tasks"));
+          }
+          adderDisposers.push(
+            mountButton(cancel, {
+              label: "Cancel",
+              variant: "ghost",
+              size: "xs",
+              onClick: () => {
+                adder = null;
+                redraw();
+              }
+            }).dispose
+          );
+        }
+      }
+      drawAddSubtask(m);
+      drawLinkChild(m);
+      addBox.hidden = adder?.mode !== "new";
+      linkBox.hidden = adder?.mode !== "existing";
+    };
     let current = null;
     let disposed = false;
     const draw2 = (m) => {
@@ -11924,13 +12189,14 @@ ${ref}`,
         clearStart();
         clearQuick();
         clearLink();
+        editing?.dispose();
+        clearAdderHead();
         addHandle?.dispose();
         shell.dispose();
       }
     };
   };
   var mountAddSubtask = (box, types, onAdd) => {
-    box.append(el5("h3", "kb-settings-heading", "Add sub-task"));
     const row = el5("div", "kb-fields kb-add-sub-row");
     const titleSlot = el5("div", "kb-field kb-add-sub-title");
     const typeSlot = el5("div", "kb-field kb-add-sub-type");
@@ -12038,6 +12304,9 @@ ${ref}`,
         const onto = input.onto ?? null;
         if (onto !== null && onto !== press.taskId) return { press: null, effect: { kind: "link", taskId: press.taskId, parentId: onto } };
         if (input.to === null) return end(press);
+        if (input.to === press.from && input.before !== void 0) {
+          return { press: null, effect: { kind: "reorder", taskId: press.taskId, column: input.to, before: input.before } };
+        }
         return { press: null, effect: { kind: "drop", taskId: press.taskId, from: press.from, to: input.to } };
       }
       case "abort": {
@@ -12047,10 +12316,22 @@ ${ref}`,
       }
     }
   };
+  var insertionBefore = (y, cards, dragged) => cards.find((c) => c.id !== dragged && y < (c.top + c.bottom) / 2)?.id ?? null;
+  var linksAt = (y, card, sameColumn) => {
+    if (!sameColumn) return true;
+    const quarter = (card.bottom - card.top) / 4;
+    return y >= card.top + quarter && y <= card.bottom - quarter;
+  };
 
   // src/panel/ui/dnd.ts
   var COLUMNS2 = ["backlog", "ready", "in_progress", "review", "done"];
-  var OVER = ["is-drop-target", "is-link-target"];
+  var OVER = ["is-drop-target", "is-link-target", "is-insert-before", "is-insert-end"];
+  var cardsOf = (column) => [...column.querySelectorAll(".kb-card")].flatMap((node) => {
+    const id = node.dataset.taskId;
+    if (id === void 0) return [];
+    const r = node.getBoundingClientRect();
+    return [{ id, top: r.top, bottom: r.bottom, node }];
+  });
   var columnOf = (node) => {
     const col = node?.closest(".kb-column") ?? null;
     return col !== null && COLUMNS2.includes(col.dataset.column ?? "") ? col : null;
@@ -12062,11 +12343,24 @@ ${ref}`,
   var attachDrag = (container, callbacks) => {
     let press = null;
     let dom = null;
-    const linkTarget = (node, taskId) => {
+    const linkTarget = (node, p, y) => {
       const card = node?.closest(".kb-card") ?? null;
       const id = card?.dataset.taskId;
-      if (card === null || id === void 0 || id === taskId || !container.contains(card)) return null;
-      return callbacks.canLink(taskId, id) ? card : null;
+      if (card === null || id === void 0 || id === p.taskId || !container.contains(card)) return null;
+      const rect = card.getBoundingClientRect();
+      if (!linksAt(y, rect, columnOf(card)?.dataset.column === p.from)) return null;
+      return callbacks.canLink(p.taskId, id) ? card : null;
+    };
+    const insertion = (column, p, y) => {
+      const cards = cardsOf(column);
+      const before = insertionBefore(y, cards, p.taskId);
+      const at = cards.findIndex((c) => c.id === p.taskId);
+      const next = cards.slice(at + 1).find((c) => c.id !== p.taskId)?.id ?? null;
+      if (at !== -1 && next === before) return { before, mark: null };
+      const target = cards.find((c) => c.id === before)?.node;
+      const list2 = column.querySelector(".kb-cards");
+      const mark = target !== void 0 ? { node: target, kind: "is-insert-before" } : list2 !== null ? { node: list2, kind: "is-insert-end" } : null;
+      return { before, mark };
     };
     const setOver = (node, kind) => {
       if (dom === null || dom.over === node && node?.classList.contains(kind) === true) return;
@@ -12104,9 +12398,13 @@ ${ref}`,
       if (dom?.ghost == null) return;
       dom.ghost.style.transform = `translate(${x - dom.dx}px, ${y - dom.dy}px)`;
       const hit = document.elementFromPoint(x, y);
-      const card = press === null ? null : linkTarget(hit, press.taskId);
+      const card = press === null ? null : linkTarget(hit, press, y);
+      const column = columnOf(hit);
       if (card !== null) setOver(card, "is-link-target");
-      else setOver(columnOf(hit), "is-drop-target");
+      else if (press !== null && column !== null && column.dataset.column === press.from) {
+        const { mark } = insertion(column, press, y);
+        setOver(mark?.node ?? null, mark?.kind ?? "is-insert-before");
+      } else setOver(column, "is-drop-target");
     };
     const feed = (input, at) => {
       const before = press;
@@ -12118,6 +12416,7 @@ ${ref}`,
       else if (effect.kind === "open") callbacks.onOpen(effect.taskId);
       else if (effect.kind === "drop") callbacks.onDrop(effect.taskId, effect.from, effect.to);
       else if (effect.kind === "link") callbacks.onLink(effect.taskId, effect.parentId);
+      else if (effect.kind === "reorder") callbacks.onReorder(effect.taskId, effect.column, effect.before);
       return effect;
     };
     const onDown = (e) => {
@@ -12157,8 +12456,10 @@ ${ref}`,
     const onUp = (e) => {
       const hit = press?.dragging === true ? document.elementFromPoint(e.clientX, e.clientY) : null;
       const to = columnOf(hit);
-      const onto = press !== null && hit !== null ? linkTarget(hit, press.taskId)?.dataset.taskId ?? null : null;
-      feed({ type: "up", pointerId: e.pointerId, to: to?.dataset.column ?? null, onto });
+      const onto = press !== null && hit !== null ? linkTarget(hit, press, e.clientY)?.dataset.taskId ?? null : null;
+      const slot = press !== null && to !== null && to.dataset.column === press.from ? insertion(to, press, e.clientY) : null;
+      const before = slot?.mark != null ? slot.before : void 0;
+      feed({ type: "up", pointerId: e.pointerId, to: to?.dataset.column ?? null, onto, ...before !== void 0 ? { before } : {} });
     };
     const onPointerAbort = (e) => void feed({ type: "abort", pointerId: e.pointerId });
     const onContextMenu = () => void feed({ type: "abort" });
@@ -12192,6 +12493,131 @@ ${ref}`,
       container.removeEventListener("keydown", onKey);
       document.removeEventListener("keydown", onEscape);
     };
+  };
+
+  // src/panel/taskDelete.ts
+  var plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+  var deleteConfirm = (tracker, task, tasks) => {
+    const n = tasks.filter((t) => t.parentId === task.id).length;
+    const title = `Delete \u201C${task.title}\u201D?`;
+    if (tracker === "local") {
+      if (task.kind !== "parent") {
+        return { title, body: `The file ${task.id} is deleted. This cannot be undone from the board.`, choices: [{ id: "one", label: "Delete", variant: "destructive" }] };
+      }
+      const folder = task.id.replace(/spec\.md$/, "");
+      const subs = n > 0 ? `, including ${plural(n, "sub-task")} on the board and any older done ones` : "";
+      return {
+        title,
+        body: `The folder ${folder} is deleted with spec.md and all its sub-tasks${subs}. This cannot be undone from the board.`,
+        choices: [{ id: "all", label: n > 0 ? "Delete with sub-tasks" : "Delete", variant: "destructive" }]
+      };
+    }
+    const base2 = `${task.id} is deleted on GitHub for good; only repository admins can delete issues (closing keeps it).`;
+    if (n === 0) return { title, body: base2, choices: [{ id: "one", label: "Delete", variant: "destructive" }] };
+    return {
+      title,
+      body: `${base2} It has ${plural(n, "sub-issue")}; kept, they become top-level issues.`,
+      choices: [
+        { id: "all", label: "Delete with sub-issues", variant: "destructive" },
+        { id: "one", label: "Delete only this issue", variant: "secondary" }
+      ]
+    };
+  };
+
+  // src/core/localFormat.ts
+  var BOLD_FIELD = /^\*\*(Status|Type|Blocked by):\*\*\s*(.*)$/;
+  var BARE_FIELD = /^(Status|Type|Blocked by):\s*(.*)$/;
+  var HEADING = /^# (.*)$/;
+  var splitLines = (text3) => text3.split("\n");
+  var content = (line) => line.endsWith("\r") ? line.slice(0, -1) : line;
+  var matchField = (line) => {
+    const c = content(line);
+    const bold = BOLD_FIELD.exec(c);
+    if (bold) return { field: bold[1], value: bold[2].trim(), bare: false };
+    const bare = BARE_FIELD.exec(c);
+    if (bare) return { field: bare[1], value: bare[2].trim(), bare: true };
+    return null;
+  };
+  var FENCE2 = /^\s{0,3}(```|~~~)/;
+  var SECTION = /^## /;
+  var plainLines = (lines, headerOnly) => {
+    const out = [];
+    let fence2 = null;
+    for (let i = 0; i < lines.length; i++) {
+      const c = content(lines[i]);
+      const f = FENCE2.exec(c);
+      if (fence2 !== null) {
+        if (f && f[1] === fence2) fence2 = null;
+        continue;
+      }
+      if (f) {
+        fence2 = f[1];
+        continue;
+      }
+      if (headerOnly && SECTION.test(c)) break;
+      out.push([i, c]);
+    }
+    return out;
+  };
+  var headerFields = (lines) => {
+    const out = [];
+    for (const [index, c] of plainLines(lines, true)) {
+      const m = matchField(c);
+      if (m) out.push({ index, ...m });
+    }
+    return out;
+  };
+  var headingIndex = (lines) => {
+    for (const [i, c] of plainLines(lines, false)) if (HEADING.test(c)) return i;
+    return -1;
+  };
+  var TAIL = /^## (?:Comments|Answer)\s*$/i;
+  var splitParts = (text3) => {
+    const lines = splitLines(text3).map(content);
+    const tailAt = plainLines(lines, false).find(([, c]) => TAIL.test(c))?.[0] ?? lines.length;
+    const head = headingIndex(lines);
+    const fieldAt = new Set(headerFields(lines).filter((f) => f.index < tailAt).map((f) => f.index));
+    const kept = [];
+    let removed = false;
+    for (let i = 0; i < tailAt; i++) {
+      if (i === head || fieldAt.has(i)) {
+        removed = true;
+        continue;
+      }
+      const blank = lines[i].trim() === "";
+      if (blank && (kept.length === 0 || removed && kept[kept.length - 1].trim() === "")) continue;
+      kept.push(lines[i]);
+      if (!blank) removed = false;
+    }
+    return {
+      heading: head >= 0 && head < tailAt ? lines[head] : null,
+      fields: [...fieldAt].sort((a, b) => a - b).map((i) => lines[i]),
+      description: kept.join("\n").replace(/\s+$/, ""),
+      tail: tailAt < lines.length ? lines.slice(tailAt).join("\n").replace(/\s+$/, "") : null
+    };
+  };
+  var issueDescription = (text3) => splitParts(text3).description;
+
+  // src/panel/taskEdit.ts
+  var editableText = (tracker, task) => ({
+    title: task.title,
+    body: tracker === "local" ? issueDescription(task.body) : task.body
+  });
+  var editChanges = (from, draft) => {
+    const title = draft.title.trim();
+    if (title === "") return { error: "A title is required" };
+    const changes = {};
+    if (title !== from.title.trim()) changes.title = title;
+    if (draft.body !== from.body) changes.body = draft.body;
+    return { changes: Object.keys(changes).length === 0 ? null : changes };
+  };
+  var editConflict = (tracker, stored2, from, changes) => {
+    const now = editableText(tracker, stored2);
+    const changed = [];
+    if (changes.title !== void 0 && now.title.trim() !== from.title.trim()) changed.push("title");
+    if (changes.body !== void 0 && now.body !== from.body) changed.push("description");
+    if (changed.length === 0) return null;
+    return `The ${changed.join(" and ")} changed since you opened the form (an agent may have edited the task); copy your text, cancel and edit again.`;
   };
 
   // src/panel/edit.ts
@@ -12293,7 +12719,8 @@ ${ref}`,
             parent: task.parentId === null ? null : { id: task.parentId, label: parent?.title ?? task.parentId, hint: task.parentId },
             ...offered
           };
-        })()
+        })(),
+        text: editableText(deps.tracker(), task)
       };
     };
     const loadCard = (taskId) => {
@@ -12319,50 +12746,54 @@ ${ref}`,
       if (task === null) closeDetail();
       else detail.handle.update(detailModel(task));
     };
-    const run = async (id, action) => {
-      const api = deps.api();
-      if (api === null || moving.has(id)) return;
+    const busyWhile = async (id, action, after) => {
       moving.add(id);
       deps.redraw();
       refreshDetail();
       try {
-        await action(api);
-      } catch (e) {
-        fail2(errorText2(e));
+        return await action();
       } finally {
         moving.delete(id);
         await deps.reload();
+        after?.();
         refreshDetail();
       }
     };
-    const setParentOf = (api) => followingSetParent(
-      api.setParent,
+    const run = async (id, action) => {
+      const api = deps.api();
+      if (api === null || moving.has(id)) return;
+      await busyWhile(id, () => action(api).then(() => void 0, (e) => fail2(errorText2(e))));
+    };
+    const attempt = (action) => action().then(
+      () => null,
+      (e) => errorText2(e)
+    );
+    const following = (op) => followingMove(
+      op,
       async (from, to) => {
         follow(from, to);
+        deps.order.rename(from, to);
         const ctx = deps.start.context();
         if (ctx !== null) await deps.start.move(ctx.projectId, from, to);
       },
       (from, to, e) => fail2(`${from} is now ${to}, but its start options could not follow: ${errorText2(e)}`)
     );
-    const linkTask = async (childId, parentId) => {
+    const setParentOf = (api) => following(api.setParent);
+    const linkTask = (childId, parentId) => relink(childId, async (api) => {
+      const moved = await setParentOf(api)(childId, parentId);
+      info2(moved.id !== childId ? `Linked ${childId} under ${parentId}; it is now ${moved.id}` : `Linked ${childId} under ${parentId}`);
+    });
+    const unlinkTask = (childId) => relink(childId, async (api) => {
+      const moved = await following(api.removeParent)(childId);
+      info2(moved.id !== childId ? `Unlinked ${childId} from its parent; it is now ${moved.id}` : `Unlinked ${childId} from its parent`);
+    });
+    const relink = async (childId, action) => {
       const api = deps.api();
       if (api === null) return "No project is open.";
       if (moving.has(childId)) return null;
-      moving.add(childId);
-      deps.redraw();
-      refreshDetail();
-      try {
-        const moved = await setParentOf(api)(childId, parentId);
-        info2(moved.id !== childId ? `Linked ${childId} under ${parentId}; it is now ${moved.id}` : `Linked ${childId} under ${parentId}`);
-        return null;
-      } catch (e) {
-        return errorText2(e);
-      } finally {
-        moving.delete(childId);
-        await deps.reload();
+      return busyWhile(childId, () => attempt(() => action(api)), () => {
         followed = null;
-        refreshDetail();
-      }
+      });
     };
     const follow = (from, to) => {
       if (detail === null || detail.id !== from) return;
@@ -12425,6 +12856,42 @@ ${ref}`,
       const error2 = await linkTask(id, parentId);
       if (error2 !== null) fail2(error2);
     };
+    const editTask = async (id, from, draft) => {
+      const api = deps.api();
+      if (api === null) return "No project is open.";
+      const result = editChanges(from, draft);
+      if ("error" in result) return result.error;
+      if (result.changes === null) return null;
+      if (moving.has(id)) return "The task is being changed right now; save again in a moment.";
+      const changes = result.changes;
+      return busyWhile(
+        id,
+        () => attempt(async () => {
+          const conflict = editConflict(deps.tracker(), await api.get(id), from, changes);
+          if (conflict !== null) throw new Error(conflict);
+          await api.edit(id, changes);
+        })
+      );
+    };
+    const deleteTask = async (id) => {
+      const task = find(id);
+      const api = deps.api();
+      if (task === null || api === null || moving.has(id)) return;
+      const { title, body, choices } = deleteConfirm(deps.tracker(), task, deps.tasks());
+      const answer = await askChoice(title, body, choices);
+      if (answer === null) return;
+      let deleted = [];
+      await run(id, async (a) => {
+        deleted = await a.remove(id, answer === "all");
+      });
+      if (deleted.length === 0) return;
+      info2(deleted.length === 1 ? `Deleted ${deleted[0]}` : `Deleted ${deleted.length} tasks`);
+      deps.order.forget(deleted);
+      const ctx = deps.start.context();
+      if (ctx !== null) {
+        for (const d of deleted) await deps.start.forget(ctx.projectId, d).catch((e) => fail2(`Could not drop the start options of ${d}: ${errorText2(e)}`));
+      }
+    };
     const closeDetail = () => {
       const d = detail;
       detail = null;
@@ -12456,7 +12923,18 @@ ${ref}`,
           return null;
         },
         onSetParent: (parentId) => linkTask(id, parentId),
+        onEdit: (from, draft) => editTask(id, from, draft),
+        onDelete: () => void deleteTask(id),
         onLinkChild: (childId) => linkTask(childId, id),
+        onRemoveParent: () => unlinkTask(id),
+        onUnlinkChild: async (childId) => {
+          const child = find(childId);
+          const parent = find(id);
+          if (child === null || parent === null) return null;
+          const { title, body } = unlinkConfirm(deps.tracker(), child, parent.title);
+          if (await askChoice(title, body, [{ id: "unlink", label: "Unlink", variant: "destructive" }]) !== "unlink") return null;
+          return unlinkTask(childId);
+        },
         onSections: deps.sections.save,
         onUnarchive: () => {
           deps.archive.unarchive(id);
@@ -12589,6 +13067,9 @@ ${ref}`,
         return child !== null && parent !== null && canLinkUnder(deps.tracker(), child, parent, deps.tasks());
       },
       onLink: (id, parentId) => void link2(id, parentId),
+      onReorder: (id, column, before) => {
+        if (!moving.has(id)) deps.order.reorder(id, column, before);
+      },
       onOpen: showDetail
     });
     return {
@@ -13280,20 +13761,20 @@ ${note}` : note;
 
   // src/panel/ui/board.ts
   var NO_TOOLS = { archivable: 0, archived: 0, showArchived: false };
-  var div2 = (className) => {
+  var div3 = (className) => {
     const node = document.createElement("div");
     node.className = className;
     return node;
   };
   var createBoard = (root, callbacks) => {
-    const shell = div2("kb");
-    const toolbar = div2("kb-toolbar");
-    const projectSlot = div2("kb-project");
-    const switchSlot = div2("kb-hide");
-    const spacer = div2("kb-spacer");
-    const addSlot = div2("kb-add-button");
-    const settingsSlot = div2("kb-settings-button");
-    const refreshSlot = div2("kb-refresh");
+    const shell = div3("kb");
+    const toolbar = div3("kb-toolbar");
+    const projectSlot = div3("kb-project");
+    const switchSlot = div3("kb-hide");
+    const spacer = div3("kb-spacer");
+    const addSlot = div3("kb-add-button");
+    const settingsSlot = div3("kb-settings-button");
+    const refreshSlot = div3("kb-refresh");
     toolbar.append(projectSlot, switchSlot, spacer, addSlot, settingsSlot, refreshSlot);
     if (VARIANT === "test") {
       const badge2 = document.createElement("span");
@@ -13302,8 +13783,8 @@ ${note}` : note;
       badge2.title = "Kanban TEST: the local development build, separate from the production Kanban Board";
       toolbar.prepend(badge2);
     }
-    const status = div2("kb-status");
-    const columns = div2("kb-columns");
+    const status = div3("kb-status");
+    const columns = div3("kb-columns");
     shell.append(toolbar, status, columns);
     root.replaceChildren(shell);
     const project2 = mountSelect(projectSlot, {
@@ -13331,14 +13812,14 @@ ${note}` : note;
     let statusDispose = null;
     let cardDisposers = [];
     const doneTools = (done) => {
-      const tools = div2("kb-column-tools");
+      const tools = div3("kb-column-tools");
       if (done.archivable > 0) {
-        const slot = div2("kb-archive-button");
+        const slot = div3("kb-archive-button");
         tools.append(slot);
         cardDisposers.push(mountButton(slot, { label: "Archive done", variant: "outline", size: "xs", onClick: callbacks.onArchiveDone }).dispose);
       }
       if (done.archived > 0) {
-        const slot = div2("kb-show-archived");
+        const slot = div3("kb-show-archived");
         tools.append(slot);
         cardDisposers.push(
           mountSwitch(slot, { label: `Show archived (${done.archived})`, checked: done.showArchived, onChange: callbacks.onShowArchived }).dispose
@@ -13367,7 +13848,7 @@ ${note}` : note;
         statusDispose = null;
         status.replaceChildren();
         if (next.kind === "loading") {
-          const wrap = div2("kb-loading");
+          const wrap = div3("kb-loading");
           status.append(wrap);
           statusDispose = mountSpinner(wrap, { label: "Loading tasks" }).dispose;
         } else if (next.kind === "banner") {
@@ -13391,9 +13872,9 @@ ${note}` : note;
         if (board2 === null) return;
         for (const { id, title } of COLUMNS) {
           const cards = board2[id];
-          const column = div2("kb-column");
+          const column = div3("kb-column");
           column.dataset.column = id;
-          const head = div2("kb-column-head");
+          const head = div3("kb-column-head");
           const name = document.createElement("span");
           name.textContent = title;
           const count = document.createElement("span");
@@ -13402,9 +13883,9 @@ ${note}` : note;
           head.append(name, count);
           column.append(head);
           if (id === "done" && (done.archivable > 0 || done.archived > 0)) column.append(doneTools(done));
-          const list2 = div2("kb-cards");
+          const list2 = div3("kb-cards");
           if (cards.length === 0) {
-            const none = div2("kb-none");
+            const none = div3("kb-none");
             none.textContent = "Nothing here";
             list2.append(none);
           }
@@ -13475,6 +13956,12 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
 :root.kb-dragging, :root.kb-dragging * { cursor: grabbing !important; }
 .kb-column.is-drop-target { border-color: var(--oc-primary); box-shadow: inset 0 0 0 1px var(--oc-primary); }
 .kb-card.is-link-target { border-color: var(--oc-primary); border-style: dashed; box-shadow: 0 0 0 2px var(--oc-primary); }
+/* Where a card dragged within its column goes: a line in the gap (no layout shift above it). */
+.kb-card.is-insert-before { position: relative; }
+.kb-card.is-insert-before::before { content: ''; position: absolute; left: -1px; right: -1px; top: calc(-0.25rem - 2.5px); height: 3px;
+  border-radius: 2px; background: var(--oc-primary); pointer-events: none; }
+.kb-cards.is-insert-end::after { content: ''; height: 3px; margin-top: calc(-0.25rem - 1.5px); border-radius: 2px;
+  background: var(--oc-primary); pointer-events: none; }
 .kb-add-error:empty { display: none; }
 .kb-fields { display: flex; flex-wrap: wrap; gap: 0.5rem; }
 .kb-field { flex: 1 1 10rem; min-width: 0; }
@@ -13570,6 +14057,13 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
 .kb-add-sub-row .kb-add-sub-type { flex: 0 1 11rem; }
 .kb-add-sub-row .kb-add-sub-title { flex: 1 1 14rem; }
 .kb-add-sub { padding-top: 0.25rem; }
+.kb-add-sub-head { display: flex; align-items: center; gap: 0.5rem; }
+.kb-add-sub-modes { flex: 1 1 auto; min-width: 0; }
+.kb-add-sub-cancel { flex: 0 0 auto; }
+.kb-sheet-part.kb-sub-rows { gap: 0.25rem; }
+.kb-sub-row { display: flex; align-items: center; gap: 0.5rem; }
+.kb-sub-row-item { flex: 1 1 auto; min-width: 0; }
+.kb-sub-row-action { flex: 0 0 auto; }
 :root[data-oc-surface="panel"] .kb-columns { flex-direction: column; align-items: stretch; overflow-x: visible; }
 :root[data-oc-surface="panel"] .kb-column { flex: 0 0 auto; min-width: 0; }
 `;
@@ -13669,7 +14163,9 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     archivedFor: null,
     archivedTasks: /* @__PURE__ */ new Map(),
     archivedTasksFor: null,
-    showArchived: false
+    showArchived: false,
+    order: [],
+    orderFor: null
   };
   var store = createSettingsStore(host.storage);
   var fail = (message2) => void host.toast({ kind: "error", message: message2 }).catch(() => {
@@ -13679,7 +14175,9 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
   var detached = () => state.detachedFor === state.projectId ? state.detached : /* @__PURE__ */ new Map();
   var archived = () => state.archivedFor === state.projectId ? state.archived : /* @__PURE__ */ new Set();
   var archivedTasks = () => state.archivedTasksFor === state.projectId ? state.archivedTasks : /* @__PURE__ */ new Map();
-  var archiveSync = createArchiveSync();
+  var archiveSync = createStorageSync();
+  var order = () => state.orderFor === state.projectId ? state.order : [];
+  var orderSync = createStorageSync();
   var unarchivedAt = /* @__PURE__ */ new Map();
   var removedFor = (projectId) => unarchivedAt.get(projectId) ?? /* @__PURE__ */ new Map();
   var pendingMarks = createPendingMarks();
@@ -13842,7 +14340,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     const archivedCount = archivedShown(state.tasks, marks);
     if (archivedCount === 0) state.showArchived = false;
     const model = groupTasks(
-      state.tasks,
+      applyOrder(state.tasks, order()),
       state.sessions,
       starter.isStarting,
       state.hideSubtasks,
@@ -13954,11 +14452,13 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
         return;
       }
       const token = archiveSync.loadToken();
-      const [tasks, marks, gone, shelved] = await Promise.all([
+      const orderToken = orderSync.loadToken();
+      const [tasks, marks, gone, shelved, ranked] = await Promise.all([
         api.list(),
         store.loadDetached(p.id).catch(() => null),
         store.loadArchived(p.id).catch(() => null),
         store.loadArchivedTasks(p.id).catch(() => null),
+        store.loadOrder(p.id).catch(() => null),
         starter.refresh(p.id, p.directory)
       ]);
       if (mine !== generation) return;
@@ -13977,6 +14477,12 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
       state.archivedTasks = fixed.marks;
       state.archivedTasksFor = p.id;
       if (fixed.changed) writeArchivedTasks(p.id, fixed.marks, tasks);
+      if (ranked !== null && (orderSync.trusts(orderToken) || state.orderFor !== p.id)) {
+        const pruned = pruneOrder(ranked, tasks);
+        state.order = pruned;
+        state.orderFor = p.id;
+        if (pruned.length !== ranked.length && orderSync.trusts(orderToken)) setOrder(p.id, pruned);
+      }
       state.config = result.config;
       state.tasks = tasks;
       state.view = "board";
@@ -14011,6 +14517,8 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     state.archivedTasks = /* @__PURE__ */ new Map();
     state.archivedTasksFor = null;
     state.showArchived = false;
+    state.order = [];
+    state.orderFor = null;
     audited.clear();
     starter.reset();
     state.config = null;
@@ -14121,6 +14629,28 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     const saved = state.detached;
     saver.save(STORAGE_KEYS.detached(id), () => store.saveDetached(id, saved));
     info("Moved; the agent session keeps running \u2014 open it from the session list");
+  };
+  var setOrder = (projectId, next) => {
+    state.order = next;
+    state.orderFor = projectId;
+    const n = orderSync.edit();
+    saver.save(STORAGE_KEYS.taskOrder(projectId), () => store.saveOrder(projectId, next).then(() => orderSync.written(n)));
+  };
+  var reorderCard = (taskId, column, before) => {
+    const id = state.projectId;
+    if (id === null || state.tasks === null) return;
+    const ids = [...state.columns].filter(([, c]) => c === column).map(([t]) => t);
+    const next = pruneOrder(reorder(order(), ids, taskId, before), state.tasks);
+    setOrder(id, next);
+    draw();
+  };
+  var forgetOrdered = (ids) => {
+    const id = state.projectId;
+    if (id !== null && ids.some((d) => order().includes(d))) setOrder(id, forgetInOrder(order(), ids));
+  };
+  var renameOrdered = (from, to) => {
+    const id = state.projectId;
+    if (id !== null && order().includes(from)) setOrder(id, renameInOrder(order(), from, to));
   };
   var writeArchivedTasks = (projectId, marks, tasks) => {
     const n = archiveSync.edit();
@@ -14260,6 +14790,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
       },
       sections: { get: () => sections, save: saveSections },
       archive: { has: (task) => isArchived(task, archivedTasks()), unarchive },
+      order: { reorder: reorderCard, rename: renameOrdered, forget: forgetOrdered },
       baseTypes: () => settings().types,
       start: {
         context: startContext,
@@ -14269,6 +14800,10 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
         move: async (projectId, from, to) => {
           await saver.idle();
           await store.moveCard(projectId, from, to);
+        },
+        forget: async (projectId, taskId) => {
+          await saver.idle();
+          await store.forgetCard(projectId, taskId);
         }
       },
       summary: {
