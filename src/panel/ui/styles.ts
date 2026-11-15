@@ -47,6 +47,12 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
 :root.kb-dragging, :root.kb-dragging * { cursor: grabbing !important; }
 .kb-column.is-drop-target { border-color: var(--oc-primary); box-shadow: inset 0 0 0 1px var(--oc-primary); }
 .kb-card.is-link-target { border-color: var(--oc-primary); border-style: dashed; box-shadow: 0 0 0 2px var(--oc-primary); }
+/* Where a card dragged within its column goes: a line in the gap (no layout shift above it). */
+.kb-card.is-insert-before { position: relative; }
+.kb-card.is-insert-before::before { content: ''; position: absolute; left: -1px; right: -1px; top: calc(-0.25rem - 2.5px); height: 3px;
+  border-radius: 2px; background: var(--oc-primary); pointer-events: none; }
+.kb-cards.is-insert-end::after { content: ''; height: 3px; margin-top: calc(-0.25rem - 1.5px); border-radius: 2px;
+  background: var(--oc-primary); pointer-events: none; }
 .kb-add-error:empty { display: none; }
 .kb-fields { display: flex; flex-wrap: wrap; gap: 0.5rem; }
 .kb-field { flex: 1 1 10rem; min-width: 0; }

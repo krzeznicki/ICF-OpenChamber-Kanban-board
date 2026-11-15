@@ -3,6 +3,7 @@
 // so they run under node:test; createSettingsStore is the only part that touches storage.
 import type { Task } from '../core/types.ts';
 import { parseArchivedTasks, serializeArchived, type ArchivedTasks } from './archive.ts';
+import { ORDER_MAX, parseOrder } from './order.ts';
 import { BUILTIN_PRESETS, defaultSetId, effectiveSetId, EMPTY_SETS, isPristineSets, migrateStoredPresets, parseStoredSets, type Preset, type StoredSets } from './presets.ts';
 import { DEFAULT_SUMMARY_PROMPT } from './summaries.ts';
 
@@ -65,7 +66,9 @@ export const DEFAULT_SETTINGS: Settings = {
   maxParallel: 3,
   defaults: { presetId: 'implement', model: null, agent: null, variant: null, location: 'worktree' },
   presetByType: { enhancement: 'implement', bug: DIAGNOSE_PRESET_ID, research: 'plan' },
-  summary: { auto: true, language: 'Polish', prompt: DEFAULT_SUMMARY_PROMPT },
+  // Defaults are never stored (only what the user types is), so changing one (Polish until 0.3.1)
+  // moves users who never set the field and keeps every explicit choice.
+  summary: { auto: true, language: 'English', prompt: DEFAULT_SUMMARY_PROMPT },
   hideChildren: false,
   types: ['enhancement', 'bug', 'chore', 'research'],
   presetSet: defaultSetId([]),
@@ -204,7 +207,7 @@ export const suggestEnabled = (globalLoaded: boolean, global: SettingsLayer): bo
 
 /**
  * The options a session starts with: the card's choice, else the settings. The preset is the
- * card's, else 'orchestrate' for a parent (a feature), else the default for the task's type, else defaults.presetId; whichever id is chosen,
+ * card's, else 'orchestrate' for a parent (a feature) that is not a bug, else the default for the task's type, else defaults.presetId; whichever id is chosen,
  * one that is not among `presets` (a deleted preset, or one the project's set does not have) becomes
  * 'implement'. `presets` defaults to the Plain set; pass the project's set (listPresets) so its own count.
  */
@@ -215,8 +218,10 @@ export const resolveStart = (
   presets: readonly Preset[] = BUILTIN_PRESETS,
 ): StartOptions => {
   const c = parseCardOptions(card);
-  const byKind = task.kind === 'parent' ? ORCHESTRATE_PRESET_ID : undefined;
   const byType = task.type !== null ? s.presetByType[task.type] : undefined;
+  // A bug is diagnosed, not broken down: its type preset beats the parent default. Locally every
+  // top-level task is a spec.md parent, so a new bug would otherwise always orchestrate.
+  const byKind = task.kind === 'parent' && !(task.type === 'bug' && byType !== undefined) ? ORCHESTRATE_PRESET_ID : undefined;
   const wanted = c.presetId ?? byKind ?? byType ?? s.defaults.presetId;
   const model = c.model ?? s.defaults.model;
   return {
@@ -270,6 +275,8 @@ export const STORAGE_KEYS = {
   archivedSessions: (projectId: string): string => fit(`archivedSessions:${projectId}`),
   /** Per project: done tasks the user archived ("Archive done", archive.ts), `{ id, archivedAt }[]`. */
   archivedTasks: (projectId: string): string => fit(`archivedTasks:${projectId}`),
+  /** Per project: the manual card order, task ids (order.ts). */
+  taskOrder: (projectId: string): string => fit(`taskOrder:${projectId}`),
   /** Which sections of the task modal are open (one entry for every task and project). */
   detailSections: 'detail-sections',
 } as const;
@@ -380,6 +387,9 @@ export const createSettingsStore = (storage: SettingsStorage) => {
       parseArchivedTasks(await storage.get(STORAGE_KEYS.archivedTasks(projectId))),
     saveArchivedTasks: (projectId: string, marks: ArchivedTasks): Promise<void> =>
       put(STORAGE_KEYS.archivedTasks(projectId), serializeArchived(marks), marks.size === 0),
+    loadOrder: async (projectId: string): Promise<string[]> => parseOrder(await storage.get(STORAGE_KEYS.taskOrder(projectId))),
+    saveOrder: (projectId: string, order: readonly string[]): Promise<void> =>
+      put(STORAGE_KEYS.taskOrder(projectId), order.slice(0, ORDER_MAX), order.length === 0),
     loadSections: async (): Promise<Sections> => parseSections(await storage.get(STORAGE_KEYS.detailSections)),
     saveSections: (sections: Sections): Promise<void> => {
       const clean = parseSections(sections);

@@ -1,7 +1,7 @@
 // The press/drag state machine behind ui/dnd.ts. Pure: no DOM, so it runs under node:test.
 // dnd.ts feeds it pointer events and performs the returned effect (draw the ghost, clean up,
 // open the card, report the drop or the link: released over a card that accepts the dragged task as
-// a sub-task, the task is linked under it; anywhere else it is the column move).
+// a sub-task, the task is linked under it; in its own column it is reordered; anywhere else it is the column move).
 //
 // It must never let a press outlive its button: a missed pointerup (macOS Ctrl-click opens a
 // context menu and swallows it), a lost capture or a context menu would otherwise leave the press
@@ -17,8 +17,11 @@ export type DragInput =
   | { type: 'down'; pointerId: number; button: number; taskId: string | null; from: Column; x: number; y: number }
   /** buttons: PointerEvent.buttons; canDrag: false while the card's move is in flight. */
   | { type: 'move'; pointerId: number; x: number; y: number; buttons: number; canDrag: boolean }
-  /** to: the column under the pointer, or null; onto: the card under it that accepts the dragged task as a sub-task (link.ts), or null. */
-  | { type: 'up'; pointerId: number; to: Column | null; onto?: string | null }
+  /**
+   * to: the column under the pointer, or null; onto: the card under it that accepts the dragged task as a sub-task (link.ts), or null;
+   * before: in the card's own column, the card it would be inserted before (null: last); undefined: no insertion point.
+   */
+  | { type: 'up'; pointerId: number; to: Column | null; onto?: string | null; before?: string | null }
   /** pointercancel / lostpointercapture (with pointerId), contextmenu / Escape (without). */
   | { type: 'abort'; pointerId?: number };
 
@@ -33,7 +36,9 @@ export type DragEffect =
   | { kind: 'open'; taskId: string }
   | { kind: 'drop'; taskId: string; from: Column; to: Column }
   /** Released over an accepting card: make taskId a sub-task of parentId. */
-  | { kind: 'link'; taskId: string; parentId: string };
+  | { kind: 'link'; taskId: string; parentId: string }
+  /** Released in its own column: put taskId before `before` (null: last) in the manual order (order.ts). */
+  | { kind: 'reorder'; taskId: string; column: Column; before: string | null };
 
 export type DragStep = { press: Press | null; effect: DragEffect };
 
@@ -64,6 +69,9 @@ export const step = (press: Press | null, input: DragInput): DragStep => {
       const onto = input.onto ?? null;
       if (onto !== null && onto !== press.taskId) return { press: null, effect: { kind: 'link', taskId: press.taskId, parentId: onto } };
       if (input.to === null) return end(press);
+      if (input.to === press.from && input.before !== undefined) {
+        return { press: null, effect: { kind: 'reorder', taskId: press.taskId, column: input.to, before: input.before } };
+      }
       return { press: null, effect: { kind: 'drop', taskId: press.taskId, from: press.from, to: input.to } };
     }
     case 'abort': {
@@ -72,4 +80,24 @@ export const step = (press: Press | null, input: DragInput): DragStep => {
       return end(press);
     }
   }
+};
+
+/** A card's vertical extent on screen. */
+export type Span = { top: number; bottom: number };
+
+/**
+ * Where a card dropped at height `y` goes in its column: before the first other card whose middle is
+ * below the pointer (null: last). `cards` is the column as drawn, the dragged card included.
+ */
+export const insertionBefore = (y: number, cards: readonly (Span & { id: string })[], dragged: string): string | null =>
+  cards.find((c) => c.id !== dragged && y < (c.top + c.bottom) / 2)?.id ?? null;
+
+/**
+ * Whether the pointer over an accepting card means "link under it". In the dragged card's own
+ * column only the middle half does, so the edges stay free for reordering; elsewhere the whole card.
+ */
+export const linksAt = (y: number, card: Span, sameColumn: boolean): boolean => {
+  if (!sameColumn) return true;
+  const quarter = (card.bottom - card.top) / 4;
+  return y >= card.top + quarter && y <= card.bottom - quarter;
 };
