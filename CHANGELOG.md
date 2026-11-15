@@ -3,7 +3,7 @@
 ## 0.2.0 (unreleased)
 
 - Shown as **Kanban Board** (rail panel and full-screen page), with its own icon (`assets/kanban.svg`). The extension id stays `icf-kanban`, so settings and storage are kept.
-- The detail sheet closes with an × at the top right (or Escape) instead of a "Done" button.
+- The detail and Settings sheets close with an × at the top right (or Escape) instead of a "Done" button.
 - The detail sheet's Close / Close with sub-tasks buttons are gone: close a task by dragging it to Done or with Move to → Done, which still asks about open sub-tasks.
 
 ## 0.1.0 (unreleased)

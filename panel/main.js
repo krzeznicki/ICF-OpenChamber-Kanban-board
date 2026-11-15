@@ -3604,6 +3604,18 @@ ${ref}`,
     actions.querySelector("button")?.focus();
   });
 
+  // src/panel/ui/closeButton.ts
+  var mountCloseButton = (slot, onClick) => {
+    const handle = mountButton(slot, { label: "\xD7", variant: "ghost", size: "sm", onClick });
+    const button2 = slot.querySelector("button");
+    if (button2 !== null) {
+      button2.setAttribute("aria-label", "Close");
+      button2.title = "Close";
+      button2.classList.add("kb-icon-close");
+    }
+    return handle.dispose;
+  };
+
   // src/panel/ui/settingsView.ts
   var el2 = (tag, className, text2) => {
     const node = document.createElement(tag);
@@ -3922,7 +3934,7 @@ ${ref}`,
     const m = structuredClone(initial);
     const fixed = [];
     let disposers = [];
-    fixed.push(mountButton(closeSlot, { label: "Done", variant: "ghost", size: "sm", onClick: callbacks.onDismiss }).dispose);
+    fixed.push(mountCloseButton(closeSlot, callbacks.onDismiss));
     const draw2 = () => {
       for (const d of disposers) d();
       disposers = [];
@@ -4143,13 +4155,7 @@ ${ref}`,
       titles.append(el3("h2", "kb-sheet-title", task.title), el3("div", "kb-card-id", task.id));
       const closeSlot = el3("div", "kb-sheet-x");
       head.append(titles, closeSlot);
-      disposers.push(mountButton(closeSlot, { label: "\xD7", variant: "ghost", size: "sm", onClick: callbacks.onDismiss }).dispose);
-      const x = closeSlot.querySelector("button");
-      if (x !== null) {
-        x.setAttribute("aria-label", "Close");
-        x.title = "Close";
-        x.classList.add("kb-icon-close");
-      }
+      disposers.push(mountCloseButton(closeSlot, callbacks.onDismiss));
       top.append(head);
       const badges = el3("div", "kb-badges");
       if (task.kind === "parent") disposers.push(mountBadge(badges, { label: "parent", tone: "primary" }).dispose);

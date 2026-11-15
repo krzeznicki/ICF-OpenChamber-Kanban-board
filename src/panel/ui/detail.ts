@@ -9,6 +9,7 @@ import type { Column } from '../columns.ts';
 import type { Preset } from '../presets.ts';
 import type { CardOptions, Location, StartOptions } from '../settings.ts';
 import type { SummaryStatus } from '../summaries.ts';
+import { mountCloseButton } from './closeButton.ts';
 import { LOCATION_LABELS, mountInheritSelect, mountInheritText } from './settingsView.ts';
 
 export const STATES: readonly TaskState[] = ['needs-triage', 'needs-info', 'ready-for-agent', 'ready-for-human', 'wontfix', 'done'];
@@ -220,14 +221,7 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks): De
     titles.append(el('h2', 'kb-sheet-title', task.title), el('div', 'kb-card-id', task.id));
     const closeSlot = el('div', 'kb-sheet-x');
     head.append(titles, closeSlot);
-    disposers.push(mountButton(closeSlot, { label: '×', variant: 'ghost', size: 'sm', onClick: callbacks.onDismiss }).dispose);
-    // The kit's button has no icon-only form: name the × for screen readers and the tooltip.
-    const x = closeSlot.querySelector('button');
-    if (x !== null) {
-      x.setAttribute('aria-label', 'Close');
-      x.title = 'Close';
-      x.classList.add('kb-icon-close');
-    }
+    disposers.push(mountCloseButton(closeSlot, callbacks.onDismiss));
     top.append(head);
 
     const badges = el('div', 'kb-badges');

@@ -27,6 +27,7 @@ import {
   type Settings,
   type SettingsLayer,
 } from '../settings.ts';
+import { mountCloseButton } from './closeButton.ts';
 import { askChoice } from './confirm.ts';
 
 export type SettingsTab = 'global' | 'project' | 'presets';
@@ -419,7 +420,7 @@ export const openSettings = (initial: SettingsModel, callbacks: SettingsCallback
   const m = structuredClone(initial);
   const fixed: Disposers = [];
   let disposers: Disposers = [];
-  fixed.push(mountButton(closeSlot, { label: 'Done', variant: 'ghost', size: 'sm', onClick: callbacks.onDismiss }).dispose);
+  fixed.push(mountCloseButton(closeSlot, callbacks.onDismiss));
 
   const draw = (): void => {
     for (const d of disposers) d();
