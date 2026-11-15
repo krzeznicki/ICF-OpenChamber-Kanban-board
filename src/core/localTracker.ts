@@ -1,5 +1,6 @@
 // Tracker over Matt Pocock's local format: `.scratch/<feature>/spec.md` is the parent,
 // `.scratch/<feature>/issues/NN-slug.md` are its tickets. Ids are POSIX paths relative to root.
+import type { Dirent } from 'node:fs';
 import { mkdir, readdir, readFile, rmdir, stat, unlink, writeFile } from 'node:fs/promises';
 import { join, posix } from 'node:path';
 import { blockersValue, issueFileName, parseIssue, parseSpec, patchLine, renderIssue, renumberIssue } from './localFormat.ts';
@@ -260,6 +261,28 @@ export const createLocalTracker = (root: string): Tracker => {
     }
   };
 
+  /** What a feature's folder holds besides spec.md and an empty issues/ (folders end in "/"), sorted. */
+  const extraFiles = async (feature: string): Promise<string[]> => {
+    const list = async (path: string): Promise<Dirent[]> => {
+      try {
+        return await readdir(path, { withFileTypes: true });
+      } catch (e) {
+        if (isNotFound(e)) return [];
+        throw e;
+      }
+    };
+    const out: string[] = [];
+    for (const d of await list(featureDir(feature))) {
+      if (d.name === 'spec.md' && d.isFile()) continue;
+      if (d.name === 'issues' && d.isDirectory()) {
+        for (const i of await list(issuesDir(feature))) out.push(`issues/${i.name}${i.isDirectory() ? '/' : ''}`);
+        continue;
+      }
+      out.push(`${d.name}${d.isDirectory() ? '/' : ''}`);
+    }
+    return out.sort();
+  };
+
   /** Removes a folder only when it is empty; anything left in it (notes, other files) keeps it. */
   const removeIfEmpty = async (path: string): Promise<void> => {
     try {
@@ -284,6 +307,13 @@ export const createLocalTracker = (root: string): Tracker => {
     if (ref.kind === 'ticket' && ref.feature === to.feature) throw new TrackerError('INVALID', `${id} is already a ticket of ${parentId}`);
     if (ref.kind === 'parent' && (await issueFiles(issuesDir(ref.feature))).length > 0) {
       throw new TrackerError('INVALID', `${id} has tickets of its own; a feature with tickets cannot become a ticket (two levels only)`);
+    }
+    if (ref.kind === 'parent') {
+      // The folder is removed after the move; anything else in it would stay and list as a feature.
+      const extra = await extraFiles(ref.feature);
+      if (extra.length > 0) {
+        throw new TrackerError('INVALID', `${id} cannot become a ticket: its folder also holds ${extra.join(', ')}; move or remove those first`);
+      }
     }
     // A synthesized parent (no spec.md) has no text yet.
     const text = task.body === '' ? `# ${task.title}\n` : task.body;

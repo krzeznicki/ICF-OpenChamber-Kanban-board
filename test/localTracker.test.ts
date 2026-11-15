@@ -25,8 +25,8 @@ const repo = async (t: { after: (fn: () => Promise<void>) => void }): Promise<st
   return root;
 };
 
-const rejectsWith = async (p: Promise<unknown>, code: string): Promise<void> => {
-  await assert.rejects(p, (e: unknown) => e instanceof TrackerError && e.code === code);
+const rejectsWith = async (p: Promise<unknown>, code: string, message?: RegExp): Promise<void> => {
+  await assert.rejects(p, (e: unknown) => e instanceof TrackerError && e.code === code && (message === undefined || message.test(e.message)));
 };
 
 test('list returns the parent and its tickets with parentId and blockedBy as ids', async (t) => {
@@ -328,4 +328,16 @@ test('setParent refuses a feature with tickets, a ticket or missing parent, itse
   await rejectsWith(tracker.setParent(T2, '.scratch/missing/spec.md'), 'NOT_FOUND');
   await rejectsWith(tracker.setParent('.scratch/example-feature/issues/09-x.md', o.spec), 'NOT_FOUND');
   assert.deepEqual((await tracker.list()).map((x) => x.id), [SPEC, T1, T2, o.spec, o.a, o.b]);
+});
+
+test('setParent refuses a feature without tickets whose folder holds other files, before writing anything', async (t) => {
+  const root = await repo(t);
+  const tracker = createLocalTracker(root);
+  const lone = await tracker.create({ title: 'Lone idea' });
+  await mkdir(join(root, '.scratch/lone-idea/issues'), { recursive: true });
+  await writeFile(join(root, '.scratch/lone-idea/notes.md'), 'n');
+  await mkdir(join(root, '.scratch/lone-idea/assets'));
+  await rejectsWith(tracker.setParent(lone.id, SPEC), 'INVALID', /assets\/.*notes\.md|notes\.md.*assets/);
+  assert.deepEqual((await tracker.list()).map((x) => x.id), [SPEC, T1, T2, lone.id]);
+  assert.equal(existsSync(join(root, '.scratch/example-feature/issues/03-lone-idea.md')), false);
 });
