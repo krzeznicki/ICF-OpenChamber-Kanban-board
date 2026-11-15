@@ -2231,10 +2231,10 @@ ${GUEST_UI_LOOK_CSS}`;
       }
     };
     const onPopupKey = (event) => {
-      const step = navigationKey(event);
-      if (step) {
+      const step2 = navigationKey(event);
+      if (step2) {
         event.preventDefault();
-        setActive(moveListSelection(visible(), activeId, step));
+        setActive(moveListSelection(visible(), activeId, step2));
       } else if (event.key === "Enter") {
         event.preventDefault();
         if (activeId)
@@ -2419,10 +2419,10 @@ ${GUEST_UI_LOOK_CSS}`;
       setActive(stillThere ? activeId : props.selectedId ?? null);
     };
     const onKeyDown = (event) => {
-      const step = navigationKey(event);
-      if (step) {
+      const step2 = navigationKey(event);
+      if (step2) {
         event.preventDefault();
-        setActive(moveListSelection(props.items, activeId, step));
+        setActive(moveListSelection(props.items, activeId, step2));
         return;
       }
       if ((event.key === "Enter" || event.key === " ") && activeId) {
@@ -3073,8 +3073,41 @@ ${GUEST_UI_LOOK_CSS}`;
     };
   };
 
-  // src/panel/ui/dnd.ts
+  // src/panel/drag.ts
   var THRESHOLD = 6;
+  var NONE2 = { kind: "none" };
+  var end = (press) => ({ press: null, effect: press?.dragging === true ? { kind: "cancel" } : NONE2 });
+  var step = (press, input) => {
+    switch (input.type) {
+      case "down": {
+        const stale = end(press);
+        if (input.button !== 0 || input.taskId === null) return stale;
+        const next = { pointerId: input.pointerId, taskId: input.taskId, from: input.from, x: input.x, y: input.y, dragging: false };
+        return { press: next, effect: stale.effect };
+      }
+      case "move": {
+        if (press === null || input.pointerId !== press.pointerId) return { press, effect: NONE2 };
+        if ((input.buttons & 1) === 0) return end(press);
+        if (press.dragging) return { press, effect: { kind: "follow" } };
+        if (Math.hypot(input.x - press.x, input.y - press.y) < THRESHOLD) return { press, effect: NONE2 };
+        if (!input.canDrag) return { press: null, effect: NONE2 };
+        return { press: { ...press, dragging: true }, effect: { kind: "start" } };
+      }
+      case "up": {
+        if (press === null || input.pointerId !== press.pointerId) return { press, effect: NONE2 };
+        if (!press.dragging) return { press: null, effect: { kind: "open", taskId: press.taskId } };
+        if (input.to === null) return end(press);
+        return { press: null, effect: { kind: "drop", taskId: press.taskId, from: press.from, to: input.to } };
+      }
+      case "abort": {
+        if (press === null) return { press, effect: NONE2 };
+        if (input.pointerId !== void 0 && input.pointerId !== press.pointerId) return { press, effect: NONE2 };
+        return end(press);
+      }
+    }
+  };
+
+  // src/panel/ui/dnd.ts
   var COLUMNS2 = ["backlog", "ready", "in_progress", "review", "done"];
   var columnOf = (node) => {
     const col = node?.closest(".kb-column") ?? null;
@@ -3086,77 +3119,97 @@ ${GUEST_UI_LOOK_CSS}`;
   };
   var attachDrag = (container, callbacks) => {
     let press = null;
+    let dom = null;
     const setOver = (col) => {
-      if (press === null || press.over === col) return;
-      press.over?.classList.remove("is-drop-target");
-      press.over = col;
+      if (dom === null || dom.over === col) return;
+      dom.over?.classList.remove("is-drop-target");
+      dom.over = col;
       col?.classList.add("is-drop-target");
     };
-    const finish = () => {
-      if (press === null) return;
-      press.over?.classList.remove("is-drop-target");
-      press.ghost?.remove();
-      press.card.classList.remove("is-dragging");
-      container.querySelector(`.kb-card[data-task-id="${CSS.escape(press.taskId)}"]`)?.classList.remove("is-dragging");
+    const cleanup = (pointerId, taskId) => {
+      const d = dom;
+      dom = null;
+      if (d !== null) {
+        d.over?.classList.remove("is-drop-target");
+        d.ghost?.remove();
+        d.card.classList.remove("is-dragging");
+      }
+      if (taskId !== null) container.querySelector(`.kb-card[data-task-id="${CSS.escape(taskId)}"]`)?.classList.remove("is-dragging");
       document.documentElement.classList.remove("kb-dragging");
-      if (container.hasPointerCapture(press.pointerId)) container.releasePointerCapture(press.pointerId);
-      press = null;
+      if (pointerId !== null && container.hasPointerCapture(pointerId)) container.releasePointerCapture(pointerId);
+    };
+    const startGhost = (p, x, y) => {
+      if (dom === null) return;
+      const ghost = dom.card.cloneNode(true);
+      ghost.classList.add("kb-ghost");
+      ghost.removeAttribute("tabindex");
+      ghost.setAttribute("aria-hidden", "true");
+      ghost.style.width = `${dom.width}px`;
+      document.body.append(ghost);
+      dom.ghost = ghost;
+      dom.card.classList.add("is-dragging");
+      document.documentElement.classList.add("kb-dragging");
+      container.setPointerCapture(p.pointerId);
+      follow(x, y);
+    };
+    const follow = (x, y) => {
+      if (dom?.ghost == null) return;
+      dom.ghost.style.transform = `translate(${x - dom.dx}px, ${y - dom.dy}px)`;
+      setOver(columnOf(document.elementFromPoint(x, y)));
+    };
+    const feed = (input, at) => {
+      const before = press;
+      const { press: next, effect } = step(press, input);
+      press = next;
+      if (before !== null && (next === null || input.type === "down")) cleanup(before.pointerId, before.taskId);
+      if (effect.kind === "start" && next !== null && at !== void 0) startGhost(next, at.x, at.y);
+      else if (effect.kind === "follow" && at !== void 0) follow(at.x, at.y);
+      else if (effect.kind === "open") callbacks.onOpen(effect.taskId);
+      else if (effect.kind === "drop") callbacks.onDrop(effect.taskId, effect.from, effect.to);
+      return effect;
     };
     const onDown = (e) => {
-      if (press !== null && press.ghost === null) press = null;
-      if (press !== null || e.button !== 0 || !(e.target instanceof Element)) return;
-      const card = e.target.closest(".kb-card");
-      const taskId = card?.dataset.taskId;
-      const col = columnOf(card ?? null);
-      if (card == null || taskId === void 0 || col === null || interactive(e.target, card)) return;
-      const rect = card.getBoundingClientRect();
-      press = {
+      const target = e.target instanceof Element ? e.target : null;
+      const card = target?.closest(".kb-card") ?? null;
+      const col = columnOf(card);
+      const ok = card !== null && target !== null && col !== null && card.dataset.taskId !== void 0 && !interactive(target, card);
+      const before = press;
+      feed({
+        type: "down",
         pointerId: e.pointerId,
-        taskId,
-        from: col.dataset.column,
-        card,
+        button: e.button,
+        taskId: ok ? card.dataset.taskId : null,
+        from: col?.dataset.column ?? "backlog",
         x: e.clientX,
-        y: e.clientY,
-        ghost: null,
-        dx: e.clientX - rect.left,
-        dy: e.clientY - rect.top,
-        width: rect.width,
-        over: null
-      };
+        y: e.clientY
+      });
+      if (press !== null && press !== before && ok) {
+        const rect = card.getBoundingClientRect();
+        dom = { card, ghost: null, dx: e.clientX - rect.left, dy: e.clientY - rect.top, width: rect.width, over: null };
+      }
     };
     const onMove = (e) => {
-      if (press === null || e.pointerId !== press.pointerId) return;
-      if (press.ghost === null) {
-        if (Math.hypot(e.clientX - press.x, e.clientY - press.y) < THRESHOLD) return;
-        if (!callbacks.canDrag(press.taskId)) {
-          press = null;
-          return;
-        }
-        const ghost = press.card.cloneNode(true);
-        ghost.classList.add("kb-ghost");
-        ghost.removeAttribute("tabindex");
-        ghost.setAttribute("aria-hidden", "true");
-        ghost.style.width = `${press.width}px`;
-        document.body.append(ghost);
-        press.ghost = ghost;
-        press.card.classList.add("is-dragging");
-        document.documentElement.classList.add("kb-dragging");
-        container.setPointerCapture(press.pointerId);
-      }
-      e.preventDefault();
-      press.ghost.style.transform = `translate(${e.clientX - press.dx}px, ${e.clientY - press.dy}px)`;
-      setOver(columnOf(document.elementFromPoint(e.clientX, e.clientY)));
+      const effect = feed(
+        {
+          type: "move",
+          pointerId: e.pointerId,
+          x: e.clientX,
+          y: e.clientY,
+          buttons: e.buttons,
+          canDrag: press === null || callbacks.canDrag(press.taskId)
+        },
+        { x: e.clientX, y: e.clientY }
+      );
+      if (effect.kind === "start" || effect.kind === "follow") e.preventDefault();
     };
     const onUp = (e) => {
-      if (press === null || e.pointerId !== press.pointerId) return;
-      const { taskId, from, ghost } = press;
-      const target = ghost === null ? null : columnOf(document.elementFromPoint(e.clientX, e.clientY));
-      finish();
-      if (ghost === null) callbacks.onOpen(taskId);
-      else if (target !== null) callbacks.onDrop(taskId, from, target.dataset.column);
+      const to = press?.dragging === true ? columnOf(document.elementFromPoint(e.clientX, e.clientY)) : null;
+      feed({ type: "up", pointerId: e.pointerId, to: to?.dataset.column ?? null });
     };
+    const onPointerAbort = (e) => void feed({ type: "abort", pointerId: e.pointerId });
+    const onContextMenu = () => void feed({ type: "abort" });
     const onEscape = (e) => {
-      if (e.key === "Escape" && press !== null) finish();
+      if (e.key === "Escape" && press !== null) feed({ type: "abort" });
     };
     const onKey = (e) => {
       if (e.key !== "Enter" && e.key !== " ") return;
@@ -3166,21 +3219,22 @@ ${GUEST_UI_LOOK_CSS}`;
       e.preventDefault();
       callbacks.onOpen(id);
     };
-    const onCancel = (e) => {
-      if (press !== null && e.pointerId === press.pointerId) finish();
-    };
     container.addEventListener("pointerdown", onDown);
     container.addEventListener("pointermove", onMove);
     container.addEventListener("pointerup", onUp);
-    container.addEventListener("pointercancel", onCancel);
+    container.addEventListener("pointercancel", onPointerAbort);
+    container.addEventListener("lostpointercapture", onPointerAbort);
+    container.addEventListener("contextmenu", onContextMenu);
     container.addEventListener("keydown", onKey);
     document.addEventListener("keydown", onEscape);
     return () => {
-      finish();
+      feed({ type: "abort" });
       container.removeEventListener("pointerdown", onDown);
       container.removeEventListener("pointermove", onMove);
       container.removeEventListener("pointerup", onUp);
-      container.removeEventListener("pointercancel", onCancel);
+      container.removeEventListener("pointercancel", onPointerAbort);
+      container.removeEventListener("lostpointercapture", onPointerAbort);
+      container.removeEventListener("contextmenu", onContextMenu);
       container.removeEventListener("keydown", onKey);
       document.removeEventListener("keydown", onEscape);
     };
