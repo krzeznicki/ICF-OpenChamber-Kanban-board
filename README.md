@@ -17,7 +17,7 @@ Not taken yet: the extension has to be running in OpenChamber. To do, saved in [
 
 - [ ] `rail-icon.png`: the **Kanban Board** icon in the side rail
 - [ ] `board.png`: the board with cards in every column
-- [ ] `card-detail.png`: the task modal: summary, the task as formatted markdown, Settings collapsed, **Open session** at the top
+- [ ] `card-detail.png`: the task modal: state, type and Move to under the header, summary, the task as formatted markdown, Settings collapsed, **Open session** at the top
 - [ ] `settings.png`: the Settings sheet
 - [ ] `wizard.png`: the setup wizard (Local or GitHub)
 
@@ -84,7 +84,7 @@ Types: `bug` and `enhancement` (a feature), plus your own (`chore` and `research
 - `ready-for-human` and `wontfix` show as badges on the card in Backlog.
 - A claimed ticket (`Status: claimed` locally, an assignee on GitHub) stays `ready-for-agent`.
 - To start a Done card, move it back to Backlog or Ready first.
-- To close a task, drag it to Done or use **Move to → Done** in its modal's Settings (the × at the top right only closes the modal, as does Escape).
+- To close a task, drag it to Done or use **Move to → Done** under its modal's header (the × at the top right only closes the modal, as does Escape).
 - A drop on Backlog or Ready changes one line of the task file (local) or swaps the state label (GitHub). The rest of the file is left as it is.
 - Dragging a card out of In Progress or Review to Backlog or Ready detaches it from its session: the card follows its state again, and the session keeps running (open it from the session list). Starting the card again later links it to the new session.
 
@@ -115,10 +115,11 @@ Closing a form you have filled in (Escape, a click beside it, × or Cancel) firs
 A click on any card (or Enter on a focused card) opens the task in a modal, in every column; a click never jumps to a session. Reading comes first:
 
 - **Header**: title, id, state and type badges and the × close. **Open session** opens the task's agent session (running, waiting or finished) when it has one that is not archived; **Session archived** says that its only session was archived; **Session not listed in OpenChamber** that the board knows a session for it that no project lists (it is never opened). While the board is open, the rest of the page is inactive: Tab stays in the modal.
+- **State, Type and Move to**: a compact row right under the header, always shown (not a section): the state and type selects and the **Move to** buttons (the keyboard path for drag and drop; **Done** asks about open sub-tasks). The selects sit side by side and wrap under each other in a narrow rail panel.
 - **Summary**: the personal summary (see [Summaries](#summaries)), or a **Summarise** button.
 - **Task**: the full body as formatted markdown: headings, lists, task-list checkboxes (read-only), code, quotes, tables, links. Raw HTML in a body is shown as text; only `http` and `https` links are links, opened in your browser; images are not loaded but shown as links.
 - **Sub-tasks**: the children with their states (a click opens that task), and **Add sub-task** (a title and an optional type; Enter adds). Locally it is offered on open features (`spec.md`), since a ticket cannot have tickets; on GitHub on any open issue, which then becomes a parent.
-- **Settings**, collapsed by default: state and type, **Move to**, **Open on GitHub**, and the card's start options.
+- **Settings**, collapsed by default: **Open on GitHub** and the card's start options. It is hidden when it would be empty (a local task with no start options, such as a done one).
 
 Sections fold open and shut; which ones are open is remembered for every task in the extension's storage (key `detail-sections`, the default instance storage kept on the connected OpenChamber server, so every browser connected to it shares it).
 

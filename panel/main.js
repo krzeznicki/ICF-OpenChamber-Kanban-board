@@ -10715,6 +10715,7 @@ ${ref}`,
     const shell = openModalShell({ label: initial.task.title, onDismiss: () => callbacks.onDismiss() });
     const { modal } = shell;
     const head = el5("header", "kb-modal-head");
+    const quick = el5("div", "kb-quick");
     const open = { ...options.sections };
     const section = (key, title) => {
       const box = el5("details", "kb-section");
@@ -10739,12 +10740,13 @@ ${ref}`,
     const subList = el5("div", "kb-sheet-part");
     const addBox = el5("div", "kb-sheet-part kb-add-sub");
     subSec.content.append(subList, addBox);
-    modal.append(head, summarySec.box, taskSec.box, subSec.box, settingsSec.box);
+    modal.append(head, quick, summarySec.box, taskSec.box, subSec.box, settingsSec.box);
     let disposers = [];
     const clear = () => {
       for (const d of disposers) d();
       disposers = [];
       head.replaceChildren();
+      quick.replaceChildren();
       summarySec.content.replaceChildren();
       subList.replaceChildren();
       settingsTop.replaceChildren();
@@ -10872,13 +10874,13 @@ ${ref}`,
         }).dispose
       );
     };
-    const drawSettings = (m) => {
+    const drawQuick = (m) => {
       const { task } = m;
-      const fields = el5("div", "kb-fields");
+      const fields = el5("div", "kb-quick-fields");
       const stateSlot = el5("div", "kb-field");
       const typeSlot = el5("div", "kb-field");
       fields.append(stateSlot, typeSlot);
-      settingsTop.append(fields);
+      quick.append(fields);
       disposers.push(
         mountSelect(stateSlot, {
           label: "State",
@@ -10907,15 +10909,21 @@ ${ref}`,
         }).dispose
       );
       if (m.moves.length > 0) {
-        const moveRow = el5("div", "kb-actions kb-actions-start");
+        const moveRow = el5("div", "kb-actions kb-actions-start kb-quick-moves");
+        moveRow.setAttribute("role", "group");
+        moveRow.setAttribute("aria-label", "Move to");
         moveRow.append(el5("span", "kb-actions-label", "Move to"));
         for (const { to, label } of m.moves) {
           disposers.push(
             mountButton(moveRow, { label, variant: "outline", size: "xs", disabled: m.busy, onClick: () => callbacks.onMove(to) }).dispose
           );
         }
-        settingsTop.append(moveRow);
+        quick.append(moveRow);
       }
+    };
+    const drawSettings = (m) => {
+      const { task } = m;
+      settingsSec.box.hidden = task.url === null && m.start === null;
       const url = task.url;
       if (url !== null) {
         const actions = el5("div", "kb-actions kb-actions-start");
@@ -10951,6 +10959,7 @@ ${ref}`,
       modal.setAttribute("aria-label", m.task.title);
       modal.setAttribute("aria-busy", String(m.busy));
       drawHead(m);
+      drawQuick(m);
       drawSummary(m);
       drawTask(m);
       drawChildren(m);
@@ -12436,6 +12445,11 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
 .kb-modal-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.5rem; }
 .kb-modal-session { display: flex; align-items: center; gap: 0.5rem; }
 .kb-modal-session:empty { display: none; }
+.kb-quick { display: flex; flex-direction: column; gap: 0.5rem; padding: 0.75rem 0; border-bottom: 1px solid var(--oc-border); }
+.kb-quick:empty { display: none; }
+.kb-quick-fields { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.kb-quick-fields > .kb-field { flex: 1 1 8.5rem; }
+.kb-quick-moves { gap: 0.375rem; }
 .kb-section { border-bottom: 1px solid var(--oc-border); }
 .kb-section[hidden] { display: none; }
 .kb-section-head { cursor: pointer; font-weight: 600; font-size: 0.95em; padding: 0.75rem 0; user-select: none; }

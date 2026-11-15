@@ -1,10 +1,12 @@
 // The task modal, opened by a click on any card: reading first. A header (title, id, state and type
 // badges, ×, and "Open session" when the task has a session that may be opened, or "Session
-// archived"; "Unarchive" for a task archived by "Archive done"), then collapsible sections: Summary (the personal summary or a Summarise button), Task
-// (the body as formatted markdown, ui/markdownView.ts), Sub-tasks (a parent's children, a click
-// opens that task, and "Add sub-task" where addTask.ts allows it) and Settings, collapsed by
-// default: state and type selects, "Move to" buttons (the keyboard path for drag and drop; Done
-// asks about open sub-tasks), Open on GitHub, and the card's start options (ui/startOptions.ts).
+// archived"; "Unarchive" for a task archived by "Archive done"), then a compact row (always shown,
+// under the header, not sticky): state and type selects and "Move to" buttons (the keyboard path
+// for drag and drop; Done asks about open sub-tasks). Then collapsible sections: Summary (the
+// personal summary or a Summarise button), Task (the body as formatted markdown,
+// ui/markdownView.ts), Sub-tasks (a parent's children, a click opens that task, and "Add sub-task"
+// where addTask.ts allows it) and Settings, collapsed by default: Open on GitHub and the card's
+// start options (ui/startOptions.ts).
 // It sits on the shell it shares with Add task (ui/modal.ts). Which sections are open is
 // remembered (settings.ts Sections). It draws what it is given and reports choices; the editor
 // (edit.ts) runs them and asks to confirm.
@@ -116,6 +118,8 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
   const shell = openModalShell({ label: initial.task.title, onDismiss: () => callbacks.onDismiss() });
   const { modal } = shell;
   const head = el('header', 'kb-modal-head');
+  // State, Type and Move to: above the task text, outside the collapsible sections.
+  const quick = el('div', 'kb-quick');
 
   // The sections stay in place across updates (their open state, a focused start option field and
   // the reading position survive a reload); their contents redraw.
@@ -144,13 +148,14 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
   const subList = el('div', 'kb-sheet-part');
   const addBox = el('div', 'kb-sheet-part kb-add-sub');
   subSec.content.append(subList, addBox);
-  modal.append(head, summarySec.box, taskSec.box, subSec.box, settingsSec.box);
+  modal.append(head, quick, summarySec.box, taskSec.box, subSec.box, settingsSec.box);
 
   let disposers: Array<() => void> = [];
   const clear = (): void => {
     for (const d of disposers) d();
     disposers = [];
     head.replaceChildren();
+    quick.replaceChildren();
     summarySec.content.replaceChildren();
     subList.replaceChildren();
     settingsTop.replaceChildren();
@@ -296,13 +301,13 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
     );
   };
 
-  const drawSettings = (m: DetailModel): void => {
+  const drawQuick = (m: DetailModel): void => {
     const { task } = m;
-    const fields = el('div', 'kb-fields');
+    const fields = el('div', 'kb-quick-fields');
     const stateSlot = el('div', 'kb-field');
     const typeSlot = el('div', 'kb-field');
     fields.append(stateSlot, typeSlot);
-    settingsTop.append(fields);
+    quick.append(fields);
     disposers.push(
       mountSelect(stateSlot, {
         label: 'State',
@@ -332,16 +337,23 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
     );
 
     if (m.moves.length > 0) {
-      const moveRow = el('div', 'kb-actions kb-actions-start');
+      const moveRow = el('div', 'kb-actions kb-actions-start kb-quick-moves');
+      moveRow.setAttribute('role', 'group');
+      moveRow.setAttribute('aria-label', 'Move to');
       moveRow.append(el('span', 'kb-actions-label', 'Move to'));
       for (const { to, label } of m.moves) {
         disposers.push(
           mountButton(moveRow, { label, variant: 'outline', size: 'xs', disabled: m.busy, onClick: () => callbacks.onMove(to) }).dispose,
         );
       }
-      settingsTop.append(moveRow);
+      quick.append(moveRow);
     }
+  };
 
+  const drawSettings = (m: DetailModel): void => {
+    const { task } = m;
+    // Left with nothing (a local task without start options, e.g. done), the section hides.
+    settingsSec.box.hidden = task.url === null && m.start === null;
     const url = task.url;
     if (url !== null) {
       const actions = el('div', 'kb-actions kb-actions-start');
@@ -381,6 +393,7 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
     modal.setAttribute('aria-label', m.task.title);
     modal.setAttribute('aria-busy', String(m.busy));
     drawHead(m);
+    drawQuick(m);
     drawSummary(m);
     drawTask(m);
     drawChildren(m);

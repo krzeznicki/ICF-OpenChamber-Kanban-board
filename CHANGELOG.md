@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.0 (unreleased)
+
+- The task modal shows **State**, **Type** and **Move to** in a compact row right under the header, above Summary and Task, instead of inside the collapsed Settings section. Settings keeps Open on GitHub and the card's start options (still collapsed by default) and hides when it would be empty.
+
 ## 0.2.0 (unreleased)
 
 - Shown as **Kanban Board** (rail panel and full-screen page), with its own icon (`assets/kanban.svg`). The extension id stays `icf-kanban`, so settings and storage are kept.
