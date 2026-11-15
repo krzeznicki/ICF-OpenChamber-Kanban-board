@@ -1,5 +1,5 @@
 // Bundles the extension with esbuild. Outputs are committed: installing never builds.
-// Later tasks add entries below (panel -> IIFE, service and CLI -> ESM for Node).
+// Panel -> IIFE for the sandboxed iframe; service and CLI -> ESM for Node.
 import { build } from 'esbuild';
 import { chmodSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -12,7 +12,7 @@ const common = { bundle: true, logLevel: 'warning', legalComments: 'none', absWo
 
 /** @type {Array<{ name: string } & import('esbuild').BuildOptions>} */
 const entries = [
-  // { name: 'panel', entryPoints: ['src/panel/main.ts'], outfile: 'panel/main.js', format: 'iife', platform: 'browser', target: 'es2022' },
+  { name: 'panel', entryPoints: ['src/panel/main.ts'], outfile: 'panel/main.js', format: 'iife', platform: 'browser', target: 'es2022' },
   {
     name: 'service',
     entryPoints: ['src/service/main.ts'],

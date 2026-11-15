@@ -1,0 +1,152 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import type { GuestSessionRecord } from '@openchamber/sdk';
+import { columnFor, groupTasks, sessionForTask, type SessionInfo } from '../src/panel/columns.ts';
+import type { Task, TaskState } from '../src/core/types.ts';
+
+const task = (state: TaskState, id = '.scratch/f/issues/01-a.md'): Task => ({
+  id,
+  kind: 'ticket',
+  title: 'A',
+  body: '',
+  state,
+  type: null,
+  parentId: null,
+  blockedBy: [],
+  url: null,
+  updatedAt: 0,
+});
+
+const info = (activity: SessionInfo['activity'], outcome: SessionInfo['outcome'] = null): SessionInfo => ({
+  id: 's1',
+  activity,
+  outcome,
+  archived: false,
+});
+
+const record = (id: string, itemIds: string[], extra: Partial<GuestSessionRecord> = {}): GuestSessionRecord => ({
+  id,
+  title: id,
+  projectId: 'p1',
+  directory: '/repo',
+  parentId: null,
+  createdAt: 0,
+  updatedAt: 0,
+  archivedAt: null,
+  worktree: null,
+  activity: 'idle',
+  outcome: null,
+  items: itemIds.map((itemId) => ({ id: itemId })),
+  ...extra,
+});
+
+test('columnFor: a done task is done', () => {
+  assert.equal(columnFor(task('done'), null, false), 'done');
+});
+
+test('columnFor: a done task with a running session stays done', () => {
+  assert.equal(columnFor(task('done'), info('running'), true), 'done');
+});
+
+test('columnFor: a queued task is in progress', () => {
+  assert.equal(columnFor(task('needs-triage'), null, true), 'in_progress');
+});
+
+test('columnFor: a running session puts the task in progress', () => {
+  assert.equal(columnFor(task('ready-for-agent'), info('running'), false), 'in_progress');
+});
+
+test('columnFor: a retrying session puts the task in progress', () => {
+  assert.equal(columnFor(task('ready-for-agent'), info('retrying'), false), 'in_progress');
+});
+
+test('columnFor: a session waiting on permission puts the task in review', () => {
+  assert.equal(columnFor(task('ready-for-agent'), info('waiting-permission'), false), 'review');
+});
+
+test('columnFor: a session waiting on a question puts the task in review', () => {
+  assert.equal(columnFor(task('ready-for-agent'), info('waiting-question'), false), 'review');
+});
+
+test('columnFor: an idle session with an outcome puts the task in review', () => {
+  assert.equal(columnFor(task('ready-for-agent'), info('idle', 'completed'), false), 'review');
+  assert.equal(columnFor(task('ready-for-agent'), info('idle', 'failed'), false), 'review');
+});
+
+test('columnFor: an idle session without an outcome falls back to the state', () => {
+  assert.equal(columnFor(task('ready-for-agent'), info('idle'), false), 'ready');
+  assert.equal(columnFor(task('needs-info'), info('unknown'), false), 'backlog');
+});
+
+test('columnFor: ready-for-agent without a session is ready', () => {
+  assert.equal(columnFor(task('ready-for-agent'), null, false), 'ready');
+});
+
+test('columnFor: every other state without a session is backlog', () => {
+  for (const s of ['needs-triage', 'needs-info', 'ready-for-human', 'wontfix'] as const) {
+    assert.equal(columnFor(task(s), null, false), 'backlog', s);
+  }
+});
+
+test('sessionForTask: null when no session carries the task', () => {
+  assert.equal(sessionForTask('t1', [record('s1', ['other'])]), null);
+  assert.equal(sessionForTask('t1', []), null);
+});
+
+test('sessionForTask: maps the matching session to SessionInfo', () => {
+  const s = record('s1', ['t1'], { activity: 'running', outcome: null });
+  assert.deepEqual(sessionForTask('t1', [s]), { id: 's1', activity: 'running', outcome: null, archived: false });
+});
+
+test('sessionForTask: ignores archived sessions', () => {
+  const archived = record('old', ['t1'], { archivedAt: 5, createdAt: 10, activity: 'running' });
+  assert.equal(sessionForTask('t1', [archived]), null);
+  const live = record('live', ['t1'], { createdAt: 1, outcome: 'completed' });
+  assert.equal(sessionForTask('t1', [archived, live])?.id, 'live');
+});
+
+test('sessionForTask: picks the newest session', () => {
+  const older = record('older', ['t1'], { createdAt: 1 });
+  const newer = record('newer', ['x', 't1'], { createdAt: 2 });
+  assert.equal(sessionForTask('t1', [newer, older])?.id, 'newer');
+  assert.equal(sessionForTask('t1', [older, newer])?.id, 'newer');
+});
+
+const t = (id: string, state: TaskState, extra: Partial<Task> = {}): Task => ({ ...task(state, id), ...extra });
+const ids = (cards: { task: Task; child: boolean }[]): string[] => cards.map((c) => (c.child ? `  ${c.task.id}` : c.task.id));
+
+test('groupTasks: sorts by column, counts sub-tasks and puts children under their parent', () => {
+  const tasks = [
+    t('c1', 'needs-triage', { parentId: 'p' }),
+    t('p', 'needs-triage', { kind: 'parent' }),
+    t('c2', 'done', { parentId: 'p' }),
+    t('r', 'ready-for-agent'),
+    t('s', 'ready-for-agent'),
+  ];
+  const board = groupTasks(tasks, [record('s1', ['s'], { activity: 'running' })], new Set(), false);
+  assert.deepEqual(ids(board.backlog), ['p', '  c1']);
+  assert.deepEqual(ids(board.ready), ['r']);
+  assert.deepEqual(ids(board.in_progress), ['s']);
+  assert.deepEqual(ids(board.done), ['c2']);
+  assert.deepEqual(board.backlog[0]?.progress, { done: 1, total: 2 });
+  assert.equal(board.ready[0]?.progress, null);
+});
+
+test('groupTasks: queued ids go to in progress', () => {
+  const board = groupTasks([t('a', 'ready-for-agent')], [], new Set(['a']), false);
+  assert.deepEqual(ids(board.in_progress), ['a']);
+});
+
+test('groupTasks: hideSubtasks drops tasks with a parent but keeps the parent progress', () => {
+  const tasks = [t('p', 'needs-triage', { kind: 'parent' }), t('c', 'done', { parentId: 'p' })];
+  const board = groupTasks(tasks, [], new Set(), true);
+  assert.deepEqual(ids(board.backlog), ['p']);
+  assert.deepEqual(board.done, []);
+  assert.deepEqual(board.backlog[0]?.progress, { done: 1, total: 1 });
+});
+
+test('groupTasks: only listed, open blockers count', () => {
+  const tasks = [t('a', 'needs-triage', { blockedBy: ['b', 'd', 'gone'] }), t('b', 'needs-triage'), t('d', 'done')];
+  const board = groupTasks(tasks, [], new Set(), false);
+  assert.deepEqual(board.backlog.find((c) => c.task.id === 'a')?.blockers, ['b']);
+});
