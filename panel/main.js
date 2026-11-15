@@ -3472,7 +3472,7 @@ ${GUEST_UI_LOOK_CSS}`;
     }
     const custom = parsePresetList(r?.custom, SHIPPED_IDS);
     if (Object.keys(texts).length === 0 && custom.length === 0) return EMPTY_SETS;
-    return parseStoredSets({ builtin: { matt: { texts, custom }, plain: { texts, custom } }, custom: [] });
+    return parseStoredSets({ builtin: Object.fromEntries(BUILTIN_SETS.map((s) => [s.id, { texts, custom }])), custom: [] });
   };
   var isPristineSets = (stored2) => Object.keys(stored2.builtin).length === 0 && stored2.custom.length === 0;
   var listSets = (stored2) => [
@@ -4038,9 +4038,8 @@ ${ref}`,
       saveProject: (projectId, layer) => saveLayer(STORAGE_KEYS.project(projectId), layer),
       /**
        * The preset sets; 0.2's `presets` key, when still there, is migrated once (written as presetSets,
-       * then deleted). Its own presets went to the Matt and Plain sets only, so with the 0.2 toggle on
-       * (or unset) and no set chosen, the global set is pinned to Matt to keep them reachable (the
-       * default could be Superpowers). Load this before loadGlobal, which then reads the pin.
+       * then deleted). Its edits and own presets go to every built-in set, so no set is pinned: the
+       * default still follows what is installed.
        */
       loadPresets: async () => {
         const raw = await storage.get(STORAGE_KEYS.presetSets);
@@ -4049,11 +4048,6 @@ ${ref}`,
         if (old === void 0) return EMPTY_SETS;
         const migrated = migrateStoredPresets(old);
         if (!isPristineSets(migrated)) await storage.set(STORAGE_KEYS.presetSets, migrated);
-        if ((migrated.builtin.matt?.custom.length ?? 0) > 0) {
-          const globalRaw = await storage.get(STORAGE_KEYS.global);
-          const global = migrateGlobalLayer(globalRaw);
-          if (global.presetSet === void 0) await storage.set(STORAGE_KEYS.global, { ...global, presetSet: "matt" });
-        }
         await storage.delete(STORAGE_KEYS.presets);
         return migrated;
       },

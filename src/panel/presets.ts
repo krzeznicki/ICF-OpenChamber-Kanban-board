@@ -109,7 +109,8 @@ export const parseStoredSets = (raw: unknown): StoredSets => {
 
 /**
  * The 0.2 `presets` value ({ builtin: {id: text}, custom: [...] }) as sets. A 0.2 edit or own preset
- * applied whether or not Matt's skills were used, so it goes to both the Matt and the Plain set.
+ * applied whatever text was in use, so it goes to every built-in set: whichever set a project ends up
+ * with (the default follows what is installed), it runs what the user wrote and has their presets.
  */
 export const migrateStoredPresets = (raw: unknown): StoredSets => {
   const r = record(raw);
@@ -118,7 +119,7 @@ export const migrateStoredPresets = (raw: unknown): StoredSets => {
   if (b !== null) for (const [id, text] of Object.entries(b)) if (SHIPPED_IDS.has(id) && typeof text === 'string') texts[id] = text;
   const custom = parsePresetList(r?.custom, SHIPPED_IDS);
   if (Object.keys(texts).length === 0 && custom.length === 0) return EMPTY_SETS;
-  return parseStoredSets({ builtin: { matt: { texts, custom }, plain: { texts, custom } }, custom: [] });
+  return parseStoredSets({ builtin: Object.fromEntries(BUILTIN_SETS.map((s) => [s.id, { texts, custom }])), custom: [] });
 };
 
 /** True when nothing differs from the shipped sets; the storage key is then deleted. */

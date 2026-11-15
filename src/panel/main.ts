@@ -140,7 +140,6 @@ let globalLoaded = false;
 
 const loadGlobalSettings = async (): Promise<void> => {
   try {
-    // Presets first: migrating 0.2's presets may pin the global set, which loadGlobal then reads.
     const presets = await store.loadPresets();
     const global = await store.loadGlobal();
     state.globalSettings = global;

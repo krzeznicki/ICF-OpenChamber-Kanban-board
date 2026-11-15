@@ -337,10 +337,14 @@ test('parseStoredSets drops junk', () => {
   assert.deepEqual(parseStoredSets(undefined), EMPTY_SETS);
 });
 
-test('migrateStoredPresets: 0.2 edits and own presets go to the Matt and Plain sets (they applied to both)', () => {
+test('migrateStoredPresets: 0.2 edits and own presets go to every built-in set (they applied whatever text was used)', () => {
   const migrated = migrateStoredPresets({ builtin: { plan: 'P', nope: 'x' }, custom: [{ id: 'custom-a', name: 'A', text: 'a' }] });
-  const both = { texts: { plan: 'P' }, custom: [{ id: 'custom-a', name: 'A', text: 'a' }] };
-  assert.deepEqual(migrated, { builtin: { matt: both, plain: both }, custom: [] });
+  const all = { texts: { plan: 'P' }, custom: [{ id: 'custom-a', name: 'A', text: 'a' }] };
+  assert.deepEqual(migrated, { builtin: { matt: all, superpowers: all, plain: all }, custom: [] });
+  for (const s of BUILTIN_SETS) {
+    assert.equal(listPresets(migrated, s.id).find((p) => p.id === 'plan')!.text, 'P', `${s.id}: edited text`);
+    assert.ok(listPresets(migrated, s.id).some((p) => p.id === 'custom-a'), `${s.id}: own preset reachable`);
+  }
   assert.deepEqual(migrateStoredPresets(undefined), EMPTY_SETS);
   assert.deepEqual(migrateStoredPresets({ builtin: {}, custom: [] }), EMPTY_SETS);
 });
@@ -406,30 +410,26 @@ test('store: the old presets key is migrated once and deleted', async () => {
   assert.equal(other.data.size, 0);
 });
 
-test('store: migrated 0.2 own presets pin the global set to Matt (toggle on or unset), so they stay reachable', async () => {
-  const old = { builtin: {}, custom: [{ id: 'custom-a', name: 'A', text: 'a' }] };
+test('store: migrated 0.2 presets pin no set; the default set (by detection) has the edits and own presets', async () => {
+  const old = { builtin: { implement: 'Mine' }, custom: [{ id: 'custom-a', name: 'A', text: 'a' }] };
   const run = async (global: unknown) => {
     const { data, storage } = fakeStorage({ presets: old, ...(global === undefined ? {} : { 'settings:global': global }) });
     const store = createSettingsStore(storage);
-    await store.loadPresets();
-    return { global: await store.loadGlobal(), raw: data.get('settings:global') };
+    const loaded = await store.loadPresets();
+    return { loaded, global: await store.loadGlobal(), raw: data.get('settings:global'), has: data.has('settings:global') };
   };
-  assert.deepEqual((await run(undefined)).global, { presetSet: 'matt' });
-  assert.deepEqual((await run({ useMattSkills: true, maxParallel: 2 })).global, { maxParallel: 2, presetSet: 'matt' });
-  assert.deepEqual((await run({ useMattSkills: true })).raw, { presetSet: 'matt' }, 'written, without the old toggle');
-  // Toggle off: Plain, which has them too; a set already chosen stays.
+  const unset = await run(undefined);
+  assert.equal(unset.has, false, 'no global layer written');
+  assert.deepEqual(unset.global, {});
+  const on = await run({ useMattSkills: true, maxParallel: 2 });
+  assert.deepEqual(on.raw, { useMattSkills: true, maxParallel: 2 }, 'global layer left as stored');
+  assert.deepEqual(on.global, { maxParallel: 2 });
+  // With Superpowers installed (and Matt's not), the default is Superpowers: the 0.2 edit and own preset are used.
+  const setId = effectiveSetId(unset.loaded, [undefined, unset.global.presetSet], SP);
+  assert.equal(setId, 'superpowers');
+  assert.equal(pickPreset(listPresets(unset.loaded, setId), 'implement').text, 'Mine');
+  assert.equal(pickPreset(listPresets(unset.loaded, setId), 'custom-a').text, 'a');
+  // Toggle off still reads as Plain, which has them too; a set already chosen stays.
   assert.deepEqual((await run({ useMattSkills: false })).global, { presetSet: 'plain' });
   assert.deepEqual((await run({ presetSet: 'superpowers' })).global, { presetSet: 'superpowers' });
-  // Only text edits: no pin (the edits are in Matt and Plain, and the default picks among them or Superpowers).
-  const edits = fakeStorage({ presets: { builtin: { plan: 'P' }, custom: [] } });
-  const store = createSettingsStore(edits.storage);
-  await store.loadPresets();
-  assert.deepEqual(await store.loadGlobal(), {});
-  // Once migrated, a later load pins nothing again.
-  const again = fakeStorage({ presets: old });
-  const s2 = createSettingsStore(again.storage);
-  await s2.loadPresets();
-  await s2.saveGlobal({});
-  await s2.loadPresets();
-  assert.deepEqual(await s2.loadGlobal(), {});
 });
