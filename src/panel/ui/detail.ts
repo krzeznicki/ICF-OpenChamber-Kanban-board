@@ -1,12 +1,14 @@
-// The task detail: a side sheet over the board with the full body as plain text, state and type
+// The task detail: a side sheet over the board. The personal summary comes first (or a Summarise
+// button when there is none), the full body as plain text sits collapsed under "Full task"; then state and type
 // selects, "Move to" buttons (the keyboard path for drag and drop) and Close / Close with sub-tasks.
-// Below them, the card's start options (preset, model, agent, location), each unset field showing
+// Below them, the card's options (preset, model, agent, location, summary language), each unset field showing
 // what it inherits from the settings. It draws what it is given and reports choices; the editor (edit.ts) runs them and asks to confirm.
 import { mountBadge, mountButton, mountSelect, mountSpinner } from '@openchamber/sdk/ui';
 import type { Task, TaskState } from '../../core/types.ts';
 import type { Column } from '../columns.ts';
 import type { Preset } from '../presets.ts';
-import type { Location, StartOptions } from '../settings.ts';
+import type { CardOptions, Location, StartOptions } from '../settings.ts';
+import type { SummaryStatus } from '../summaries.ts';
 import { LOCATION_LABELS, mountInheritSelect, mountInheritText } from './settingsView.ts';
 
 export const STATES: readonly TaskState[] = ['needs-triage', 'needs-info', 'ready-for-agent', 'ready-for-human', 'wontfix', 'done'];
@@ -23,20 +25,34 @@ export type DetailModel = {
   busy: boolean;
   /** The card's start options; null hides the section (e.g. a done task). */
   start: StartModel | null;
+  /** The personal summary; null hides it (no project settings yet). */
+  summary: SummaryModel | null;
+};
+
+export type SummaryModel = {
+  /** The summary of the task's current body, or null. */
+  text: string | null;
+  status: SummaryStatus;
+  /** Summaries are generated on their own (the setting, and a model is there). */
+  auto: boolean;
 };
 
 export type StartModel = {
   presets: Preset[];
   /** What the card itself sets (stored under card:<projectId>:<taskId>). */
-  card: Partial<StartOptions>;
+  card: CardOptions;
   /** What the card would start with if it set nothing. */
   inherited: StartOptions;
+  /** The summary language from the settings, shown when the card sets none. */
+  summaryLanguage: string;
   /** Bumped when the stored card options were (re)loaded; the section then redraws. */
   version: number;
 };
 
 export type DetailCallbacks = {
-  onStartOptions: (card: Partial<StartOptions>) => void;
+  onStartOptions: (card: CardOptions) => void;
+  /** The Summarise button. */
+  onSummarise: () => void;
   onMove: (to: Column) => void;
   onState: (state: TaskState) => void;
   onType: (type: string) => void;
@@ -88,22 +104,24 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks): De
     const key =
       start === null
         ? null
-        : JSON.stringify([taskId, start.version, start.inherited, start.presets.map((p) => [p.id, p.name])]);
+        : JSON.stringify([taskId, start.version, start.inherited, start.summaryLanguage, start.presets.map((p) => [p.id, p.name])]);
     if (key === startKey) return;
     startKey = key;
     clearStart();
     startBox.hidden = start === null;
     if (start === null) return;
-    const card: Partial<StartOptions> = { ...start.card };
+    const card: CardOptions = { ...start.card };
     const emit = (): void => callbacks.onStartOptions({ ...card });
     const name = (id: string): string => start.presets.find((p) => p.id === id)?.name ?? id;
     startBox.append(el('h3', 'kb-settings-heading', 'Start options'));
     const row1 = el('div', 'kb-fields');
     const row2 = el('div', 'kb-fields');
-    const cells = [0, 1, 2, 3].map(() => el('div', 'kb-field'));
+    const row3 = el('div', 'kb-fields');
+    const cells = [0, 1, 2, 3, 4].map(() => el('div', 'kb-field'));
     row1.append(cells[0]!, cells[1]!);
     row2.append(cells[2]!, cells[3]!);
-    startBox.append(row1, row2);
+    row3.append(cells[4]!);
+    startBox.append(row1, row2, row3);
     mountInheritSelect(cells[0]!, startDisposers, {
       label: 'Preset',
       value: card.presetId,
@@ -146,6 +164,50 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks): De
         emit();
       },
     });
+    mountInheritText(cells[4]!, startDisposers, {
+      label: 'Summary language',
+      value: card.summaryLanguage,
+      placeholder: start.summaryLanguage,
+      resetLabel: 'Default',
+      onChange: (v) => {
+        if (v === undefined) delete card.summaryLanguage;
+        else card.summaryLanguage = v;
+        emit();
+      },
+    });
+  };
+
+  /** "Full task" stays as the user left it across redraws; until then it is open only without a summary. */
+  let fullOpen: boolean | null = null;
+
+  const drawSummary = (m: DetailModel): void => {
+    const sum = m.summary;
+    if (sum === null) return;
+    const box = el('section', 'kb-summary');
+    box.setAttribute('aria-label', 'Summary');
+    if (sum.text !== null) {
+      box.append(el('p', 'kb-summary-text', sum.text));
+    } else if (sum.status === 'pending') {
+      const note = el('p', 'kb-summary-note');
+      const spin = el('span', 'kb-inline-spin');
+      note.append(spin, document.createTextNode('Summarising…'));
+      disposers.push(mountSpinner(spin, { size: 'sm', label: 'Summarising' }).dispose);
+      box.append(note);
+    } else {
+      const why =
+        sum.status === 'failed'
+          ? 'The summary could not be written.'
+          : sum.status === 'unavailable'
+            ? 'No small model is available for summaries.'
+            : sum.auto
+              ? 'No summary yet.'
+              : 'Automatic summaries are off.';
+      box.append(el('p', 'kb-summary-note', why));
+      const slot = el('div', 'kb-actions kb-actions-start');
+      disposers.push(mountButton(slot, { label: 'Summarise', variant: 'outline', size: 'xs', onClick: callbacks.onSummarise }).dispose);
+      box.append(slot);
+    }
+    top.append(box);
   };
 
   const draw = (m: DetailModel): void => {
@@ -170,6 +232,7 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks): De
       disposers.push(mountSpinner(spin, { size: 'sm', label: 'Saving' }).dispose);
     }
     top.append(badges);
+    drawSummary(m);
 
     const meta = el('dl', 'kb-meta');
     const row = (term: string, value: string): void => {
@@ -254,7 +317,17 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks): De
     // Plain text: textContent never interprets the markdown or any HTML in it.
     const body = el('pre', 'kb-detail-body', task.body.trim() === '' ? 'No description.' : task.body);
     if (task.body.trim() === '') body.classList.add('is-empty');
-    bodyBox.append(body);
+    const full = el('details', 'kb-full-task');
+    full.append(el('summary', '', 'Full task'), body);
+    let shown = fullOpen ?? (m.summary === null || m.summary.text === null);
+    full.open = shown;
+    full.addEventListener('toggle', () => {
+      // Our own setting of `open` fires a toggle too; only a change from what we set is the user's.
+      if (full.open === shown) return;
+      shown = full.open;
+      fullOpen = shown;
+    });
+    bodyBox.append(full);
   };
 
   const onKey = (e: KeyboardEvent): void => {

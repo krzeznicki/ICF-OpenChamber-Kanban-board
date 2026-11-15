@@ -4,6 +4,7 @@
 // is attached to `columns` by the editor (ui/dnd.ts).
 import { mountBanner, mountButton, mountEmpty, mountSelect, mountSpinner, mountSwitch } from '@openchamber/sdk/ui';
 import type { BannerTone, SelectOption } from '@openchamber/sdk/ui';
+import type { Task } from '../../core/types.ts';
 import { COLUMNS, type BoardModel } from '../columns.ts';
 import { renderCard } from './card.ts';
 
@@ -112,7 +113,7 @@ export const createBoard = (root: HTMLElement, callbacks: BoardCallbacks) => {
       }
     },
     /** Draws the columns; null hides them (no project, no tracker, or an error). */
-    render: (board: BoardModel | null, busy: ReadonlySet<string> = new Set()) => {
+    render: (board: BoardModel | null, busy: ReadonlySet<string> = new Set(), summaryOf: (task: Task) => string | null = () => null) => {
       for (const d of cardDisposers) d();
       cardDisposers = [];
       columns.replaceChildren();
@@ -136,7 +137,7 @@ export const createBoard = (root: HTMLElement, callbacks: BoardCallbacks) => {
           list.append(none);
         }
         for (const model of cards) {
-          const card = renderCard(model, busy.has(model.task.id), callbacks.onDetails);
+          const card = renderCard(model, busy.has(model.task.id), callbacks.onDetails, summaryOf(model.task));
           list.append(card.node);
           cardDisposers.push(card.dispose);
         }

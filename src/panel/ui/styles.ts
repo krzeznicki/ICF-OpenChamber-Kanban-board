@@ -64,6 +64,12 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
 .kb-detail-body { margin: 0; padding: 0.75rem; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--oc-mono); font-size: 0.85em;
   background: var(--oc-muted-surface); border: 1px solid var(--oc-border); border-radius: var(--oc-radius); }
 .kb-detail-body.is-empty { color: var(--oc-muted); font-family: var(--oc-font); }
+.kb-card-summary { margin: 0; font-size: 0.85em; color: var(--oc-muted); overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden; }
+.kb-summary { display: flex; flex-direction: column; gap: 0.5rem; }
+.kb-summary-text { margin: 0; line-height: 1.5; overflow-wrap: anywhere; white-space: pre-wrap; }
+.kb-summary-note { margin: 0; color: var(--oc-muted); font-size: 0.85em; display: flex; align-items: center; gap: 0.5rem; }
+.kb-full-task > summary { cursor: pointer; color: var(--oc-muted); font-size: 0.85em; margin-bottom: 0.5rem; }
 .kb-confirm-backdrop { z-index: 70; justify-content: center; align-items: center; padding: 1rem; }
 .kb-confirm { width: min(26rem, 100%); display: flex; flex-direction: column; gap: 0.75rem; padding: 1rem;
   background: var(--oc-elevated); color: var(--oc-elevated-fg); border: 1px solid var(--oc-border); border-radius: var(--oc-radius); }

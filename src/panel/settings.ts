@@ -3,12 +3,15 @@
 // so they run under node:test; createSettingsStore is the only part that touches storage.
 import type { Task } from '../core/types.ts';
 import { BUILTIN_PRESETS, isPristine, parseStoredPresets, type Preset, type StoredPresets } from './presets.ts';
+import { DEFAULT_SUMMARY_PROMPT } from './summaries.ts';
 
 export type { Preset } from './presets.ts';
 
 export type Location = 'worktree' | 'project';
 export type StartOptions = { presetId: string; model: string | null; agent: string | null; location: Location };
 export type SummarySettings = { auto: boolean; language: string; prompt: string };
+/** What a card stores under card:<projectId>:<taskId>: its start options and its own summary language. */
+export type CardOptions = Partial<StartOptions> & { summaryLanguage?: string };
 export type Settings = {
   autoStart: boolean;
   maxParallel: number;
@@ -28,8 +31,8 @@ export type SettingsLayer = Partial<Omit<Settings, 'defaults' | 'summary'>> & {
   summary?: Partial<SummarySettings>;
 };
 
-/** Placeholder: Task 15 replaces it with the real default summary prompt. */
-export const DEFAULT_SUMMARY_PROMPT = 'Summarise this task in a few plain sentences: what is asked and why.';
+/** The default prompt lives with the summaries (summaries.ts); re-exported here for the settings. */
+export { DEFAULT_SUMMARY_PROMPT };
 
 export const MAX_PARALLEL_MIN = 1;
 export const MAX_PARALLEL_MAX = 10;
@@ -70,8 +73,13 @@ const startPatch = (raw: unknown): Partial<StartOptions> => {
   return out;
 };
 
-/** A card's stored start options; blank or null fields are dropped (they inherit). */
-export const parseCardOptions = (raw: unknown): Partial<StartOptions> => startPatch(raw);
+/** A card's stored options; blank or null fields are dropped (they inherit). */
+export const parseCardOptions = (raw: unknown): CardOptions => {
+  const out: CardOptions = startPatch(raw);
+  const language = text(record(raw)?.summaryLanguage);
+  if (language !== undefined) out.summaryLanguage = language;
+  return out;
+};
 
 /** A stored layer read defensively: anything of the wrong type is dropped, never thrown. */
 export const parseSettings = (raw: unknown): SettingsLayer => {
@@ -203,9 +211,9 @@ export const createSettingsStore = (storage: SettingsStorage) => {
       const clean = parseStoredPresets(stored);
       return put(STORAGE_KEYS.presets, clean, isPristine(clean));
     },
-    loadCard: async (projectId: string, taskId: string): Promise<Partial<StartOptions>> =>
+    loadCard: async (projectId: string, taskId: string): Promise<CardOptions> =>
       parseCardOptions(await storage.get(STORAGE_KEYS.card(projectId, taskId))),
-    saveCard: (projectId: string, taskId: string, card: Partial<StartOptions>): Promise<void> => {
+    saveCard: (projectId: string, taskId: string, card: CardOptions): Promise<void> => {
       const clean = parseCardOptions(card);
       return put(STORAGE_KEYS.card(projectId, taskId), clean, Object.keys(clean).length === 0);
     },

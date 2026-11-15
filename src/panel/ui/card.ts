@@ -1,7 +1,8 @@
 // One task card: title, id, badges (session, led by orchestrator, type, ready-for-human, wontfix, blocked) and, for a parent,
 // its done/total sub-tasks with a progress bar. Focusable: Enter opens it (its agent session when it
 // has one, else the detail), and a press starts a drag (ui/dnd.ts). A card with a session also has a
-// Details button for the detail sheet. A card whose move is in flight is drawn busy.
+// Details button for the detail sheet. A card whose move is in flight is drawn busy. Under the title,
+// the task's personal summary (summaries.ts) when there is one for its current body, cut to three lines.
 import { mountBadge, mountButton, mountProgress } from '@openchamber/sdk/ui';
 import type { Tone } from '@openchamber/sdk/ui';
 import type { CardModel, SessionInfo } from '../columns.ts';
@@ -28,7 +29,12 @@ export const sessionBadge = (s: SessionInfo): { label: string; tone: Tone } => {
 
 export type CardHandle = { node: HTMLElement; dispose: () => void };
 
-export const renderCard = (model: CardModel, busy = false, onDetails?: (taskId: string) => void): CardHandle => {
+export const renderCard = (
+  model: CardModel,
+  busy = false,
+  onDetails?: (taskId: string) => void,
+  summary: string | null = null,
+): CardHandle => {
   const { task } = model;
   const disposers: Array<() => void> = [];
   const node = document.createElement('article');
@@ -47,7 +53,15 @@ export const renderCard = (model: CardModel, busy = false, onDetails?: (taskId: 
   const id = document.createElement('div');
   id.className = 'kb-card-id';
   id.textContent = task.id;
-  node.append(title, id);
+  node.append(title);
+  if (summary !== null) {
+    const p = document.createElement('p');
+    p.className = 'kb-card-summary';
+    p.textContent = summary;
+    p.title = summary;
+    node.append(p);
+  }
+  node.append(id);
 
   const badges = document.createElement('div');
   badges.className = 'kb-badges';

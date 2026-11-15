@@ -2638,14 +2638,14 @@ ${GUEST_UI_LOOK_CSS}`;
     track.setAttribute("role", "progressbar");
     track.setAttribute("aria-valuemin", "0");
     track.setAttribute("aria-valuemax", "100");
-    const fill = el("div", "oc-sdk-progress-fill");
-    track.append(fill);
+    const fill2 = el("div", "oc-sdk-progress-fill");
+    track.append(fill2);
     node.append(caption, track);
     root.append(node);
     const paint = () => {
       const value = clampProgress(props.value);
-      applyTone(fill, props.tone);
-      fill.style.transform = `scaleX(${value / 100})`;
+      applyTone(fill2, props.tone);
+      fill2.style.transform = `scaleX(${value / 100})`;
       track.setAttribute("aria-valuenow", String(value));
       if (props.label)
         track.setAttribute("aria-label", props.label);
@@ -2975,8 +2975,261 @@ ${GUEST_UI_LOOK_CSS}`;
   };
   var deletePreset = (stored, id) => BUILTIN_IDS.has(id) ? stored : { ...stored, custom: stored.custom.filter((c) => c.id !== id) };
 
+  // src/panel/summaries.ts
+  var DEFAULT_SUMMARY_PROMPT = `Summarise this task for me in {language}, in 2 to 4 plain sentences: what changes for the user, why it matters, and what "done" means. No headings, no lists, no markdown. Write only the summary.
+
+Title: {title}
+
+{body}`;
+  var PROMPT_MAX = 64e3;
+  var MAX_OUTPUT_TOKENS = 400;
+  var TEXT_MAX = 2e3;
+  var MAX_KEY = 128;
+  var CONCURRENCY = 2;
+  var SUMMARY_SYSTEM = "You write short, plain summaries of software tasks for the person who will review them. Answer with the summary text only.";
+  var REF = "[icf-kanban-summary ";
+  var fnv = (s, basis) => {
+    let h = basis;
+    for (let i = 0; i < s.length; i++) {
+      h ^= s.charCodeAt(i);
+      h = Math.imul(h, 16777619);
+    }
+    return (h >>> 0).toString(16).padStart(8, "0");
+  };
+  var hash = (s) => fnv(s, 2166136261) + fnv(s, 84696351);
+  var taskPrefix = (projectId, taskId) => {
+    const plain = `summary:${projectId}:${taskId}:`;
+    return plain.length + 16 <= MAX_KEY ? plain : `summary:~${hash(JSON.stringify([projectId, taskId]))}:`;
+  };
+  var summaryKey = (projectId, task, s) => taskPrefix(projectId, task.id) + hash(JSON.stringify([task.body, s.language, s.prompt]));
+  var fill = (template, values) => template.replace(/\{(language|title|body)\}/g, (_, k) => values[k]);
+  var buildPrompt = (task, s) => {
+    const template = s.prompt.includes("{body}") ? s.prompt : `${s.prompt}
+
+Title: {title}
+
+{body}`;
+    const values = { language: s.language, title: task.title, body: "" };
+    const bodies = template.split("{body}").length - 1;
+    const budget = Math.max(0, Math.floor((PROMPT_MAX - fill(template, values).length) / bodies));
+    const cut = "\n[\u2026the rest is cut]";
+    const body = task.body.length <= budget ? task.body : `${task.body.slice(0, Math.max(0, budget - cut.length))}${cut}`;
+    return fill(template, { ...values, body }).slice(0, PROMPT_MAX);
+  };
+  var parseStored = (raw) => {
+    if (typeof raw !== "object" || raw === null) return null;
+    const r = raw;
+    return typeof r.text === "string" && r.text.trim() !== "" && typeof r.createdAt === "number" ? { text: r.text, createdAt: r.createdAt } : null;
+  };
+  var clean = (text2) => text2.trim().slice(0, TEXT_MAX);
+  var codeOf = (e) => typeof e === "object" && e !== null && typeof e.code === "string" ? e.code : null;
+  var UNAVAILABLE = /* @__PURE__ */ new Set(["NO_MODEL", "NOT_GRANTED"]);
+  var createSummaries = (deps) => {
+    const now = deps.now ?? Date.now;
+    const changed = (taskId) => deps.onChange?.(taskId);
+    const texts = /* @__PURE__ */ new Map();
+    const missing = /* @__PURE__ */ new Set();
+    const reads = /* @__PURE__ */ new Map();
+    const gens = /* @__PURE__ */ new Map();
+    const failed = /* @__PURE__ */ new Set();
+    const languages = /* @__PURE__ */ new Map();
+    let unavailable = false;
+    let noticed = false;
+    let active2 = 0;
+    const waiting = [];
+    const slot = async (fn) => {
+      if (active2 >= CONCURRENCY) await new Promise((resolve2) => waiting.push(resolve2));
+      else active2++;
+      try {
+        return await fn();
+      } finally {
+        const next = waiting.shift();
+        if (next !== void 0) next();
+        else active2--;
+      }
+    };
+    const langKey = (projectId, taskId) => `${projectId}\0${taskId}`;
+    const effective = (task) => {
+      const ctx = deps.context();
+      if (ctx === null) return null;
+      const k = langKey(ctx.projectId, task.id);
+      if (deps.loadLanguage !== void 0 && !languages.has(k)) return null;
+      const own = languages.get(k);
+      return { projectId: ctx.projectId, summary: own === void 0 ? ctx.summary : { ...ctx.summary, language: own } };
+    };
+    const resolve = async (task) => {
+      const ctx = deps.context();
+      if (ctx === null) return null;
+      const k = langKey(ctx.projectId, task.id);
+      if (deps.loadLanguage !== void 0 && !languages.has(k)) {
+        let lang;
+        try {
+          lang = (await deps.loadLanguage(ctx.projectId, task.id))?.trim() || void 0;
+        } catch {
+          lang = void 0;
+        }
+        if (!languages.has(k)) languages.set(k, lang);
+      }
+      const eff = effective(task);
+      return eff === null ? null : { key: summaryKey(eff.projectId, task, eff.summary), ...eff };
+    };
+    const readStored = (key, taskId) => {
+      const known = texts.get(key);
+      if (known !== void 0) return Promise.resolve(known);
+      if (missing.has(key)) return Promise.resolve(null);
+      let p = reads.get(key);
+      if (p === void 0) {
+        p = (async () => {
+          try {
+            const stored = parseStored(await deps.storage.get(key));
+            if (stored !== null) {
+              if (!texts.has(key)) {
+                texts.set(key, stored.text);
+                changed(taskId);
+              }
+              return texts.get(key) ?? stored.text;
+            }
+          } catch {
+          }
+          missing.add(key);
+          return texts.get(key) ?? null;
+        })().finally(() => reads.delete(key));
+        reads.set(key, p);
+      }
+      return p;
+    };
+    const store2 = async (key, prefix, text2) => {
+      try {
+        await deps.storage.set(key, { text: text2, createdAt: now() });
+        if (prefix === null || deps.storage.keys === void 0) return;
+        const old = (await deps.storage.keys()).filter((k) => k !== key && k.startsWith(prefix));
+        for (const k of old) await deps.storage.delete(k);
+      } catch {
+      }
+    };
+    const generate = (task, key, projectId, s, force) => {
+      const p = slot(async () => {
+        if (unavailable && !force) return null;
+        const known = texts.get(key);
+        if (known !== void 0) return known;
+        try {
+          const ref = `${REF}${JSON.stringify({ key, task: task.id, project: projectId })}]`;
+          const answer = await deps.generate({
+            prompt: buildPrompt(task, s),
+            system: `${SUMMARY_SYSTEM}
+${ref}`,
+            maxOutputTokens: MAX_OUTPUT_TOKENS
+          });
+          const text2 = clean(answer.text);
+          if (text2 === "") {
+            failed.add(key);
+            return null;
+          }
+          failed.delete(key);
+          unavailable = false;
+          texts.set(key, text2);
+          await store2(key, taskPrefix(projectId, task.id), text2);
+          return text2;
+        } catch (e) {
+          const code = codeOf(e);
+          if (code !== null && UNAVAILABLE.has(code)) {
+            unavailable = true;
+            if (!noticed) {
+              noticed = true;
+              deps.onUnavailable?.(code);
+            }
+          } else {
+            failed.add(key);
+          }
+          return null;
+        }
+      }).finally(() => {
+        gens.delete(key);
+        changed(task.id);
+      });
+      gens.set(key, p);
+      changed(task.id);
+      return p;
+    };
+    const ensure = async (task, force = false) => {
+      const r = await resolve(task);
+      if (r === null) return null;
+      const stored = await readStored(r.key, task.id);
+      if (stored !== null) return stored;
+      const running = gens.get(r.key);
+      if (running !== void 0) return running;
+      if (!force && (failed.has(r.key) || unavailable)) return null;
+      return generate(task, r.key, r.projectId, r.summary, force);
+    };
+    const keyNow = (task) => {
+      const eff = effective(task);
+      return eff === null ? null : summaryKey(eff.projectId, task, eff.summary);
+    };
+    return {
+      /** The summary for the task as it is now (its current body), or null. Never generates. */
+      get: (task) => {
+        const key = keyNow(task);
+        return key === null ? null : texts.get(key) ?? null;
+      },
+      status: (task) => {
+        const key = keyNow(task);
+        if (key === null) return "none";
+        if (texts.has(key)) return "ready";
+        if (gens.has(key)) return "pending";
+        if (failed.has(key)) return "failed";
+        return unavailable ? "unavailable" : "none";
+      },
+      /** Reads a stored summary (and the card's language); never generates. */
+      load: async (task) => {
+        const r = await resolve(task);
+        return r === null ? null : readStored(r.key, task.id);
+      },
+      /** The stored summary, else a new one; not after a failure for this body or a missing model. */
+      ensure: (task) => ensure(task),
+      /** The Summarise button: tries again even after a failure or a missing model. */
+      summarise: (task) => {
+        const key = keyNow(task);
+        if (key !== null) failed.delete(key);
+        return ensure(task, true);
+      },
+      /** Whether summaries are generated on their own: the setting, unless the model is missing. */
+      auto: () => (deps.context()?.summary.auto ?? false) && !unavailable,
+      /** The card's language was edited (undefined: back to the settings). */
+      setLanguage: (projectId, taskId, language) => {
+        languages.set(langKey(projectId, taskId), language?.trim() || void 0);
+        changed(taskId);
+      },
+      /** An answer that arrived after the frame that asked was gone. True when it was one of ours. */
+      acceptLate: (late) => {
+        const system = late.request.system ?? "";
+        if (!system.startsWith(SUMMARY_SYSTEM)) return false;
+        const at = system.lastIndexOf(REF);
+        if (at < 0 || !system.endsWith("]")) return false;
+        let ref;
+        try {
+          ref = JSON.parse(system.slice(at + REF.length, -1));
+        } catch {
+          return false;
+        }
+        if (typeof ref.key !== "string" || !ref.key.startsWith("summary:") || ref.key.length > MAX_KEY || typeof ref.task !== "string") {
+          return false;
+        }
+        if (!late.ok) return true;
+        const text2 = clean(late.result.text);
+        if (text2 === "") return true;
+        const key = ref.key;
+        const taskId = ref.task;
+        texts.set(key, text2);
+        missing.delete(key);
+        failed.delete(key);
+        void store2(key, null, text2).then(() => changed(taskId));
+        changed(taskId);
+        return true;
+      }
+    };
+  };
+
   // src/panel/settings.ts
-  var DEFAULT_SUMMARY_PROMPT = "Summarise this task in a few plain sentences: what is asked and why.";
   var MAX_PARALLEL_MIN = 1;
   var MAX_PARALLEL_MAX = 10;
   var FALLBACK_PRESET_ID = "implement";
@@ -3006,7 +3259,12 @@ ${GUEST_UI_LOOK_CSS}`;
     if (r.location === "worktree" || r.location === "project") out.location = r.location;
     return out;
   };
-  var parseCardOptions = (raw) => startPatch(raw);
+  var parseCardOptions = (raw) => {
+    const out = startPatch(raw);
+    const language = text(record2(raw)?.summaryLanguage);
+    if (language !== void 0) out.summaryLanguage = language;
+    return out;
+  };
   var parseSettings = (raw) => {
     const r = record2(raw);
     const out = {};
@@ -3067,8 +3325,8 @@ ${GUEST_UI_LOOK_CSS}`;
       location: c.location ?? s.defaults.location
     };
   };
-  var MAX_KEY = 128;
-  var fnv = (s) => {
+  var MAX_KEY2 = 128;
+  var fnv2 = (s) => {
     let h = 2166136261;
     for (let i = 0; i < s.length; i++) {
       h ^= s.charCodeAt(i);
@@ -3076,7 +3334,7 @@ ${GUEST_UI_LOOK_CSS}`;
     }
     return (h >>> 0).toString(16).padStart(8, "0");
   };
-  var fit = (key) => key.length <= MAX_KEY ? key : `${key.slice(0, MAX_KEY - 9)}~${fnv(key)}`;
+  var fit = (key) => key.length <= MAX_KEY2 ? key : `${key.slice(0, MAX_KEY2 - 9)}~${fnv2(key)}`;
   var STORAGE_KEYS = {
     global: "settings:global",
     project: (projectId) => fit(`settings:project:${projectId}`),
@@ -3090,8 +3348,8 @@ ${GUEST_UI_LOOK_CSS}`;
       else await storage.set(key, value);
     };
     const saveLayer = (key, layer) => {
-      const clean = parseSettings(layer);
-      return put(key, clean, isEmptyLayer(clean));
+      const clean2 = parseSettings(layer);
+      return put(key, clean2, isEmptyLayer(clean2));
     };
     return {
       loadGlobal: async () => parseSettings(await storage.get(STORAGE_KEYS.global)),
@@ -3100,13 +3358,13 @@ ${GUEST_UI_LOOK_CSS}`;
       saveProject: (projectId, layer) => saveLayer(STORAGE_KEYS.project(projectId), layer),
       loadPresets: async () => parseStoredPresets(await storage.get(STORAGE_KEYS.presets)),
       savePresets: (stored) => {
-        const clean = parseStoredPresets(stored);
-        return put(STORAGE_KEYS.presets, clean, isPristine(clean));
+        const clean2 = parseStoredPresets(stored);
+        return put(STORAGE_KEYS.presets, clean2, isPristine(clean2));
       },
       loadCard: async (projectId, taskId) => parseCardOptions(await storage.get(STORAGE_KEYS.card(projectId, taskId))),
       saveCard: (projectId, taskId, card) => {
-        const clean = parseCardOptions(card);
-        return put(STORAGE_KEYS.card(projectId, taskId), clean, Object.keys(clean).length === 0);
+        const clean2 = parseCardOptions(card);
+        return put(STORAGE_KEYS.card(projectId, taskId), clean2, Object.keys(clean2).length === 0);
       }
     };
   };
@@ -3759,7 +4017,7 @@ ${GUEST_UI_LOOK_CSS}`;
       startBox.replaceChildren();
     };
     const drawStart = (taskId, start2) => {
-      const key = start2 === null ? null : JSON.stringify([taskId, start2.version, start2.inherited, start2.presets.map((p) => [p.id, p.name])]);
+      const key = start2 === null ? null : JSON.stringify([taskId, start2.version, start2.inherited, start2.summaryLanguage, start2.presets.map((p) => [p.id, p.name])]);
       if (key === startKey) return;
       startKey = key;
       clearStart();
@@ -3771,10 +4029,12 @@ ${GUEST_UI_LOOK_CSS}`;
       startBox.append(el3("h3", "kb-settings-heading", "Start options"));
       const row1 = el3("div", "kb-fields");
       const row2 = el3("div", "kb-fields");
-      const cells = [0, 1, 2, 3].map(() => el3("div", "kb-field"));
+      const row3 = el3("div", "kb-fields");
+      const cells = [0, 1, 2, 3, 4].map(() => el3("div", "kb-field"));
       row1.append(cells[0], cells[1]);
       row2.append(cells[2], cells[3]);
-      startBox.append(row1, row2);
+      row3.append(cells[4]);
+      startBox.append(row1, row2, row3);
       mountInheritSelect(cells[0], startDisposers, {
         label: "Preset",
         value: card.presetId,
@@ -3817,6 +4077,40 @@ ${GUEST_UI_LOOK_CSS}`;
           emit();
         }
       });
+      mountInheritText(cells[4], startDisposers, {
+        label: "Summary language",
+        value: card.summaryLanguage,
+        placeholder: start2.summaryLanguage,
+        resetLabel: "Default",
+        onChange: (v2) => {
+          if (v2 === void 0) delete card.summaryLanguage;
+          else card.summaryLanguage = v2;
+          emit();
+        }
+      });
+    };
+    let fullOpen = null;
+    const drawSummary = (m) => {
+      const sum = m.summary;
+      if (sum === null) return;
+      const box = el3("section", "kb-summary");
+      box.setAttribute("aria-label", "Summary");
+      if (sum.text !== null) {
+        box.append(el3("p", "kb-summary-text", sum.text));
+      } else if (sum.status === "pending") {
+        const note = el3("p", "kb-summary-note");
+        const spin = el3("span", "kb-inline-spin");
+        note.append(spin, document.createTextNode("Summarising\u2026"));
+        disposers.push(mountSpinner(spin, { size: "sm", label: "Summarising" }).dispose);
+        box.append(note);
+      } else {
+        const why = sum.status === "failed" ? "The summary could not be written." : sum.status === "unavailable" ? "No small model is available for summaries." : sum.auto ? "No summary yet." : "Automatic summaries are off.";
+        box.append(el3("p", "kb-summary-note", why));
+        const slot = el3("div", "kb-actions kb-actions-start");
+        disposers.push(mountButton(slot, { label: "Summarise", variant: "outline", size: "xs", onClick: callbacks.onSummarise }).dispose);
+        box.append(slot);
+      }
+      top.append(box);
     };
     const draw2 = (m) => {
       clear();
@@ -3838,6 +4132,7 @@ ${GUEST_UI_LOOK_CSS}`;
         disposers.push(mountSpinner(spin, { size: "sm", label: "Saving" }).dispose);
       }
       top.append(badges);
+      drawSummary(m);
       const meta = el3("dl", "kb-meta");
       const row = (term, value) => {
         meta.append(el3("dt", "", term), el3("dd", "", value));
@@ -3915,7 +4210,16 @@ ${GUEST_UI_LOOK_CSS}`;
       drawStart(task.id, m.start);
       const body = el3("pre", "kb-detail-body", task.body.trim() === "" ? "No description." : task.body);
       if (task.body.trim() === "") body.classList.add("is-empty");
-      bodyBox.append(body);
+      const full = el3("details", "kb-full-task");
+      full.append(el3("summary", "", "Full task"), body);
+      let shown = fullOpen ?? (m.summary === null || m.summary.text === null);
+      full.open = shown;
+      full.addEventListener("toggle", () => {
+        if (full.open === shown) return;
+        shown = full.open;
+        fullOpen = shown;
+      });
+      bodyBox.append(full);
     };
     const onKey = (e) => {
       if (e.key === "Escape" && !e.defaultPrevented) callbacks.onDismiss();
@@ -4136,8 +4440,10 @@ ${GUEST_UI_LOOK_CSS}`;
           presets: ctx.presets,
           card: mine?.options ?? {},
           inherited: resolveStart(ctx.settings, task, {}, ctx.presets),
+          summaryLanguage: ctx.settings.summary.language,
           version: mine?.version ?? -1
-        }
+        },
+        summary: deps.summary.model(task)
       };
     };
     const loadCard = (taskId) => {
@@ -4233,8 +4539,14 @@ ${GUEST_UI_LOOK_CSS}`;
       const handle = openDetail(detailModel(task), {
         onStartOptions: (options) => {
           if (card === null || card.taskId !== id) return;
+          const languageChanged = options.summaryLanguage !== card.options.summaryLanguage;
           card.options = options;
           deps.start.save(card.projectId, id, options);
+          if (languageChanged) deps.summary.onLanguage(card.projectId, id, options.summaryLanguage);
+        },
+        onSummarise: () => {
+          const t = find(id);
+          if (t !== null) deps.summary.summarise(t);
         },
         onMove: (to) => {
           const t = find(id);
@@ -4434,11 +4746,11 @@ ${GUEST_UI_LOOK_CSS}`;
   };
 
   // src/panel/prompt.ts
-  var PROMPT_MAX = GUEST_ATTACH_TEXT_MAX;
+  var PROMPT_MAX2 = GUEST_ATTACH_TEXT_MAX;
   var STATES2 = "needs-triage, needs-info, ready-for-agent, ready-for-human, wontfix, done";
   var shellWord = (s) => /^[A-Za-z0-9_./:@%+=,-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`;
   var isGithub = (task) => task.url !== null || /^#\d+$/.test(task.id);
-  var buildPrompt = (task, preset, cliPath, children) => {
+  var buildPrompt2 = (task, preset, cliPath, children) => {
     const cli = `node ${shellWord(cliPath)}`;
     const id = shellWord(task.id);
     const head = [`# Task: ${task.title}`, `Id: ${task.id}`, ...task.url !== null ? [`URL: ${task.url}`] : []].join("\n");
@@ -4461,15 +4773,15 @@ ${preset.text.trim()}`;
     const body = task.body.trim() === "" ? "No description." : task.body.trim();
     const compose = (b) => [head, b, tracker, kids, instructions].filter((part) => part !== "").join("\n\n");
     const full = compose(body);
-    if (full.length <= PROMPT_MAX) return full;
+    if (full.length <= PROMPT_MAX2) return full;
     const note = `[\u2026] The description is cut here; read the full task with the CLI: ${cli} show ${id}`;
-    const room = PROMPT_MAX - compose(`
+    const room = PROMPT_MAX2 - compose(`
 
 ${note}`).length;
     const cut = room > 0 ? `${body.slice(0, room).trimEnd()}
 
 ${note}` : note;
-    return compose(cut).slice(0, PROMPT_MAX);
+    return compose(cut).slice(0, PROMPT_MAX2);
   };
 
   // src/panel/ui/startForm.ts
@@ -4660,7 +4972,7 @@ ${note}` : note;
       const preset = presets.find((x) => x.id === opts.presetId) ?? presets.find((x) => x.id === "implement") ?? presets[0];
       if (preset === void 0) throw new Error("Settings are loading, try again in a moment");
       const children = (deps.tasks() ?? []).filter((t) => t.parentId === task.id);
-      return buildPrompt(task, preset, await cliPath(p.directory), children);
+      return buildPrompt2(task, preset, await cliPath(p.directory), children);
     };
     const isStarting = /* @__PURE__ */ new Set();
     const launcher = createLauncher({
@@ -4877,7 +5189,7 @@ ${note}` : note;
         return s.outcome === "failed" ? { label: "agent failed", tone: "error" } : s.outcome === "completed" ? { label: "agent finished", tone: "success" } : { label: "agent idle", tone: "neutral" };
     }
   };
-  var renderCard = (model, busy = false, onDetails) => {
+  var renderCard = (model, busy = false, onDetails, summary = null) => {
     const { task } = model;
     const disposers = [];
     const node = document.createElement("article");
@@ -4895,7 +5207,15 @@ ${note}` : note;
     const id = document.createElement("div");
     id.className = "kb-card-id";
     id.textContent = task.id;
-    node.append(title, id);
+    node.append(title);
+    if (summary !== null) {
+      const p = document.createElement("p");
+      p.className = "kb-card-summary";
+      p.textContent = summary;
+      p.title = summary;
+      node.append(p);
+    }
+    node.append(id);
     const badges = document.createElement("div");
     badges.className = "kb-badges";
     const badge2 = (label, tone2) => {
@@ -5038,7 +5358,7 @@ ${note}` : note;
         }
       },
       /** Draws the columns; null hides them (no project, no tracker, or an error). */
-      render: (board2, busy = /* @__PURE__ */ new Set()) => {
+      render: (board2, busy = /* @__PURE__ */ new Set(), summaryOf = () => null) => {
         for (const d of cardDisposers) d();
         cardDisposers = [];
         columns.replaceChildren();
@@ -5062,7 +5382,7 @@ ${note}` : note;
             list.append(none);
           }
           for (const model of cards) {
-            const card = renderCard(model, busy.has(model.task.id), callbacks.onDetails);
+            const card = renderCard(model, busy.has(model.task.id), callbacks.onDetails, summaryOf(model.task));
             list.append(card.node);
             cardDisposers.push(card.dispose);
           }
@@ -5145,6 +5465,12 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
 .kb-detail-body { margin: 0; padding: 0.75rem; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--oc-mono); font-size: 0.85em;
   background: var(--oc-muted-surface); border: 1px solid var(--oc-border); border-radius: var(--oc-radius); }
 .kb-detail-body.is-empty { color: var(--oc-muted); font-family: var(--oc-font); }
+.kb-card-summary { margin: 0; font-size: 0.85em; color: var(--oc-muted); overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden; }
+.kb-summary { display: flex; flex-direction: column; gap: 0.5rem; }
+.kb-summary-text { margin: 0; line-height: 1.5; overflow-wrap: anywhere; white-space: pre-wrap; }
+.kb-summary-note { margin: 0; color: var(--oc-muted); font-size: 0.85em; display: flex; align-items: center; gap: 0.5rem; }
+.kb-full-task > summary { cursor: pointer; color: var(--oc-muted); font-size: 0.85em; margin-bottom: 0.5rem; }
 .kb-confirm-backdrop { z-index: 70; justify-content: center; align-items: center; padding: 1rem; }
 .kb-confirm { width: min(26rem, 100%); display: flex; flex-direction: column; gap: 0.75rem; padding: 1rem;
   background: var(--oc-elevated); color: var(--oc-elevated-fg); border: 1px solid var(--oc-border); border-radius: var(--oc-radius); }
@@ -5236,6 +5562,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
 
   // src/panel/main.ts
   var POLL_MS = 6e4;
+  var SUMMARY_SETTLE_MS = 1500;
   var host = connectHost();
   var state = {
     projects: [],
@@ -5270,6 +5597,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
       state.presets = presets;
       globalLoaded = true;
       applySettings();
+      summariseShown();
     } catch (e) {
       fail(`Could not read the settings: ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -5292,9 +5620,10 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     if (hide !== state.hideSubtasks) {
       state.hideSubtasks = hide;
       board.setHideSubtasks(hide);
-      draw();
     }
+    draw();
     editor.refresh();
+    summarySettingsChanged();
   };
   var loadProjectSettings = async (id) => {
     try {
@@ -5309,6 +5638,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
       fail(`Could not read the project settings: ${e instanceof Error ? e.message : String(e)}`);
     }
     applySettings();
+    summariseShown();
   };
   var saveProjectSettings = (id, layer) => {
     if (state.settingsFor === id) state.projectSettings = layer;
@@ -5318,6 +5648,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     const sheet = settingsSheet;
     settingsSheet = null;
     sheet?.dispose();
+    if (sheet !== null) summariseShown();
   };
   var showSettings = () => {
     closeSettings();
@@ -5376,7 +5707,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     const model = groupTasks(state.tasks, state.sessions, starter.isStarting, state.hideSubtasks, starter.links(), starter.queuedIds(), starter.queueErrors());
     for (const [column, cards] of Object.entries(model)) for (const c of cards) state.columns.set(c.task.id, column);
     setBadge(model.review.length || null);
-    board.render(model, editor.busy);
+    board.render(model, editor.busy, (task) => summaries.get(task));
     if (state.tasks.length === 0) {
       board.setStatus({
         kind: "empty",
@@ -5477,6 +5808,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
       state.view = "board";
       draw();
       editor.refresh();
+      summariseShown();
       starter.onSnapshot();
     } catch (e) {
       if (mine !== generation) return;
@@ -5523,6 +5855,49 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     if (state.pinned && current !== null) return;
     const next = projectFor(state.hostDirectory) ?? current ?? state.projects[0] ?? null;
     void selectProject(next?.id ?? null);
+  };
+  var summaryRedraw = false;
+  var summaryChanged = () => {
+    if (summaryRedraw) return;
+    summaryRedraw = true;
+    setTimeout(() => {
+      summaryRedraw = false;
+      draw();
+      editor.refresh();
+    }, 50);
+  };
+  var summaries = createSummaries({
+    generate: (request) => host.generate(request),
+    storage: host.storage,
+    // Only once the shown project's settings are in: a summary in the wrong language is wasted.
+    context: () => {
+      const id = state.projectId;
+      return id === null || !globalLoaded || state.settingsFor !== id ? null : { projectId: id, summary: settings().summary };
+    },
+    loadLanguage: async (projectId, taskId) => (await store.loadCard(projectId, taskId)).summaryLanguage,
+    onChange: summaryChanged,
+    onUnavailable: (code) => void host.toast({
+      kind: "info",
+      message: code === "NOT_GRANTED" ? "Summaries need the \u201Cmodel\u201D permission for ICF-kanban (Settings \u2192 Extensions). Automatic summaries are off for now." : "No small model is set, so automatic summaries are off for now. Choose a Small Model in OpenChamber settings, then press Summarise in a task."
+    }).catch(() => {
+    })
+  });
+  var summariseShown = (generate = true) => {
+    if (state.tasks === null) return;
+    const auto = generate && summaries.auto();
+    for (const task of state.tasks) {
+      const column = state.columns.get(task.id);
+      if (column === void 0 || column === "done") continue;
+      void (auto ? summaries.ensure(task) : summaries.load(task));
+    }
+  };
+  var summarySettle = null;
+  var summarySettingsChanged = () => {
+    if (summarySettle !== null) clearTimeout(summarySettle);
+    summarySettle = setTimeout(() => {
+      summarySettle = null;
+      summariseShown(false);
+    }, SUMMARY_SETTLE_MS);
   };
   var errorText4 = (e) => e instanceof Error ? e.message : String(e);
   var startContext = () => {
@@ -5585,8 +5960,14 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
         context: startContext,
         load: (projectId, taskId) => store.loadCard(projectId, taskId),
         save: (projectId, taskId, card) => saver.save(`card:${projectId}:${taskId}`, () => store.saveCard(projectId, taskId, card))
+      },
+      summary: {
+        model: (task) => startContext() === null ? null : { text: summaries.get(task), status: summaries.status(task), auto: summaries.auto() },
+        summarise: (task) => void summaries.summarise(task),
+        onLanguage: (projectId, taskId, language) => summaries.setLanguage(projectId, taskId, language)
       }
     });
+    if (ctx.features?.lateGenerateResults === true) host.onLateGenerateResult((late) => void summaries.acceptLate(late));
     void loadGlobalSettings();
     board.setStatus({ kind: "loading" });
     host.onDirectory((dir) => {

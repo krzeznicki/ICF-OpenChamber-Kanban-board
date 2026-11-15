@@ -3,7 +3,8 @@
 // Data: projects and sessions from the host, tasks from our service via host.serviceRequest.
 // Writes (drag and drop, detail, Add task) live in edit.ts; a drop on In Progress goes to starter.ts:
 // it starts an agent session (or queues it over the limit) and the card then follows that session. Settings (global, per project, presets, per card) come from the
-// extension's storage through settings.ts and are edited in the Settings sheet.
+// extension's storage through settings.ts and are edited in the Settings sheet. Personal summaries
+// (summaries.ts) are read or generated for the shown cards after each load.
 import { connectHost } from '@openchamber/sdk';
 import type { GuestProject, GuestSessionRecord, HostReadyContext } from '@openchamber/sdk';
 import { applyHostReady } from '@openchamber/sdk/ui';
@@ -21,6 +22,7 @@ import {
 } from './settings.ts';
 import { defaultChoice, loadNotice, setupOutcome, type ApiFailure, type NoticeModel, type TrackerChoice } from './setup.ts';
 import { createStarter } from './starter.ts';
+import { createSummaries } from './summaries.ts';
 import { createBoard, type Board } from './ui/board.ts';
 import { mountNotice } from './ui/notice.ts';
 import { openSettings } from './ui/settingsView.ts';
@@ -28,6 +30,8 @@ import { injectStyles } from './ui/styles.ts';
 import { mountWizard } from './ui/wizard.ts';
 
 const POLL_MS = 60_000;
+/** After a settings edit, stored summaries for the new language or prompt are read once typing stops. */
+const SUMMARY_SETTLE_MS = 1_500;
 
 const host = connectHost();
 
@@ -90,6 +94,7 @@ const loadGlobalSettings = async (): Promise<void> => {
     state.presets = presets;
     globalLoaded = true;
     applySettings();
+    summariseShown(); // tasks may have loaded before the settings
   } catch (e) {
     fail(`Could not read the settings: ${e instanceof Error ? e.message : String(e)}`);
   }
@@ -121,9 +126,13 @@ const applySettings = (): void => {
   if (hide !== state.hideSubtasks) {
     state.hideSubtasks = hide;
     board.setHideSubtasks(hide);
-    draw();
   }
+  // A new summary language or prompt is a new key: the cards drop the old text at once.
+  draw();
   editor.refresh();
+  // What is stored for the new key is read once typing stops; generating waits for the sheet to
+  // close or the next load, so typing a prompt does not start a run per keystroke.
+  summarySettingsChanged();
 };
 
 const loadProjectSettings = async (id: string): Promise<void> => {
@@ -139,6 +148,7 @@ const loadProjectSettings = async (id: string): Promise<void> => {
     fail(`Could not read the project settings: ${e instanceof Error ? e.message : String(e)}`);
   }
   applySettings();
+  summariseShown(); // tasks may have loaded before the settings
 };
 
 const saveProjectSettings = (id: string, layer: SettingsLayer): void => {
@@ -150,6 +160,7 @@ const closeSettings = (): void => {
   const sheet = settingsSheet;
   settingsSheet = null;
   sheet?.dispose();
+  if (sheet !== null) summariseShown();
 };
 
 const showSettings = (): void => {
@@ -213,7 +224,7 @@ const draw = (): void => {
   for (const [column, cards] of Object.entries(model)) for (const c of cards) state.columns.set(c.task.id, column as Column);
   // The attention mark: sessions that finished or wait for the user.
   setBadge(model.review.length || null);
-  board.render(model, editor.busy);
+  board.render(model, editor.busy, (task) => summaries.get(task));
   if (state.tasks.length === 0) {
     board.setStatus({
       kind: 'empty',
@@ -326,6 +337,7 @@ const load = async (): Promise<void> => {
     state.view = 'board';
     draw();
     editor.refresh();
+    summariseShown();
     starter.onSnapshot(); // drain the queue now that the tasks are known
   } catch (e) {
     if (mine !== generation) return;
@@ -379,6 +391,65 @@ const followHost = (): void => {
   if (state.pinned && current !== null) return;
   const next = projectFor(state.hostDirectory) ?? current ?? state.projects[0] ?? null;
   void selectProject(next?.id ?? null);
+};
+
+// --- summaries (summaries.ts) ---
+
+let summaryRedraw = false;
+/** Many summaries land together; one redraw of the board and the open detail covers them. */
+const summaryChanged = (): void => {
+  if (summaryRedraw) return;
+  summaryRedraw = true;
+  setTimeout(() => {
+    summaryRedraw = false;
+    draw();
+    editor.refresh();
+  }, 50);
+};
+
+const summaries = createSummaries({
+  generate: (request) => host.generate(request),
+  storage: host.storage,
+  // Only once the shown project's settings are in: a summary in the wrong language is wasted.
+  context: () => {
+    const id = state.projectId;
+    return id === null || !globalLoaded || state.settingsFor !== id ? null : { projectId: id, summary: settings().summary };
+  },
+  loadLanguage: async (projectId, taskId) => (await store.loadCard(projectId, taskId)).summaryLanguage,
+  onChange: summaryChanged,
+  onUnavailable: (code) =>
+    void host
+      .toast({
+        kind: 'info',
+        message:
+          code === 'NOT_GRANTED'
+            ? 'Summaries need the “model” permission for ICF-kanban (Settings → Extensions). Automatic summaries are off for now.'
+            : 'No small model is set, so automatic summaries are off for now. Choose a Small Model in OpenChamber settings, then press Summarise in a task.',
+      })
+      .catch(() => {}),
+});
+
+/**
+ * The shown cards' summaries: generated when automatic summaries are on (not for done tasks),
+ * otherwise only read back from storage. `generate: false` only reads (after a settings edit).
+ */
+const summariseShown = (generate = true): void => {
+  if (state.tasks === null) return;
+  const auto = generate && summaries.auto();
+  for (const task of state.tasks) {
+    const column = state.columns.get(task.id);
+    if (column === undefined || column === 'done') continue;
+    void (auto ? summaries.ensure(task) : summaries.load(task));
+  }
+};
+
+let summarySettle: ReturnType<typeof setTimeout> | null = null;
+const summarySettingsChanged = (): void => {
+  if (summarySettle !== null) clearTimeout(summarySettle);
+  summarySettle = setTimeout(() => {
+    summarySettle = null;
+    summariseShown(false);
+  }, SUMMARY_SETTLE_MS);
 };
 
 // --- starting agents (starter.ts) ---
@@ -452,7 +523,15 @@ const start = (ctx: HostReadyContext): void => {
       load: (projectId, taskId) => store.loadCard(projectId, taskId),
       save: (projectId, taskId, card) => saver.save(`card:${projectId}:${taskId}`, () => store.saveCard(projectId, taskId, card)),
     },
+    summary: {
+      model: (task) =>
+        startContext() === null ? null : { text: summaries.get(task), status: summaries.status(task), auto: summaries.auto() },
+      summarise: (task) => void summaries.summarise(task),
+      onLanguage: (projectId, taskId, language) => summaries.setLanguage(projectId, taskId, language),
+    },
   });
+  // Answers the model gave after an earlier frame of this panel was gone are kept by the host.
+  if (ctx.features?.lateGenerateResults === true) host.onLateGenerateResult((late) => void summaries.acceptLate(late));
   void loadGlobalSettings();
   board.setStatus({ kind: 'loading' });
 

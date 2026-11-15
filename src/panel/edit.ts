@@ -5,13 +5,13 @@ import type { HostClient } from '@openchamber/sdk';
 import type { NewTask, Task, TaskState } from '../core/types.ts';
 import type { Api } from './api.ts';
 import type { Preset } from './presets.ts';
-import { resolveStart, type Settings, type StartOptions } from './settings.ts';
+import { resolveStart, type CardOptions, type Settings } from './settings.ts';
 import { COLUMNS, type Column } from './columns.ts';
 import { openChildren, planMove, taskTypes, type Move } from './moves.ts';
 import { mountAddForm } from './ui/add.ts';
 import type { Board } from './ui/board.ts';
 import { askChoice } from './ui/confirm.ts';
-import { openDetail, type DetailHandle, type DetailModel } from './ui/detail.ts';
+import { openDetail, type DetailHandle, type DetailModel, type SummaryModel } from './ui/detail.ts';
 import { attachDrag } from './ui/dnd.ts';
 
 export type EditorDeps = {
@@ -40,8 +40,15 @@ export type EditorDeps = {
   start: {
     /** Null while no project's settings are loaded. */
     context: () => { projectId: string; settings: Settings; presets: Preset[] } | null;
-    load: (projectId: string, taskId: string) => Promise<Partial<StartOptions>>;
-    save: (projectId: string, taskId: string, card: Partial<StartOptions>) => void;
+    load: (projectId: string, taskId: string) => Promise<CardOptions>;
+    save: (projectId: string, taskId: string, card: CardOptions) => void;
+  };
+  /** The personal summary in the detail sheet (summaries.ts). */
+  summary: {
+    model: (task: Task) => SummaryModel | null;
+    summarise: (task: Task) => void;
+    /** The card's summary language was edited (undefined: back to the settings). */
+    onLanguage: (projectId: string, taskId: string, language: string | undefined) => void;
   };
 };
 
@@ -52,7 +59,7 @@ export const createEditor = (deps: EditorDeps) => {
   let detail: { id: string; handle: DetailHandle } | null = null;
   let addDispose: (() => void) | null = null;
   /** The open sheet's stored start options; version bumps when they are (re)loaded. */
-  let card: { taskId: string; projectId: string; options: Partial<StartOptions>; version: number } | null = null;
+  let card: { taskId: string; projectId: string; options: CardOptions; version: number } | null = null;
 
   const find = (id: string): Task | null => deps.tasks().find((t) => t.id === id) ?? null;
   const info = (message: string): void => void deps.host.toast({ kind: 'info', message }).catch(() => {});
@@ -79,8 +86,10 @@ export const createEditor = (deps: EditorDeps) => {
               presets: ctx.presets,
               card: mine?.options ?? {},
               inherited: resolveStart(ctx.settings, task, {}, ctx.presets),
+              summaryLanguage: ctx.settings.summary.language,
               version: mine?.version ?? -1,
             },
+      summary: deps.summary.model(task),
     };
   };
 
@@ -189,8 +198,14 @@ export const createEditor = (deps: EditorDeps) => {
     const handle = openDetail(detailModel(task), {
       onStartOptions: (options) => {
         if (card === null || card.taskId !== id) return;
+        const languageChanged = options.summaryLanguage !== card.options.summaryLanguage;
         card.options = options;
         deps.start.save(card.projectId, id, options);
+        if (languageChanged) deps.summary.onLanguage(card.projectId, id, options.summaryLanguage);
+      },
+      onSummarise: () => {
+        const t = find(id);
+        if (t !== null) deps.summary.summarise(t);
       },
       onMove: (to) => {
         const t = find(id);
