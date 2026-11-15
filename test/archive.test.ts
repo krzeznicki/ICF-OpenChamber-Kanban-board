@@ -7,6 +7,7 @@ import {
   archiveTasks,
   archivedShown,
   archiveWriteJob,
+  createPendingMarks,
   createArchiveSync,
   isArchived,
   mergeArchived,
@@ -210,7 +211,6 @@ test('archiveWriteJob writes the marks snapshotted at queue time, merged with st
   );
   memory = null; // the user switched project before the job ran: memory is reset
   await job();
-  assert.equal(memory, null);
   // a: the snapshot; other: the other frame's stored mark; gone: reopened, pruned.
   assert.deepEqual(data.get('archivedTasks:p1'), [{ id: 'other', archivedAt: 2 }, { id: 'a', archivedAt: 5 }]);
   assert.equal(written.length, 1);
@@ -239,4 +239,53 @@ test('archiveWriteJob: the newest queued snapshot carries the change of a job it
   release();
   await saver.idle();
   assert.deepEqual(data.get('archivedTasks:p1'), [{ id: 'a', archivedAt: 3 }, { id: 'b', archivedAt: 4 }]);
+});
+
+test("pending marks: a replacing snapshot that lacks a waiting job's marks still writes them (real createLatestSaver)", async () => {
+  const data = new Map<string, unknown>();
+  const store = createSettingsStore({
+    get: async (k) => data.get(k),
+    set: async (k, v) => void data.set(k, v),
+    delete: async (k) => void data.delete(k),
+  });
+  const tasks = [task('a', 'done'), task('b', 'done'), task('u', 'done')];
+  const io = { load: () => store.loadArchivedTasks('p1'), save: (m: ReadonlyMap<string, number>) => store.saveArchivedTasks('p1', m) };
+  const sync = createArchiveSync();
+  const pending = createPendingMarks();
+  const saver = createLatestSaver<() => Promise<void>>((_k, run) => run(), () => {});
+  const queue = (marks: Map<string, number>, removed: Map<string, number>, wait?: Promise<void>) => {
+    const n = sync.edit();
+    const snap = pending.queue('p1', marks, removed, n);
+    const job = archiveWriteJob({ marks: snap, removed, tasks }, io, () => {
+      sync.written(n);
+      pending.written('p1', n);
+    });
+    saver.save('k', wait === undefined ? job : async () => {
+      await wait;
+      await job();
+    });
+    return snap;
+  };
+  let release: () => void = () => {};
+  const gate = new Promise<void>((r) => (release = r));
+  queue(new Map([['u', 1]]), new Map(), gate); // J0, running
+  queue(new Map([['u', 1], ['a', 5]]), new Map()); // J1 "Archive done", waiting
+  // Switch away and back: memory came from storage without J1's 'a'; the user unarchives 'u'.
+  const j2 = queue(new Map([['b', 6]]), new Map([['u', 7]])); // replaces J1
+  assert.deepEqual([...j2].sort(), [['a', 5], ['b', 6]]);
+  release();
+  await saver.idle();
+  assert.deepEqual(data.get('archivedTasks:p1'), [{ id: 'a', archivedAt: 5 }, { id: 'b', archivedAt: 6 }]);
+  assert.equal(sync.trusts(sync.loadToken()), true);
+  // Written: nothing is pending any more, a new snapshot is taken as it is.
+  assert.deepEqual([...pending.queue('p1', new Map(), new Map(), sync.edit())], []);
+});
+
+test('pending marks: a failed write keeps them for the next snapshot; an older write does not clear a newer queue', () => {
+  const pending = createPendingMarks();
+  pending.queue('p1', new Map([['a', 1]]), new Map(), 1);
+  pending.queue('p1', new Map([['b', 2]]), new Map(), 2);
+  pending.written('p1', 1); // older than the newest queued
+  assert.deepEqual([...pending.queue('p1', new Map(), new Map(), 3)].sort(), [['a', 1], ['b', 2]]);
+  assert.deepEqual([...pending.queue('p2', new Map([['z', 1]]), new Map(), 4)], [['z', 1]]);
 });

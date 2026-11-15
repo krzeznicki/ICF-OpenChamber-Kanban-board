@@ -2804,6 +2804,21 @@ ${GUEST_UI_LOOK_CSS}`;
     await io.save(next);
     onWritten(next);
   };
+  var createPendingMarks = () => {
+    const pending = /* @__PURE__ */ new Map();
+    return {
+      queue: (projectId, marks, removed, n) => {
+        const prev = pending.get(projectId);
+        const joined = prev === void 0 ? new Map(marks) : mergeArchived(marks, prev.marks, removed);
+        pending.set(projectId, { marks: joined, n });
+        return joined;
+      },
+      written: (projectId, n) => {
+        const prev = pending.get(projectId);
+        if (prev !== void 0 && n >= prev.n) pending.delete(projectId);
+      }
+    };
+  };
 
   // src/panel/api.ts
   var ApiError = class extends Error {
@@ -12560,6 +12575,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
   var archiveSync = createArchiveSync();
   var unarchivedAt = /* @__PURE__ */ new Map();
   var removedFor = (projectId) => unarchivedAt.get(projectId) ?? /* @__PURE__ */ new Map();
+  var pendingMarks = createPendingMarks();
   var saver = createLatestSaver(
     (_key, run) => run(),
     (e) => fail(`Could not save settings: ${e instanceof Error ? e.message : String(e)}`)
@@ -12982,11 +12998,14 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
   };
   var writeArchivedTasks = (projectId, marks, tasks) => {
     const n = archiveSync.edit();
+    const removed = new Map(removedFor(projectId));
+    const snapshot = pendingMarks.queue(projectId, marks, removed, n);
     const job = archiveWriteJob(
-      { marks: new Map(marks), removed: new Map(removedFor(projectId)), tasks },
+      { marks: snapshot, removed, tasks },
       { load: () => store.loadArchivedTasks(projectId), save: (next) => store.saveArchivedTasks(projectId, next) },
       (next) => {
         archiveSync.written(n);
+        pendingMarks.written(projectId, n);
         if (state.archivedTasksFor !== projectId || state.tasks === null) return;
         const current = state.archivedTasks;
         const shown = reconcileArchived(mergeArchived(current, next, removedFor(projectId)), state.tasks).marks;

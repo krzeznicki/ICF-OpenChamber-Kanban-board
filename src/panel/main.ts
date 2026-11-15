@@ -10,7 +10,7 @@ import { connectHost } from '@openchamber/sdk';
 import type { GuestProject, GuestSessionRecord, HostReadyContext } from '@openchamber/sdk';
 import { applyHostReady } from '@openchamber/sdk/ui';
 import type { Task } from '../core/types.ts';
-import { archivableIds, archivedShown, archiveTasks, archiveWriteJob, createArchiveSync, isArchived, mergeArchived, reconcileArchived, unarchiveTask } from './archive.ts';
+import { archivableIds, archivedShown, archiveTasks, archiveWriteJob, createArchiveSync, createPendingMarks, isArchived, mergeArchived, reconcileArchived, unarchiveTask } from './archive.ts';
 import { ApiError, createApi, type Api, type ConfigResult, type ProjectConfig } from './api.ts';
 import { groupTasks, pruneArchived, resolveSession, sessionForTask, sessionTarget, type Column, type SessionLookup } from './columns.ts';
 import { createEditor, type Editor } from './edit.ts';
@@ -124,6 +124,8 @@ const archiveSync = createArchiveSync();
  */
 const unarchivedAt = new Map<string, Map<string, number>>();
 const removedFor = (projectId: string): ReadonlyMap<string, number> => unarchivedAt.get(projectId) ?? new Map();
+/** Per project, the marks queued for writing and not yet written (archive.ts createPendingMarks). */
+const pendingMarks = createPendingMarks();
 // Every field reports each keystroke; only the newest value per key is written.
 const saver = createLatestSaver<() => Promise<void>>(
   (_key, run) => run(),
@@ -636,11 +638,15 @@ const detach = async (task: Task, from: Column): Promise<void> => {
  */
 const writeArchivedTasks = (projectId: string, marks: ReadonlyMap<string, number>, tasks: readonly Task[] | null): void => {
   const n = archiveSync.edit();
+  const removed = new Map(removedFor(projectId));
+  // Joined with marks still queued: a job this one replaces may hold some memory no longer has.
+  const snapshot = pendingMarks.queue(projectId, marks, removed, n);
   const job = archiveWriteJob(
-    { marks: new Map(marks), removed: new Map(removedFor(projectId)), tasks },
+    { marks: snapshot, removed, tasks },
     { load: () => store.loadArchivedTasks(projectId), save: (next) => store.saveArchivedTasks(projectId, next) },
     (next) => {
       archiveSync.written(n);
+      pendingMarks.written(projectId, n);
       // The other frame's marks (or, after a switch back, this job's own) join what the board shows.
       if (state.archivedTasksFor !== projectId || state.tasks === null) return;
       const current = state.archivedTasks;

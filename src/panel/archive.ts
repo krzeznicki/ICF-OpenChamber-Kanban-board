@@ -128,3 +128,26 @@ export const archiveWriteJob =
     await io.save(next);
     onWritten(next);
   };
+
+/**
+ * The marks queued for writing per project and not yet written. createLatestSaver drops a waiting
+ * job when a newer one for the same key arrives, and the newer snapshot may lack its marks (memory
+ * was rebuilt from storage after a project switch). So every new snapshot joins what is still
+ * queued (minus this frame's unarchives), and is remembered as queued under its sequence number. A
+ * write with that number or later clears it; a failed write keeps it for the next snapshot.
+ */
+export const createPendingMarks = () => {
+  const pending = new Map<string, { marks: Map<string, number>; n: number }>();
+  return {
+    queue: (projectId: string, marks: ArchivedTasks, removed: ArchivedTasks, n: number): Map<string, number> => {
+      const prev = pending.get(projectId);
+      const joined = prev === undefined ? new Map(marks) : mergeArchived(marks, prev.marks, removed);
+      pending.set(projectId, { marks: joined, n });
+      return joined;
+    },
+    written: (projectId: string, n: number): void => {
+      const prev = pending.get(projectId);
+      if (prev !== undefined && n >= prev.n) pending.delete(projectId);
+    },
+  };
+};
