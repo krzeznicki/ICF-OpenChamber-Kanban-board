@@ -1,14 +1,15 @@
-// The board's write side, kept out of main.ts: drag and drop, the task modal, the Add task form
+// The board's write side, kept out of main.ts: drag and drop, the task modal, the Add task modal
 // and the in-panel confirms. Every write goes through `run`, which marks the card busy (further
 // drags of it are ignored), reports a failure in a toast and reloads the board afterwards.
 import type { HostClient } from '@openchamber/sdk';
 import type { NewTask, Task, TaskState } from '../core/types.ts';
+import { canAddSubtask, createWithSubtasks, parentChoices, partialMessage, subtaskTitles, toNewTask, type AddDraft } from './addTask.ts';
 import type { Api } from './api.ts';
 import type { Preset } from './presets.ts';
 import { resolveStart, type CardOptions, type Sections, type Settings } from './settings.ts';
 import { COLUMNS, type Column, type SessionLookup, type SessionTarget } from './columns.ts';
 import { openChildren, planMove, taskTypes, type Move } from './moves.ts';
-import { mountAddForm } from './ui/add.ts';
+import { openAddModal, type AddResult } from './ui/addModal.ts';
 import type { Board } from './ui/board.ts';
 import { askChoice } from './ui/confirm.ts';
 import { openDetail, type DetailHandle, type DetailModel, type SessionView, type SummaryModel } from './ui/detail.ts';
@@ -67,10 +68,25 @@ export type EditorDeps = {
 
 const errorText = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
+/** The fields resolveStart reads for a task not created yet (type and kind are filled in). */
+const NEW_TASK: Task = {
+  id: '',
+  kind: 'ticket',
+  title: '',
+  body: '',
+  state: 'needs-triage',
+  type: null,
+  parentId: null,
+  blockedBy: [],
+  url: null,
+  updatedAt: 0,
+  claimed: false,
+};
+
 export const createEditor = (deps: EditorDeps) => {
   const moving = new Set<string>();
   let detail: { id: string; handle: DetailHandle } | null = null;
-  let addDispose: (() => void) | null = null;
+  let addModal: { dispose: () => void } | null = null;
   /** The open modal's stored start options; version bumps when they are (re)loaded. */
   let card: { taskId: string; projectId: string; options: CardOptions; version: number } | null = null;
   /** The open modal's lookup of a session known only from a link (SessionTarget `check`). */
@@ -161,6 +177,7 @@ export const createEditor = (deps: EditorDeps) => {
       summary: deps.summary.model(task),
       session: sessionView(task),
       children: tasks.filter((t) => t.parentId === task.id).map((t) => ({ id: t.id, title: t.title, state: t.state })),
+      addSubtask: canAddSubtask(task, deps.tracker()),
     };
   };
 
@@ -273,6 +290,20 @@ export const createEditor = (deps: EditorDeps) => {
     const handle = openDetail(detailModel(task), {
       onOpenSession: () => openSession(id),
       onOpenTask: (child) => queueMicrotask(() => showDetail(child)),
+      onAddSubtask: async ({ title, type }) => {
+        const api = deps.api();
+        if (api === null) return 'No project is open.';
+        const input: NewTask = { title, state: 'needs-triage', parentId: id, ...(type !== null ? { type } : {}) };
+        try {
+          const created = await api.create(input);
+          info(`Created ${created.id}`);
+        } catch (e) {
+          return errorText(e);
+        }
+        await deps.reload();
+        refreshDetail();
+        return null;
+      },
       onSections: deps.sections.save,
       loadModels: deps.loadModels,
       onStartOptions: (options) => {
@@ -305,40 +336,72 @@ export const createEditor = (deps: EditorDeps) => {
   };
 
   const closeAdd = (): void => {
-    addDispose?.();
-    addDispose = null;
-    deps.board.addForm.replaceChildren();
+    const m = addModal;
+    addModal = null;
+    m?.dispose();
+  };
+
+  /** Creates the task, saves its start options, then its sub-tasks one by one; reloads once at the end. */
+  const submitAdd = async (draft: AddDraft): Promise<AddResult> => {
+    const api = deps.api();
+    if (api === null) return { kind: 'error', message: 'No project is open.' };
+    const ctx = deps.start.context();
+    const saveStart = (taskId: string): void => {
+      if (ctx === null || Object.keys(draft.start).length === 0) return;
+      deps.start.save(ctx.projectId, taskId, draft.start);
+      if (draft.start.summaryLanguage !== undefined) deps.summary.onLanguage(ctx.projectId, taskId, draft.start.summaryLanguage);
+    };
+    let first = true;
+    let result: Awaited<ReturnType<typeof createWithSubtasks>>;
+    try {
+      result = await createWithSubtasks(
+        async (input) => {
+          const task = await api.create(input);
+          // The first create is the task itself: its start options are stored once its id is known.
+          if (first) saveStart(task.id);
+          first = false;
+          return task;
+        },
+        toNewTask(draft, deps.tracker()),
+        subtaskTitles(draft.subtasks),
+      );
+    } catch (e) {
+      return { kind: 'error', message: errorText(e) };
+    }
+    const { task, failed } = result;
+    if (failed.length === 0) {
+      closeAdd();
+      const n = subtaskTitles(draft.subtasks).length;
+      void deps.host
+        .toast({ kind: 'success', message: n === 0 ? `Created ${task.id}` : `Created ${task.id} with ${n} sub-task${n === 1 ? '' : 's'}` })
+        .catch(() => {});
+    }
+    await deps.reload();
+    return failed.length === 0 ? null : { kind: 'partial', message: partialMessage(task.id, failed) };
   };
 
   const showAdd = (): void => {
-    if (addDispose !== null) {
-      deps.board.addForm.querySelector<HTMLInputElement>('input')?.focus();
-      return;
-    }
+    if (addModal !== null) return;
     const tasks = deps.tasks();
-    addDispose = mountAddForm(
-      deps.board.addForm,
+    const ctx = deps.start.context();
+    addModal = openAddModal(
       {
-        types: taskTypes(tasks, deps.baseTypes()),
-        parents: tasks.filter((t) => t.kind === 'parent' && t.state !== 'done').map((t) => ({ id: t.id, label: t.title, hint: t.id })),
         tracker: deps.tracker(),
+        types: taskTypes(tasks, deps.baseTypes()),
+        parents: parentChoices(tasks),
+        tasks,
+        labels: deps.labels(),
+        start:
+          ctx === null
+            ? null
+            : {
+                presets: ctx.presets,
+                inherited: (type, kind) => resolveStart(ctx.settings, { ...NEW_TASK, type, kind }, {}, ctx.presets),
+                summaryLanguage: ctx.settings.summary.language,
+              },
+        loadModels: deps.loadModels,
       },
-      {
-        onSubmit: async (input: NewTask) => {
-          const api = deps.api();
-          if (api === null) return 'No project is open.';
-          try {
-            const task = await api.create(input);
-            closeAdd();
-            void deps.host.toast({ kind: 'success', message: `Created ${task.id}` }).catch(() => {});
-            await deps.reload();
-            return null;
-          } catch (e) {
-            return errorText(e);
-          }
-        },
-        onCancel: closeAdd,
-      },
+      { onSubmit: submitAdd, onDismiss: closeAdd },
     );
   };
 

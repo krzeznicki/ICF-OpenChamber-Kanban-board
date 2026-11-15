@@ -1,5 +1,5 @@
-// The board shell: a toolbar (project switcher, "Hide sub-tasks", Add task, Settings, Refresh), a slot for
-// the Add task form, a status slot for banners, spinner and empty states, and the five columns.
+// The board shell: a toolbar (project switcher, "Hide sub-tasks", Add task, Settings, Refresh), a
+// status slot for banners, spinner and empty states, and the five columns.
 // It draws what main.ts hands it and reports clicks back; it holds no data of its own. Dragging
 // is attached to `columns` by the editor (ui/dnd.ts).
 import { mountBanner, mountButton, mountEmpty, mountSelect, mountSpinner, mountSwitch } from '@openchamber/sdk/ui';
@@ -40,10 +40,9 @@ export const createBoard = (root: HTMLElement, callbacks: BoardCallbacks) => {
   const settingsSlot = div('kb-settings-button');
   const refreshSlot = div('kb-refresh');
   toolbar.append(projectSlot, switchSlot, spacer, addSlot, settingsSlot, refreshSlot);
-  const addForm = div('kb-add-slot');
   const status = div('kb-status');
   const columns = div('kb-columns');
-  shell.append(toolbar, addForm, status, columns);
+  shell.append(toolbar, status, columns);
   root.replaceChildren(shell);
 
   const project = mountSelect(projectSlot, {
@@ -75,8 +74,6 @@ export const createBoard = (root: HTMLElement, callbacks: BoardCallbacks) => {
   return {
     /** The persistent container the cards are drawn in; drag listeners live here. */
     columns,
-    /** Where the Add task form is mounted; empty when closed. */
-    addForm,
     /** "Add task" works only while a board is shown. */
     setCanAdd: (enabled: boolean) => add.update({ disabled: !enabled }),
     /** The "Hide sub-tasks" switch follows the project's settings when they load. */

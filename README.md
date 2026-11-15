@@ -88,6 +88,18 @@ Types: `bug` and `enhancement` (a feature), plus your own (`chore` and `research
 - A drop on Backlog or Ready changes one line of the task file (local) or swaps the state label (GitHub). The rest of the file is left as it is.
 - Dragging a card out of In Progress or Review to Backlog or Ready detaches it from its session: the card follows its state again, and the session keeps running (open it from the session list). Starting the card again later links it to the new session.
 
+## Adding tasks
+
+**Add task** in the toolbar opens a modal with everything a task can carry:
+
+- **Title** (required), **Type**, **State** (`needs-triage` by default; the open states only) and **Parent** (none, or an open parent). Locally, no parent creates a feature (`.scratch/<feature>/spec.md`); a parent creates a ticket under it.
+- **Blocked by**: tick the tasks it waits for. Locally only open tickets of the chosen feature are offered (the format resolves blockers within a feature), so a new feature takes none; on GitHub any open issue. A filter appears when the list is long.
+- **Description**: markdown.
+- **Start options**: preset, model, agent, location and summary language for this card, each showing what it would inherit. They are stored with the card (`card:<projectId>:<taskId>`) as soon as the task exists, as if set in its modal.
+- **Sub-tasks**: rows of titles (Enter adds the next row), created in order under the new task right after it: tickets of the new feature locally, sub-issues on GitHub. Locally the list is hidden when a parent is chosen, because a ticket cannot have sub-tasks.
+
+The service's error shows inside the modal and nothing is lost. If the task was created but some sub-tasks were not, the modal names the ones that failed (with the reason) and offers only Close; add them later from the task's **Sub-tasks** section. The board reloads once at the end.
+
 ## The task modal
 
 A click on any card (or Enter on a focused card) opens the task in a modal, in every column; a click never jumps to a session. Reading comes first:
@@ -95,7 +107,7 @@ A click on any card (or Enter on a focused card) opens the task in a modal, in e
 - **Header**: title, id, state and type badges and the × close. **Open session** opens the task's agent session (running, waiting or finished) when it has one that is not archived; **Session archived** says that its only session was archived; **Session not listed in OpenChamber** that the board knows a session for it that no project lists (it is never opened). While the board is open, the rest of the page is inactive: Tab stays in the modal.
 - **Summary**: the personal summary (see [Summaries](#summaries)), or a **Summarise** button.
 - **Task**: the full body as formatted markdown: headings, lists, task-list checkboxes (read-only), code, quotes, tables, links. Raw HTML in a body is shown as text; only `http` and `https` links are links, opened in your browser; images are not loaded but shown as links.
-- **Sub-tasks** (parents): the children with their states; a click opens that task.
+- **Sub-tasks**: the children with their states (a click opens that task), and **Add sub-task** (a title and an optional type; Enter adds). Locally it is offered on open features (`spec.md`), since a ticket cannot have tickets; on GitHub on any open issue, which then becomes a parent.
 - **Settings**, collapsed by default: state and type, **Move to**, **Open on GitHub**, and the card's start options.
 
 Sections fold open and shut; which ones are open is remembered on this device for every task.

@@ -1,24 +1,26 @@
 // The task modal, opened by a click on any card: reading first. A header (title, id, state and type
 // badges, ×, and "Open session" when the task has a session that may be opened, or "Session
 // archived"), then collapsible sections: Summary (the personal summary or a Summarise button), Task
-// (the body as formatted markdown, ui/markdownView.ts), Sub-tasks (a parent's children; a click
-// opens that task) and Settings, collapsed by default: state and type selects, "Move to" buttons
-// (the keyboard path for drag and drop; Done asks about open sub-tasks), Open on GitHub, and the
-// card's start options (preset, model, agent, location, summary language), each unset field showing
-// what it inherits. Which sections are open is remembered (settings.ts Sections). It draws what it
-// is given and reports choices; the editor (edit.ts) runs them and asks to confirm.
-import { mountBadge, mountButton, mountList, mountSelect, mountSpinner } from '@openchamber/sdk/ui';
+// (the body as formatted markdown, ui/markdownView.ts), Sub-tasks (a parent's children, a click
+// opens that task, and "Add sub-task" where addTask.ts allows it) and Settings, collapsed by
+// default: state and type selects, "Move to" buttons (the keyboard path for drag and drop; Done
+// asks about open sub-tasks), Open on GitHub, and the card's start options (ui/startOptions.ts).
+// It sits on the shell it shares with Add task (ui/modal.ts). Which sections are open is
+// remembered (settings.ts Sections). It draws what it is given and reports choices; the editor
+// (edit.ts) runs them and asks to confirm.
+import { mountBadge, mountBanner, mountButton, mountList, mountSelect, mountSpinner, mountTextField } from '@openchamber/sdk/ui';
 import type { Tone } from '@openchamber/sdk/ui';
 import type { Task, TaskState } from '../../core/types.ts';
 import type { Column } from '../columns.ts';
 import type { Preset } from '../presets.ts';
-import type { CardOptions, Location, Sections, StartOptions } from '../settings.ts';
+import type { CardOptions, Sections, StartOptions } from '../settings.ts';
 import type { SummaryStatus } from '../summaries.ts';
 import { mountCloseButton } from './closeButton.ts';
-import { defaultModelLabel } from '../models.ts';
-import { mountModelPicker } from './modelPicker.ts';
 import { renderMarkdown } from './markdownView.ts';
-import { LOCATION_LABELS, mountInheritSelect, mountInheritText } from './settingsView.ts';
+import { openModalShell } from './modal.ts';
+import { mountStartOptions } from './startOptions.ts';
+
+const NO_TYPE = '';
 
 export const STATES: readonly TaskState[] = ['needs-triage', 'needs-info', 'ready-for-agent', 'ready-for-human', 'wontfix', 'done'];
 
@@ -40,6 +42,8 @@ export type DetailModel = {
   session: SessionView;
   /** A parent's listed sub-tasks, in board order; empty hides the section. */
   children: { id: string; title: string; state: TaskState }[];
+  /** The Sub-tasks section offers "Add sub-task" (addTask.ts canAddSubtask); it then shows even without children. */
+  addSubtask: boolean;
 };
 
 /**
@@ -83,6 +87,8 @@ export type DetailCallbacks = {
   onOpenSession: () => void;
   /** A sub-task row. */
   onOpenTask: (taskId: string) => void;
+  /** "Add sub-task": resolves to null on success, or the message to show under it. */
+  onAddSubtask: (input: { title: string; type: string | null }) => Promise<string | null>;
   /** The user opened or collapsed a section. */
   onSections: (sections: Sections) => void;
   onDismiss: () => void;
@@ -103,13 +109,8 @@ const el = <K extends keyof HTMLElementTagNameMap>(tag: K, className: string, te
 };
 
 export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, options: DetailOptions): DetailHandle => {
-  // Taken before the board goes inert (which drops its focus); focused again on close.
-  const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-  const backdrop = el('div', 'kb-backdrop kb-modal-backdrop');
-  const modal = el('div', 'kb-modal');
-  modal.setAttribute('role', 'dialog');
-  modal.setAttribute('aria-modal', 'true');
-  modal.tabIndex = -1;
+  const shell = openModalShell({ label: initial.task.title, onDismiss: () => callbacks.onDismiss() });
+  const { modal } = shell;
   const head = el('header', 'kb-modal-head');
 
   // The sections stay in place across updates (their open state, a focused start option field and
@@ -136,13 +137,10 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
   const settingsTop = el('div', 'kb-sheet-part');
   const startBox = el('section', 'kb-sheet-part kb-start');
   settingsSec.content.append(settingsTop, startBox);
+  const subList = el('div', 'kb-sheet-part');
+  const addBox = el('div', 'kb-sheet-part kb-add-sub');
+  subSec.content.append(subList, addBox);
   modal.append(head, summarySec.box, taskSec.box, subSec.box, settingsSec.box);
-  backdrop.append(modal);
-  // Focus stays in the modal: what was on the page before it (the board) is inert while it is open.
-  // Layers opened on top later (a confirm) are appended after it and stay usable.
-  const inerted = [...document.body.children].filter((n): n is HTMLElement => n instanceof HTMLElement && !n.inert);
-  for (const n of inerted) n.inert = true;
-  document.body.append(backdrop);
 
   let disposers: Array<() => void> = [];
   const clear = (): void => {
@@ -150,7 +148,7 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
     disposers = [];
     head.replaceChildren();
     summarySec.content.replaceChildren();
-    subSec.content.replaceChildren();
+    subList.replaceChildren();
     settingsTop.replaceChildren();
   };
   let startDisposers: Array<() => void> = [];
@@ -171,72 +169,17 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
     clearStart();
     startBox.hidden = start === null;
     if (start === null) return;
-    const card: CardOptions = { ...start.card };
-    const emit = (): void => callbacks.onStartOptions({ ...card });
-    const name = (id: string): string => start.presets.find((p) => p.id === id)?.name ?? id;
     startBox.append(el('h3', 'kb-settings-heading', 'Start options'));
-    const row1 = el('div', 'kb-fields');
-    const row2 = el('div', 'kb-fields');
-    const row3 = el('div', 'kb-fields');
-    const cells = [0, 1, 2, 3, 4].map(() => el('div', 'kb-field'));
-    row1.append(cells[0]!, cells[1]!);
-    row2.append(cells[2]!, cells[3]!);
-    row3.append(cells[4]!);
-    startBox.append(row1, row2, row3);
-    mountInheritSelect(cells[0]!, startDisposers, {
-      label: 'Preset',
-      value: card.presetId,
-      inheritLabel: `Default (${name(start.inherited.presetId)})`,
-      options: start.presets.map((p) => ({ id: p.id, label: p.name })),
-      onChange: (v) => {
-        card.presetId = v;
-        emit();
-      },
-    });
-    mountInheritSelect(cells[1]!, startDisposers, {
-      label: 'Location',
-      value: card.location,
-      inheritLabel: `Default (${LOCATION_LABELS[start.inherited.location]})`,
-      options: (Object.keys(LOCATION_LABELS) as Location[]).map((id) => ({ id, label: LOCATION_LABELS[id] })),
-      onChange: (v) => {
-        card.location = v as Location | undefined;
-        emit();
-      },
-    });
     startDisposers.push(
-      mountModelPicker(cells[2]!, {
-        label: 'Model',
-        value: card.model ?? null,
-        defaultLabel: defaultModelLabel(start.inherited.model),
+      mountStartOptions(startBox, {
+        presets: start.presets,
+        card: start.card,
+        inherited: start.inherited,
+        summaryLanguage: start.summaryLanguage,
         loadModels: callbacks.loadModels,
-        onChange: (v) => {
-          card.model = v;
-          emit();
-        },
+        onChange: callbacks.onStartOptions,
       }),
     );
-    mountInheritText(cells[3]!, startDisposers, {
-      label: 'Agent',
-      value: card.agent ?? undefined,
-      placeholder: start.inherited.agent ?? 'Your current agent',
-      resetLabel: 'Default',
-      mono: true,
-      onChange: (v) => {
-        card.agent = v ?? null;
-        emit();
-      },
-    });
-    mountInheritText(cells[4]!, startDisposers, {
-      label: 'Summary language',
-      value: card.summaryLanguage,
-      placeholder: start.summaryLanguage,
-      resetLabel: 'Default',
-      onChange: (v) => {
-        if (v === undefined) delete card.summaryLanguage;
-        else card.summaryLanguage = v;
-        emit();
-      },
-    });
   };
 
   const drawHead = (m: DetailModel): void => {
@@ -328,12 +271,16 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
   };
 
   const drawChildren = (m: DetailModel): void => {
-    subSec.box.hidden = m.children.length === 0;
-    if (m.children.length === 0) return;
+    subSec.box.hidden = m.children.length === 0 && !m.addSubtask;
+    drawAddSubtask(m);
+    if (m.children.length === 0) {
+      subSec.label.textContent = 'Sub-tasks';
+      return;
+    }
     const done = m.children.filter((c) => c.state === 'done').length;
     subSec.label.textContent = `Sub-tasks (${done}/${m.children.length} done)`;
     disposers.push(
-      mountList(subSec.content, {
+      mountList(subList, {
         items: m.children.map((c) => ({ id: c.id, title: c.title, subtitle: c.id, badge: { label: c.state, tone: stateTone(c.state) } })),
         onSelect: callbacks.onOpenTask,
         ariaLabel: 'Sub-tasks',
@@ -398,6 +345,29 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
     drawStart(task.id, m.start);
   };
 
+  // "Add sub-task" stays in place across redraws (a reload must not drop what is being typed); it
+  // is rebuilt only when the task or whether it may take sub-tasks changes.
+  let addKey: string | null = null;
+  let addTypes = '';
+  let addHandle: { setTypes: (types: string[]) => void; dispose: () => void } | null = null;
+  const drawAddSubtask = (m: DetailModel): void => {
+    const key = m.addSubtask ? m.task.id : null;
+    if (key === addKey) {
+      const types = JSON.stringify(m.types);
+      if (types !== addTypes) addHandle?.setTypes(m.types);
+      addTypes = types;
+      return;
+    }
+    addKey = key;
+    addTypes = JSON.stringify(m.types);
+    addHandle?.dispose();
+    addHandle = null;
+    addBox.replaceChildren();
+    addBox.hidden = key === null;
+    if (key === null) return;
+    addHandle = mountAddSubtask(addBox, m.types, callbacks.onAddSubtask);
+  };
+
   const draw = (m: DetailModel): void => {
     clear();
     modal.setAttribute('aria-label', m.task.title);
@@ -409,28 +379,111 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
     drawSettings(m);
   };
 
-  const onKey = (e: KeyboardEvent): void => {
-    // A confirm on top handles its own Escape first (capture phase) and stops it; an open select
-    // popup closes itself and marks the event handled.
-    if (e.key === 'Escape' && !e.defaultPrevented) callbacks.onDismiss();
-  };
-  backdrop.addEventListener('click', (e) => {
-    if (e.target === backdrop) callbacks.onDismiss();
-  });
-  document.addEventListener('keydown', onKey);
-
   draw(initial);
   modal.focus();
 
   return {
     update: draw,
     dispose: () => {
-      document.removeEventListener('keydown', onKey);
       clear();
       clearStart();
-      backdrop.remove();
-      for (const n of inerted) n.inert = false;
-      if (previous?.isConnected) previous.focus();
+      addHandle?.dispose();
+      shell.dispose();
+    },
+  };
+};
+
+/**
+ * The Sub-tasks section's inline "Add sub-task": a title, an optional type and Add. Enter adds.
+ * The service's error shows under it; on success the title clears for the next one.
+ */
+const mountAddSubtask = (
+  box: HTMLElement,
+  types: string[],
+  onAdd: (input: { title: string; type: string | null }) => Promise<string | null>,
+): { setTypes: (types: string[]) => void; dispose: () => void } => {
+  box.append(el('h3', 'kb-settings-heading', 'Add sub-task'));
+  const row = el('div', 'kb-fields kb-add-sub-row');
+  const titleSlot = el('div', 'kb-field kb-add-sub-title');
+  const typeSlot = el('div', 'kb-field kb-add-sub-type');
+  const buttonSlot = el('div', 'kb-add-sub-button');
+  row.append(titleSlot, typeSlot, buttonSlot);
+  const errorSlot = el('div', 'kb-add-error');
+  box.append(row, errorSlot);
+
+  let title = '';
+  let type = NO_TYPE;
+  let busy = false;
+  let errorDispose: (() => void) | null = null;
+  let disposed = false;
+  const typeOptions = (list: string[]) => [{ id: NO_TYPE, label: 'No type' }, ...list.map((t) => ({ id: t, label: t }))];
+
+  const titleField = mountTextField(titleSlot, {
+    label: 'Title',
+    value: '',
+    placeholder: 'A sub-task of this task',
+    onChange: (v) => {
+      title = v;
+      titleField.update({ value: v, ...(v.trim() !== '' ? { error: undefined } : {}) });
+    },
+  });
+  const typeSelect = mountSelect(typeSlot, {
+    label: 'Type',
+    value: type,
+    options: typeOptions(types),
+    onChange: (id) => {
+      type = id;
+      typeSelect.update({ value: id });
+    },
+  });
+  const add = mountButton(buttonSlot, { label: 'Add', size: 'sm', variant: 'outline', onClick: () => submit() });
+
+  const showError = (message: string | null): void => {
+    errorDispose?.();
+    errorDispose = null;
+    if (message !== null) errorDispose = mountBanner(errorSlot, { tone: 'error', title: 'Could not add the sub-task', body: message }).dispose;
+  };
+  const setBusy = (next: boolean): void => {
+    busy = next;
+    add.update({ loading: next, disabled: next });
+    titleField.update({ disabled: next });
+    typeSelect.update({ disabled: next });
+  };
+  const submit = (): void => {
+    if (busy) return;
+    const t = title.trim();
+    if (t === '') {
+      titleField.update({ error: 'A title is required' });
+      titleSlot.querySelector('input')?.focus();
+      return;
+    }
+    showError(null);
+    setBusy(true);
+    void onAdd({ title: t, type: type === NO_TYPE ? null : type }).then((error) => {
+      if (disposed) return;
+      setBusy(false);
+      showError(error);
+      if (error === null) {
+        title = '';
+        titleField.update({ value: '' });
+      }
+      titleSlot.querySelector('input')?.focus();
+    });
+  };
+  titleSlot.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' || e.isComposing) return;
+    e.preventDefault();
+    submit();
+  });
+
+  return {
+    setTypes: (list) => typeSelect.update({ options: typeOptions(list) }),
+    dispose: () => {
+      disposed = true;
+      errorDispose?.();
+      titleField.dispose();
+      typeSelect.dispose();
+      add.dispose();
     },
   };
 };
