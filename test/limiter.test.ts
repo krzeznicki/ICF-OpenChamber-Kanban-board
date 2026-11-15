@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createLimiter } from '../src/panel/limiter.ts';
+import { MODEL_NOTICES, createLimiter, createModelAvailability } from '../src/panel/limiter.ts';
 
 const settle = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
 
@@ -46,4 +46,20 @@ test('limiter: at most n run at once; a freed slot goes to the next waiter in or
   again.forEach((j, i) => void limit.run(() => (more.push(i), j.promise)));
   await settle();
   assert.deepEqual(more, [0, 1]);
+});
+
+test('model availability: unavailable on NO_MODEL / NOT_GRANTED, one notice per session; an answer makes it available again', () => {
+  const notices: string[] = [];
+  const a = createModelAvailability((code) => notices.push(code));
+  assert.equal(a.available(), true);
+  a.unavailable('NO_MODEL');
+  a.unavailable('NOT_GRANTED');
+  assert.equal(a.available(), false);
+  assert.deepEqual(notices, ['NO_MODEL']);
+  a.answered();
+  assert.equal(a.available(), true);
+  a.unavailable('NO_MODEL');
+  assert.equal(a.available(), false);
+  assert.deepEqual(notices, ['NO_MODEL'], 'still one notice per session');
+  assert.match(MODEL_NOTICES.NOT_GRANTED, /permission/);
 });

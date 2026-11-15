@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Task, TaskState } from '../src/core/types.ts';
 import { MODEL_PICK } from '../src/panel/addTask.ts';
-import { createLimiter } from '../src/panel/limiter.ts';
+import { MODEL_NOTICES, createLimiter, createModelAvailability } from '../src/panel/limiter.ts';
 import { PROMPT_MAX, SUMMARY_SYSTEM, createSummaries, type GenerateRequest } from '../src/panel/summaries.ts';
 import {
   SUGGEST_STATES,
@@ -290,6 +290,77 @@ test('suggester: shares the generate limit with summaries (waits for a free slot
   assert.equal(s.calls.length, 1);
   s.calls[0]!.resolve('{"type":"chore","state":"needs-triage"}');
   assert.deepEqual(await done, { kind: 'applied', type: 'chore' });
+});
+
+test('summaries and suggestions share one "model unavailable" flag and one notice', async () => {
+  const notices: string[] = [];
+  const availability = createModelAvailability((code) => notices.push(MODEL_NOTICES[code as 'NO_MODEL' | 'NOT_GRANTED'] ?? code));
+  const limit = createLimiter(2);
+  let sumGen = 0;
+  const summaries = createSummaries({
+    generate: async () => {
+      sumGen++;
+      throw hostError('NO_MODEL');
+    },
+    storage: { get: async () => undefined, set: async () => {}, delete: async () => {} },
+    context: () => ({ projectId: 'p', summary: { auto: true, language: 'English', prompt: 'Summarise {body}' } }),
+    limit,
+    availability,
+  });
+  let sugGen = 0;
+  const suggester = createSuggester({
+    generate: async () => {
+      sugGen++;
+      return { text: '{}' };
+    },
+    limit,
+    availability,
+    onNotice: (m) => notices.push(m),
+  });
+  assert.equal(suggester.available(), true);
+  assert.equal(summaries.auto(), true);
+  // A summary finds the model missing: Add task stops offering "Let the model pick".
+  await summaries.ensure(task({ id: '#1', body: 'b' }));
+  assert.equal(sumGen, 1);
+  assert.equal(availability.available(), false);
+  assert.equal(suggester.available(), false);
+  assert.equal(summaries.auto(), false);
+  const j = { taskId: '#7', title: 't', body: 'b', types: TYPES, asked: { type: true, state: true }, target: { get: async () => task(), setType: async () => {}, setState: async () => {} } };
+  assert.deepEqual(await suggester.suggest(j), { kind: 'unavailable' });
+  assert.equal(sugGen, 0, 'no request once known unavailable');
+  assert.deepEqual(notices, [MODEL_NOTICES.NO_MODEL], 'one notice, shared');
+  assert.match(MODEL_NOTICES.NO_MODEL, /summaries/);
+  assert.match(MODEL_NOTICES.NO_MODEL, /type/);
+  // A model answering again (Summarise pressed after choosing one) makes both available again.
+  availability.answered();
+  assert.equal(suggester.available(), true);
+  assert.equal(summaries.auto(), true);
+});
+
+test('suggester: a missing model found by a suggestion switches automatic summaries off too', async () => {
+  const notices: string[] = [];
+  const availability = createModelAvailability((code) => notices.push(code));
+  const limit = createLimiter(2);
+  const summaries = createSummaries({
+    generate: async () => ({ text: 'x' }),
+    storage: { get: async () => undefined, set: async () => {}, delete: async () => {} },
+    context: () => ({ projectId: 'p', summary: { auto: true, language: 'English', prompt: 'Summarise {body}' } }),
+    limit,
+    availability,
+  });
+  const suggester = createSuggester({
+    generate: async () => {
+      throw hostError('NOT_GRANTED');
+    },
+    limit,
+    availability,
+    onNotice: (m) => notices.push(m),
+  });
+  const j = { taskId: '#7', title: 't', body: 'b', types: TYPES, asked: { type: true, state: true }, target: { get: async () => task(), setType: async () => {}, setState: async () => {} } };
+  assert.deepEqual(await suggester.suggest(j), { kind: 'unavailable' });
+  assert.equal(summaries.auto(), false);
+  assert.equal(summaries.status(task({ id: '#1', body: 'b' })), 'unavailable');
+  assert.deepEqual(notices, ['NOT_GRANTED']);
 });
 
 test('summaries.acceptLate ignores a late suggestion answer (dropped: the task may have changed)', () => {

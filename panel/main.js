@@ -3617,6 +3617,26 @@ ${GUEST_UI_LOOK_CSS}`;
       }
     };
   };
+  var MODEL_NOTICES = {
+    NO_MODEL: "No Small Model is set, so automatic summaries are off and new tasks stay needs-triage with no type for now. Choose a Small Model in OpenChamber settings, then press Summarise in a task.",
+    NOT_GRANTED: "Summaries and type/state suggestions need the \u201Cmodel\u201D permission for Kanban Board (Settings \u2192 Extensions). Automatic summaries are off and new tasks stay needs-triage with no type for now."
+  };
+  var createModelAvailability = (onUnavailable) => {
+    let down = false;
+    let noticed = false;
+    return {
+      available: () => !down,
+      unavailable: (code2) => {
+        down = true;
+        if (noticed) return;
+        noticed = true;
+        onUnavailable?.(code2);
+      },
+      answered: () => {
+        down = false;
+      }
+    };
+  };
 
   // src/panel/summaries.ts
   var DEFAULT_SUMMARY_PROMPT = `Summarise this task for me in {language}, in 2 to 4 plain sentences: what changes for the user, why it matters, and what "done" means. No headings, no lists, no markdown. Write only the summary.
@@ -3675,8 +3695,7 @@ Title: {title}
     const gens = /* @__PURE__ */ new Map();
     const failed = /* @__PURE__ */ new Set();
     const languages = /* @__PURE__ */ new Map();
-    let unavailable = false;
-    let noticed = false;
+    const model = deps.availability ?? createModelAvailability(deps.onUnavailable);
     const limit = deps.limit ?? createLimiter();
     const slot = (fn) => limit.run(fn);
     const langKey = (projectId, taskId) => `${projectId}\0${taskId}`;
@@ -3740,7 +3759,7 @@ Title: {title}
     };
     const generate = (task, key, projectId, s, force) => {
       const p = slot(async () => {
-        if (unavailable && !force) return null;
+        if (!model.available() && !force) return null;
         const known = texts.get(key);
         if (known !== void 0) return known;
         try {
@@ -3757,18 +3776,14 @@ ${ref}`,
             return null;
           }
           failed.delete(key);
-          unavailable = false;
+          model.answered();
           texts.set(key, text3);
           await store2(key, taskPrefix(projectId, task.id), text3);
           return text3;
         } catch (e) {
           const code2 = codeOf(e);
           if (code2 !== null && UNAVAILABLE.has(code2)) {
-            unavailable = true;
-            if (!noticed) {
-              noticed = true;
-              deps.onUnavailable?.(code2);
-            }
+            model.unavailable(code2);
           } else {
             failed.add(key);
           }
@@ -3789,7 +3804,7 @@ ${ref}`,
       if (stored2 !== null) return stored2;
       const running = gens.get(r.key);
       if (running !== void 0) return running;
-      if (!force && (failed.has(r.key) || unavailable)) return null;
+      if (!force && (failed.has(r.key) || !model.available())) return null;
       return generate(task, r.key, r.projectId, r.summary, force);
     };
     const keyNow = (task) => {
@@ -3808,7 +3823,7 @@ ${ref}`,
         if (texts.has(key)) return "ready";
         if (gens.has(key)) return "pending";
         if (failed.has(key)) return "failed";
-        return unavailable ? "unavailable" : "none";
+        return model.available() ? "none" : "unavailable";
       },
       /** Reads a stored summary (and the card's language); never generates. */
       load: async (task) => {
@@ -3824,7 +3839,7 @@ ${ref}`,
         return ensure(task, true);
       },
       /** Whether summaries are generated on their own: the setting, unless the model is missing. */
-      auto: () => (deps.context()?.summary.auto ?? false) && !unavailable,
+      auto: () => (deps.context()?.summary.auto ?? false) && model.available(),
       /** The card's language was edited (undefined: back to the settings). */
       setLanguage: (projectId, taskId, language) => {
         languages.set(langKey(projectId, taskId), language?.trim() || void 0);
@@ -4204,20 +4219,20 @@ ${ref}`,
     failed: (id) => `The small model gave no usable type and state for ${id}; what was left to it stays as created (needs-triage, no type).`
   };
   var createSuggester = (deps) => {
-    let unavailable = false;
     let noticed = false;
     const notice = (message2) => {
       if (noticed) return;
       noticed = true;
       deps.onNotice?.(message2);
     };
+    const model = deps.availability ?? createModelAvailability((code2) => notice(code2 === "NOT_GRANTED" ? NOTICES.NOT_GRANTED : NOTICES.NO_MODEL));
     const suggest = async (job) => {
       if (!job.asked.type && !job.asked.state) return { kind: "kept" };
-      if (unavailable) return { kind: "unavailable" };
+      if (!model.available()) return { kind: "unavailable" };
       let suggestion;
       try {
         const answer = await deps.limit.run(() => {
-          if (unavailable) return Promise.resolve(null);
+          if (!model.available()) return Promise.resolve(null);
           return deps.generate({
             prompt: buildSuggestPrompt(job, job.types),
             system: SUGGEST_SYSTEM,
@@ -4225,12 +4240,12 @@ ${ref}`,
           });
         });
         if (answer === null) return { kind: "unavailable" };
+        model.answered();
         suggestion = parseSuggestion(answer.text, job.types);
       } catch (e) {
         const code2 = codeOf2(e);
         if (code2 !== null && UNAVAILABLE2.has(code2)) {
-          unavailable = true;
-          notice(code2 === "NOT_GRANTED" ? NOTICES.NOT_GRANTED : NOTICES.NO_MODEL);
+          model.unavailable(code2);
           return { kind: "unavailable" };
         }
         suggestion = null;
@@ -4269,7 +4284,7 @@ ${ref}`,
     };
     return {
       /** False once the model turned out missing or not granted this session. */
-      available: () => !unavailable,
+      available: () => model.available(),
       suggest
     };
   };
@@ -13727,6 +13742,10 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     }, 50);
   };
   var generateLimit = createLimiter();
+  var smallModel = createModelAvailability(
+    (code2) => void host.toast({ kind: "info", message: code2 === "NOT_GRANTED" ? MODEL_NOTICES.NOT_GRANTED : MODEL_NOTICES.NO_MODEL }).catch(() => {
+    })
+  );
   var summaries = createSummaries({
     generate: (request) => host.generate(request),
     limit: generateLimit,
@@ -13738,15 +13757,12 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     },
     loadLanguage: async (projectId, taskId) => (await store.loadCard(projectId, taskId)).summaryLanguage,
     onChange: summaryChanged,
-    onUnavailable: (code2) => void host.toast({
-      kind: "info",
-      message: code2 === "NOT_GRANTED" ? "Summaries need the \u201Cmodel\u201D permission for Kanban Board (Settings \u2192 Extensions). Automatic summaries are off for now." : "No small model is set, so automatic summaries are off for now. Choose a Small Model in OpenChamber settings, then press Summarise in a task."
-    }).catch(() => {
-    })
+    availability: smallModel
   });
   var suggester = createSuggester({
     generate: (request) => host.generate(request),
     limit: generateLimit,
+    availability: smallModel,
     busy: (taskId) => editor.busy.has(taskId),
     // The suggestion was written: show it (load refreshes an open task modal too).
     onApplied: () => void load(),

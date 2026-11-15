@@ -7,7 +7,7 @@
 // generate, limiter and tracker calls, so it runs under node:test.
 import type { Task, TaskState } from '../core/types.ts';
 import { CREATE_STATES, MODEL_PICK, type AddDraft } from './addTask.ts';
-import type { Limiter } from './limiter.ts';
+import { createModelAvailability, type Limiter, type ModelAvailability } from './limiter.ts';
 import { PROMPT_MAX, type GenerateRequest } from './summaries.ts';
 
 /** What the model may choose: the states a new task may start in (never done or wontfix). */
@@ -150,8 +150,13 @@ export type SuggesterDeps = {
   busy?: (taskId: string) => boolean;
   /** Something was written: reload the board. */
   onApplied?: (taskId: string, applied: { type?: string; state?: TaskState }) => void;
-  /** At most once per panel session, for a failure or a missing model. */
+  /**
+   * At most once per panel session, for a failure; also for a missing model when there is no
+   * shared `availability` (which then gives the one notice).
+   */
   onNotice?: (message: string) => void;
+  /** The panel's "Small Model available" flag, shared with the summaries; a private one otherwise. */
+  availability?: ModelAvailability;
 };
 
 const codeOf = (e: unknown): string | null =>
@@ -169,22 +174,23 @@ const NOTICES = {
 };
 
 export const createSuggester = (deps: SuggesterDeps) => {
-  let unavailable = false;
   let noticed = false;
   const notice = (message: string): void => {
     if (noticed) return;
     noticed = true;
     deps.onNotice?.(message);
   };
+  const model =
+    deps.availability ?? createModelAvailability((code) => notice(code === 'NOT_GRANTED' ? NOTICES.NOT_GRANTED : NOTICES.NO_MODEL));
 
   const suggest = async (job: SuggestJob): Promise<SuggestOutcome> => {
     if (!job.asked.type && !job.asked.state) return { kind: 'kept' };
-    if (unavailable) return { kind: 'unavailable' };
+    if (!model.available()) return { kind: 'unavailable' };
     let suggestion: Suggestion | null;
     try {
       const answer = await deps.limit.run(() => {
         // Queued before the model turned out missing: do not ask again.
-        if (unavailable) return Promise.resolve(null);
+        if (!model.available()) return Promise.resolve(null);
         return deps.generate({
           prompt: buildSuggestPrompt(job, job.types),
           system: SUGGEST_SYSTEM,
@@ -192,12 +198,12 @@ export const createSuggester = (deps: SuggesterDeps) => {
         });
       });
       if (answer === null) return { kind: 'unavailable' };
+      model.answered();
       suggestion = parseSuggestion(answer.text, job.types);
     } catch (e) {
       const code = codeOf(e);
       if (code !== null && UNAVAILABLE.has(code)) {
-        unavailable = true;
-        notice(code === 'NOT_GRANTED' ? NOTICES.NOT_GRANTED : NOTICES.NO_MODEL);
+        model.unavailable(code);
         return { kind: 'unavailable' };
       }
       suggestion = null;
@@ -238,7 +244,7 @@ export const createSuggester = (deps: SuggesterDeps) => {
 
   return {
     /** False once the model turned out missing or not granted this session. */
-    available: (): boolean => !unavailable,
+    available: (): boolean => model.available(),
     suggest,
   };
 };

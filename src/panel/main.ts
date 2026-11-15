@@ -31,7 +31,7 @@ import {
 import { defaultChoice, loadNotice, setupOutcome, type ApiFailure, type NoticeModel, type TrackerChoice } from './setup.ts';
 import { createAgentLoader, createModelLoader, type StartLists } from './models.ts';
 import { createStarter } from './starter.ts';
-import { createLimiter } from './limiter.ts';
+import { MODEL_NOTICES, createLimiter, createModelAvailability } from './limiter.ts';
 import { createSuggester } from './suggest.ts';
 import { createSummaries } from './summaries.ts';
 import { createBoard, type Board } from './ui/board.ts';
@@ -557,6 +557,13 @@ const summaryChanged = (): void => {
 
 /** One generate limit for the panel: summaries and type/state suggestions take turns. */
 const generateLimit = createLimiter();
+/**
+ * One "Small Model available" flag for both: whichever finds the model missing or not granted gives
+ * the one notice, automatic summaries stop and Add task stops offering "Let the model pick".
+ */
+const smallModel = createModelAvailability((code) =>
+  void host.toast({ kind: 'info', message: code === 'NOT_GRANTED' ? MODEL_NOTICES.NOT_GRANTED : MODEL_NOTICES.NO_MODEL }).catch(() => {}),
+);
 
 const summaries = createSummaries({
   generate: (request) => host.generate(request),
@@ -569,16 +576,7 @@ const summaries = createSummaries({
   },
   loadLanguage: async (projectId, taskId) => (await store.loadCard(projectId, taskId)).summaryLanguage,
   onChange: summaryChanged,
-  onUnavailable: (code) =>
-    void host
-      .toast({
-        kind: 'info',
-        message:
-          code === 'NOT_GRANTED'
-            ? 'Summaries need the “model” permission for Kanban Board (Settings → Extensions). Automatic summaries are off for now.'
-            : 'No small model is set, so automatic summaries are off for now. Choose a Small Model in OpenChamber settings, then press Summarise in a task.',
-      })
-      .catch(() => {}),
+  availability: smallModel,
 });
 
 // --- type and state of tasks added here (suggest.ts) ---
@@ -586,6 +584,7 @@ const summaries = createSummaries({
 const suggester = createSuggester({
   generate: (request) => host.generate(request),
   limit: generateLimit,
+  availability: smallModel,
   busy: (taskId) => editor.busy.has(taskId),
   // The suggestion was written: show it (load refreshes an open task modal too).
   onApplied: () => void load(),
