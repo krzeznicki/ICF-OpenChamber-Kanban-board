@@ -4,11 +4,13 @@
 // Writes (drag and drop, the task modal, Add task) live in edit.ts; a drop on In Progress goes to starter.ts:
 // it starts an agent session (or queues it over the limit) and the card then follows that session. Settings (global, per project, presets, per card) come from the
 // extension's storage through settings.ts and are edited in the Settings sheet. Personal summaries
-// (summaries.ts) are read or generated for the shown cards after each load.
+// (summaries.ts) are read or generated for the shown cards after each load. "Archive done"
+// (archive.ts) hides done tasks from the board through the extension's storage only.
 import { connectHost } from '@openchamber/sdk';
 import type { GuestProject, GuestSessionRecord, HostReadyContext } from '@openchamber/sdk';
 import { applyHostReady } from '@openchamber/sdk/ui';
 import type { Task } from '../core/types.ts';
+import { archivableIds, archivedShown, archiveTasks, reconcileArchived, unarchiveTask } from './archive.ts';
 import { ApiError, createApi, type Api, type ConfigResult, type ProjectConfig } from './api.ts';
 import { groupTasks, pruneArchived, resolveSession, sessionForTask, sessionTarget, type Column, type SessionLookup } from './columns.ts';
 import { createEditor, type Editor } from './edit.ts';
@@ -30,6 +32,7 @@ import { createModelLoader } from './models.ts';
 import { createStarter } from './starter.ts';
 import { createSummaries } from './summaries.ts';
 import { createBoard, type Board } from './ui/board.ts';
+import { askChoice } from './ui/confirm.ts';
 import { mountNotice } from './ui/notice.ts';
 import { openSettings } from './ui/settingsView.ts';
 import { injectStyles } from './ui/styles.ts';
@@ -70,6 +73,11 @@ type State = {
   /** Session ids of links a host lookup found archived (columns.ts markArchived); `archivedFor` is their project. */
   archived: Set<string>;
   archivedFor: string | null;
+  /** Done tasks the user archived (archive.ts), task id -> when; `archivedTasksFor` is their project. */
+  archivedTasks: Map<string, number>;
+  archivedTasksFor: string | null;
+  /** The Done header's "Show archived" switch (this panel session only). */
+  showArchived: boolean;
 };
 
 const state: State = {
@@ -93,6 +101,9 @@ const state: State = {
   detachedFor: null,
   archived: new Set(),
   archivedFor: null,
+  archivedTasks: new Map(),
+  archivedTasksFor: null,
+  showArchived: false,
 };
 
 const store = createSettingsStore(host.storage);
@@ -103,6 +114,14 @@ const info = (message: string): void => void host.toast({ kind: 'info', message 
 const detached = (): Map<string, number> => (state.detachedFor === state.projectId ? state.detached : new Map());
 /** The shown project's sessions found archived (empty while another project's are loaded). */
 const archived = (): Set<string> => (state.archivedFor === state.projectId ? state.archived : new Set());
+/** The shown project's archived done tasks (empty while another project's are loaded). */
+const archivedTasks = (): Map<string, number> => (state.archivedTasksFor === state.projectId ? state.archivedTasks : new Map());
+/**
+ * Bumped on every local archive change (`archiveWritten`: the newest whose write has ended). A load
+ * trusts what it read from storage only when no change was unwritten at its start or made during it.
+ */
+let archiveEdits = 0;
+let archiveWritten = 0;
 // Every field reports each keystroke; only the newest value per key is written.
 const saver = createLatestSaver<() => Promise<void>>(
   (_key, run) => run(),
@@ -279,11 +298,28 @@ const draw = (): void => {
     board.render(null);
     return;
   }
-  const model = groupTasks(state.tasks, state.sessions, starter.isStarting, state.hideSubtasks, starter.links(), starter.queuedIds(), starter.queueErrors(), detached());
+  const marks = archivedTasks();
+  const archivedCount = archivedShown(state.tasks, marks);
+  if (archivedCount === 0) state.showArchived = false;
+  const model = groupTasks(
+    state.tasks,
+    state.sessions,
+    starter.isStarting,
+    state.hideSubtasks,
+    starter.links(),
+    starter.queuedIds(),
+    starter.queueErrors(),
+    detached(),
+    { ids: new Set(marks.keys()), show: state.showArchived },
+  );
   for (const [column, cards] of Object.entries(model)) for (const c of cards) state.columns.set(c.task.id, column as Column);
   // The attention mark: sessions that finished or wait for the user.
   setBadge(model.review.length || null);
-  board.render(model, editor.busy, (task) => summaries.get(task));
+  board.render(model, editor.busy, (task) => summaries.get(task), {
+    archivable: archivableIds(state.tasks, marks).length,
+    archived: archivedCount,
+    showArchived: state.showArchived,
+  });
   auditLinks();
   if (state.tasks.length === 0) {
     board.setStatus({
@@ -390,10 +426,12 @@ const load = async (): Promise<void> => {
       return;
     }
     // Links and the start queue come from the service's own files (starter.ts).
-    const [tasks, marks, gone] = await Promise.all([
+    const edits = archiveWritten === archiveEdits ? archiveEdits : -1;
+    const [tasks, marks, gone, shelved] = await Promise.all([
       api.list(),
       store.loadDetached(p.id).catch(() => null),
       store.loadArchived(p.id).catch(() => null),
+      store.loadArchivedTasks(p.id).catch(() => null),
       starter.refresh(p.id, p.directory),
     ]);
     if (mine !== generation) return;
@@ -408,6 +446,13 @@ const load = async (): Promise<void> => {
       state.archived = new Set([...archived(), ...gone]);
       state.archivedFor = p.id;
     }
+    // Stored archive marks (also the other frame's) win, unless this frame changed its own meanwhile.
+    // Then: ids the tracker no longer lists are pruned, and reopened tasks are unarchived.
+    const base = shelved !== null && edits === archiveEdits ? shelved : archivedTasks();
+    const fixed = reconcileArchived(base, tasks);
+    state.archivedTasks = fixed.marks;
+    state.archivedTasksFor = p.id;
+    if (fixed.changed) saveArchivedTasks(p.id, fixed.marks);
     state.config = result.config;
     state.tasks = tasks;
     state.view = 'board';
@@ -442,6 +487,9 @@ const selectProject = async (id: string | null): Promise<void> => {
   state.detachedFor = null;
   state.archived = new Set();
   state.archivedFor = null;
+  state.archivedTasks = new Map();
+  state.archivedTasksFor = null;
+  state.showArchived = false;
   audited.clear();
   starter.reset();
   state.config = null;
@@ -573,6 +621,51 @@ const detach = async (task: Task, from: Column): Promise<void> => {
   info('Moved; the agent session keeps running — open it from the session list');
 };
 
+// --- "Archive done" (archive.ts): panel storage only, the repo and GitHub stay as they are ---
+
+const saveArchivedTasks = (projectId: string, marks: ReadonlyMap<string, number>): void =>
+  saver.save(STORAGE_KEYS.archivedTasks(projectId), () => store.saveArchivedTasks(projectId, marks));
+
+/** A user change of the shown project's archive marks: stored, then the board and an open modal redraw. */
+const setArchivedTasks = (projectId: string, marks: Map<string, number>): void => {
+  const n = ++archiveEdits;
+  state.archivedTasks = marks;
+  state.archivedTasksFor = projectId;
+  saver.save(STORAGE_KEYS.archivedTasks(projectId), async () => {
+    try {
+      await store.saveArchivedTasks(projectId, marks);
+    } finally {
+      if (n > archiveWritten) archiveWritten = n;
+    }
+  });
+  draw();
+  editor.refresh();
+};
+
+const archiveDone = async (): Promise<void> => {
+  const id = state.projectId;
+  if (id === null || state.tasks === null) return;
+  const n = archivableIds(state.tasks, archivedTasks()).length;
+  if (n === 0) return;
+  const answer = await askChoice(
+    `Archive ${n} done task${n === 1 ? '' : 's'}?`,
+    'They leave the board. Nothing changes in the repository or on GitHub; “Show archived” brings them back, and a reopened task returns on its own.',
+    [{ id: 'archive', label: 'Archive' }],
+  );
+  // The board may have reloaded or switched project while the question was open.
+  if (answer === null || state.projectId !== id || state.tasks === null) return;
+  const ids = archivableIds(state.tasks, archivedTasks());
+  if (ids.length === 0) return;
+  setArchivedTasks(id, archiveTasks(archivedTasks(), ids, Date.now()));
+  info(`Archived ${ids.length} done task${ids.length === 1 ? '' : 's'}`);
+};
+
+const unarchive = (taskId: string): void => {
+  const id = state.projectId;
+  if (id === null || !archivedTasks().has(taskId)) return;
+  setArchivedTasks(id, unarchiveTask(archivedTasks(), taskId));
+};
+
 /**
  * A session known only from a link: looked up in every project's snapshot, so that
  * host.openSession only ever gets an id the host lists, not archived (columns.ts SessionTarget).
@@ -652,6 +745,11 @@ const start = (ctx: HostReadyContext): void => {
     onRefresh: () => void load(),
     onAdd: () => editor.showAdd(),
     onSettings: showSettings,
+    onArchiveDone: () => void archiveDone(),
+    onShowArchived: (show) => {
+      state.showArchived = show;
+      draw();
+    },
   });
   editor = createEditor({
     host,
@@ -676,6 +774,7 @@ const start = (ctx: HostReadyContext): void => {
       open: (id) => void host.openSession(id).catch((e: unknown) => fail(`Could not open the session: ${errorText(e)}`)),
     },
     sections: { get: () => sections, save: saveSections },
+    archive: { has: (task) => task.state === 'done' && archivedTasks().has(task.id), unarchive },
     baseTypes: () => settings().types,
     start: {
       context: startContext,

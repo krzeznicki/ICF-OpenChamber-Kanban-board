@@ -1,6 +1,6 @@
 // The task modal, opened by a click on any card: reading first. A header (title, id, state and type
 // badges, ×, and "Open session" when the task has a session that may be opened, or "Session
-// archived"), then collapsible sections: Summary (the personal summary or a Summarise button), Task
+// archived"; "Unarchive" for a task archived by "Archive done"), then collapsible sections: Summary (the personal summary or a Summarise button), Task
 // (the body as formatted markdown, ui/markdownView.ts), Sub-tasks (a parent's children, a click
 // opens that task, and "Add sub-task" where addTask.ts allows it) and Settings, collapsed by
 // default: state and type selects, "Move to" buttons (the keyboard path for drag and drop; Done
@@ -44,6 +44,8 @@ export type DetailModel = {
   children: { id: string; title: string; state: TaskState }[];
   /** The Sub-tasks section offers "Add sub-task" (addTask.ts canAddSubtask); it then shows even without children. */
   addSubtask: boolean;
+  /** An archived done task (archive.ts): an "archived" badge and an "Unarchive" button in the header. */
+  archived: boolean;
 };
 
 /**
@@ -91,6 +93,8 @@ export type DetailCallbacks = {
   onAddSubtask: (input: { title: string; type: string | null }) => Promise<string | null>;
   /** The user opened or collapsed a section. */
   onSections: (sections: Sections) => void;
+  /** "Unarchive" on an archived task: it shows in Done again. */
+  onUnarchive: () => void;
   onDismiss: () => void;
 };
 
@@ -198,6 +202,7 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
     disposers.push(mountBadge(badges, { label: label !== undefined && label !== task.state ? label : task.state, tone: stateTone(task.state) }).dispose);
     if (task.type !== null) disposers.push(mountBadge(badges, { label: task.type, tone: 'neutral' }).dispose);
     if (task.kind === 'parent') disposers.push(mountBadge(badges, { label: 'parent', tone: 'primary' }).dispose);
+    if (m.archived) disposers.push(mountBadge(badges, { label: 'archived', tone: 'neutral' }).dispose);
     if (m.busy) {
       const spin = el('span', 'kb-inline-spin');
       badges.append(spin);
@@ -205,6 +210,9 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
     }
     row.append(badges);
     const session = el('div', 'kb-modal-session');
+    if (m.archived) {
+      disposers.push(mountButton(session, { label: 'Unarchive', variant: 'outline', size: 'sm', onClick: callbacks.onUnarchive }).dispose);
+    }
     if (m.session === 'open') {
       disposers.push(mountButton(session, { label: 'Open session', variant: 'default', size: 'sm', onClick: callbacks.onOpenSession }).dispose);
     } else if (m.session === 'archived') {

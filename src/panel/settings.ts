@@ -2,6 +2,7 @@
 // All of it lives in the extension's instance storage, never in the repo. The resolvers are pure
 // so they run under node:test; createSettingsStore is the only part that touches storage.
 import type { Task } from '../core/types.ts';
+import { parseArchivedTasks, serializeArchived, type ArchivedTasks } from './archive.ts';
 import { BUILTIN_PRESETS, isPristine, parseStoredPresets, usesMattSkills, type Preset, type SkillUse, type StoredPresets } from './presets.ts';
 import { DEFAULT_SUMMARY_PROMPT } from './summaries.ts';
 
@@ -203,6 +204,8 @@ export const STORAGE_KEYS = {
   detached: (projectId: string): string => fit(`detached:${projectId}`),
   /** Per project: session ids a host lookup found archived (columns.ts markArchived). */
   archivedSessions: (projectId: string): string => fit(`archivedSessions:${projectId}`),
+  /** Per project: done tasks the user archived ("Archive done", archive.ts), `{ id, archivedAt }[]`. */
+  archivedTasks: (projectId: string): string => fit(`archivedTasks:${projectId}`),
   /** Which sections of the task modal are open (one entry for every task and project). */
   detailSections: 'detail-sections',
 } as const;
@@ -288,6 +291,10 @@ export const createSettingsStore = (storage: SettingsStorage) => {
     loadArchived: async (projectId: string): Promise<Set<string>> => parseArchivedSessions(await storage.get(STORAGE_KEYS.archivedSessions(projectId))),
     saveArchived: (projectId: string, ids: ReadonlySet<string>): Promise<void> =>
       ids.size === 0 ? storage.delete(STORAGE_KEYS.archivedSessions(projectId)) : storage.set(STORAGE_KEYS.archivedSessions(projectId), [...ids].slice(-ARCHIVED_MAX) as never),
+    loadArchivedTasks: async (projectId: string): Promise<Map<string, number>> =>
+      parseArchivedTasks(await storage.get(STORAGE_KEYS.archivedTasks(projectId))),
+    saveArchivedTasks: (projectId: string, marks: ArchivedTasks): Promise<void> =>
+      put(STORAGE_KEYS.archivedTasks(projectId), serializeArchived(marks), marks.size === 0),
     loadSections: async (): Promise<Sections> => parseSections(await storage.get(STORAGE_KEYS.detailSections)),
     saveSections: (sections: Sections): Promise<void> => {
       const clean = parseSections(sections);

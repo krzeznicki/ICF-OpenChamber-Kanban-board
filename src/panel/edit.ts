@@ -46,6 +46,8 @@ export type EditorDeps = {
     /** Only ever called with an id that is `open` in a host snapshot. */
     open: (sessionId: string) => void;
   };
+  /** "Archive done" (archive.ts): whether a task is archived, and the modal's "Unarchive". */
+  archive: { has: (task: Task) => boolean; unarchive: (taskId: string) => void };
   /** Which modal sections are open (device storage). */
   sections: { get: () => Sections; save: (sections: Sections) => void };
   /** The base types offered in the type selects (settings' `types`). */
@@ -178,6 +180,7 @@ export const createEditor = (deps: EditorDeps) => {
       session: sessionView(task),
       children: tasks.filter((t) => t.parentId === task.id).map((t) => ({ id: t.id, title: t.title, state: t.state })),
       addSubtask: canAddSubtask(task, deps.tracker()),
+      archived: deps.archive.has(task),
     };
   };
 
@@ -305,6 +308,10 @@ export const createEditor = (deps: EditorDeps) => {
         return null;
       },
       onSections: deps.sections.save,
+      onUnarchive: () => {
+        deps.archive.unarchive(id);
+        refreshDetail();
+      },
       loadModels: deps.loadModels,
       onStartOptions: (options) => {
         if (card === null || card.taskId !== id) return;

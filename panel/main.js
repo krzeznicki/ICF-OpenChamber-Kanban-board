@@ -2738,6 +2738,41 @@ ${GUEST_UI_LOOK_CSS}`;
     };
   };
 
+  // src/panel/archive.ts
+  var ARCHIVE_MAX = 400;
+  var record = (v2) => typeof v2 === "object" && v2 !== null && !Array.isArray(v2) ? v2 : null;
+  var parseArchivedTasks = (raw) => {
+    const out = /* @__PURE__ */ new Map();
+    if (!Array.isArray(raw)) return out;
+    for (const entry of raw) {
+      const r = record(entry);
+      if (r === null || typeof r.id !== "string" || r.id === "") continue;
+      const at = r.archivedAt;
+      if (typeof at !== "number" || !Number.isFinite(at) || at <= 0) continue;
+      out.delete(r.id);
+      out.set(r.id, at);
+    }
+    return out;
+  };
+  var serializeArchived = (marks) => [...marks].sort((a, b) => a[1] - b[1]).slice(-ARCHIVE_MAX).map(([id, archivedAt]) => ({ id, archivedAt }));
+  var archivableIds = (tasks, marks) => tasks.filter((t) => t.state === "done" && !marks.has(t.id)).map((t) => t.id);
+  var archiveTasks = (marks, ids, at) => {
+    const next = new Map(marks);
+    for (const id of ids) next.set(id, at);
+    return next;
+  };
+  var unarchiveTask = (marks, id) => {
+    const next = new Map(marks);
+    next.delete(id);
+    return next;
+  };
+  var reconcileArchived = (marks, tasks) => {
+    const done = new Set(tasks.filter((t) => t.state === "done").map((t) => t.id));
+    const next = new Map([...marks].filter(([id]) => done.has(id)));
+    return { marks: next, changed: next.size !== marks.size };
+  };
+  var archivedShown = (tasks, marks) => tasks.filter((t) => t.state === "done" && marks.has(t.id)).length;
+
   // src/panel/api.ts
   var ApiError = class extends Error {
     code;
@@ -2883,7 +2918,8 @@ ${GUEST_UI_LOOK_CSS}`;
     return snapshots.some((snap) => snap.state === "loading") ? "pending" : "missing";
   };
   var ledByOrchestrator = (task, sessions, links = [], detached2 = NONE) => task.parentId !== null && task.state !== "done" && isWorking(sessionForTask(task.parentId, sessions, links, detached2.get(task.parentId)));
-  var groupTasks = (tasks, sessions, starting, hideSubtasks, links = [], queued = /* @__PURE__ */ new Set(), queueErrors = /* @__PURE__ */ new Map(), detached2 = NONE) => {
+  var NO_ARCHIVE = { ids: /* @__PURE__ */ new Set(), show: false };
+  var groupTasks = (tasks, sessions, starting, hideSubtasks, links = [], queued = /* @__PURE__ */ new Set(), queueErrors = /* @__PURE__ */ new Map(), detached2 = NONE, archive = NO_ARCHIVE) => {
     const byId = new Map(tasks.map((t) => [t.id, t]));
     const children = /* @__PURE__ */ new Map();
     for (const t of tasks) {
@@ -2905,6 +2941,8 @@ ${GUEST_UI_LOOK_CSS}`;
     const cards = /* @__PURE__ */ new Map();
     for (const task of tasks) {
       if (hideSubtasks && task.parentId !== null) continue;
+      const isArchived = task.state === "done" && archive.ids.has(task.id);
+      if (isArchived && !archive.show) continue;
       const session = sessionForTask(task.id, sessions, links, detached2.get(task.id));
       const kids = children.get(task.id) ?? [];
       const led = task.state !== "done" && parentRunning(task.parentId);
@@ -2922,7 +2960,8 @@ ${GUEST_UI_LOOK_CSS}`;
           starting: starting.has(task.id) && session === null,
           queued: queued.has(task.id) && !starting.has(task.id) && task.state !== "done",
           queueError: queued.has(task.id) && !starting.has(task.id) && task.state !== "done" ? queueErrors.get(task.id) ?? null : null,
-          ledByOrchestrator: led
+          ledByOrchestrator: led,
+          archived: isArchived
         }
       });
     }
@@ -3207,19 +3246,19 @@ ${GUEST_UI_LOOK_CSS}`;
     });
     return { ...p, text: p.mattText, skillFiles };
   };
-  var record = (v2) => typeof v2 === "object" && v2 !== null && !Array.isArray(v2) ? v2 : null;
+  var record2 = (v2) => typeof v2 === "object" && v2 !== null && !Array.isArray(v2) ? v2 : null;
   var parseStoredPresets = (raw) => {
-    const r = record(raw);
+    const r = record2(raw);
     const builtin = {};
     const custom = [];
-    const b = record(r?.builtin);
+    const b = record2(r?.builtin);
     if (b !== null) {
       for (const [id, text3] of Object.entries(b)) if (BUILTIN_IDS.has(id) && typeof text3 === "string") builtin[id] = text3;
     }
     if (Array.isArray(r?.custom)) {
       const seen = /* @__PURE__ */ new Set();
       for (const item of r.custom) {
-        const c = record(item);
+        const c = record2(item);
         if (c === null || typeof c.id !== "string" || c.id === "" || BUILTIN_IDS.has(c.id) || seen.has(c.id)) continue;
         if (typeof c.name !== "string" || typeof c.text !== "string") continue;
         seen.add(c.id);
@@ -3537,11 +3576,11 @@ ${ref}`,
     types: ["enhancement", "bug", "chore", "research"],
     useMattSkills: true
   };
-  var record2 = (v2) => typeof v2 === "object" && v2 !== null && !Array.isArray(v2) ? v2 : null;
+  var record3 = (v2) => typeof v2 === "object" && v2 !== null && !Array.isArray(v2) ? v2 : null;
   var text = (v2) => typeof v2 === "string" && v2.trim() !== "" ? v2.trim() : void 0;
   var clampParallel = (n) => Math.min(MAX_PARALLEL_MAX, Math.max(MAX_PARALLEL_MIN, Math.round(n)));
   var startPatch = (raw) => {
-    const r = record2(raw);
+    const r = record3(raw);
     const out = {};
     if (r === null) return out;
     const presetId = text(r.presetId);
@@ -3555,12 +3594,12 @@ ${ref}`,
   };
   var parseCardOptions = (raw) => {
     const out = startPatch(raw);
-    const language = text(record2(raw)?.summaryLanguage);
+    const language = text(record3(raw)?.summaryLanguage);
     if (language !== void 0) out.summaryLanguage = language;
     return out;
   };
   var parseSettings = (raw) => {
-    const r = record2(raw);
+    const r = record3(raw);
     const out = {};
     if (r === null) return out;
     if (typeof r.autoStart === "boolean") out.autoStart = r.autoStart;
@@ -3573,7 +3612,7 @@ ${ref}`,
     }
     const defaults = startPatch(r.defaults);
     if (Object.keys(defaults).length > 0) out.defaults = defaults;
-    const byType = record2(r.presetByType);
+    const byType = record3(r.presetByType);
     if (byType !== null) {
       const map2 = {};
       for (const [type, id] of Object.entries(byType)) {
@@ -3582,7 +3621,7 @@ ${ref}`,
       }
       if (Object.keys(map2).length > 0) out.presetByType = map2;
     }
-    const summary = record2(r.summary);
+    const summary = record3(r.summary);
     if (summary !== null) {
       const s = {};
       if (typeof summary.auto === "boolean") s.auto = summary.auto;
@@ -3644,6 +3683,8 @@ ${ref}`,
     detached: (projectId) => fit(`detached:${projectId}`),
     /** Per project: session ids a host lookup found archived (columns.ts markArchived). */
     archivedSessions: (projectId) => fit(`archivedSessions:${projectId}`),
+    /** Per project: done tasks the user archived ("Archive done", archive.ts), `{ id, archivedAt }[]`. */
+    archivedTasks: (projectId) => fit(`archivedTasks:${projectId}`),
     /** Which sections of the task modal are open (one entry for every task and project). */
     detailSections: "detail-sections"
   };
@@ -3651,7 +3692,7 @@ ${ref}`,
   var parseArchivedSessions = (raw) => new Set(Array.isArray(raw) ? raw.filter((id) => typeof id === "string" && id !== "").slice(-ARCHIVED_MAX) : []);
   var DEFAULT_SECTIONS = Object.freeze({ summary: true, task: true, subtasks: true, settings: false });
   var parseSections = (raw) => {
-    const r = record2(raw);
+    const r = record3(raw);
     const out = { ...DEFAULT_SECTIONS };
     if (r !== null) {
       for (const k of Object.keys(out)) if (typeof r[k] === "boolean") out[k] = r[k];
@@ -3661,7 +3702,7 @@ ${ref}`,
   var DETACHED_MAX = 200;
   var parseDetached = (raw) => {
     const out = /* @__PURE__ */ new Map();
-    const r = record2(raw);
+    const r = record3(raw);
     if (r !== null) {
       for (const [id, at] of Object.entries(r)) if (typeof at === "number" && Number.isFinite(at) && at > 0) out.set(id, at);
     }
@@ -3673,7 +3714,7 @@ ${ref}`,
     next.set(taskId, at);
     return new Map([...next].sort((a, b) => a[1] - b[1]).slice(-max));
   };
-  var isEmptyLayer = (layer) => Object.entries(layer).every(([, v2]) => v2 === void 0 || record2(v2) !== null && Object.keys(v2).length === 0);
+  var isEmptyLayer = (layer) => Object.entries(layer).every(([, v2]) => v2 === void 0 || record3(v2) !== null && Object.keys(v2).length === 0);
   var createSettingsStore = (storage) => {
     const put = async (key, value, empty) => {
       if (empty) await storage.delete(key);
@@ -3702,6 +3743,8 @@ ${ref}`,
       saveDetached: (projectId, marks) => put(STORAGE_KEYS.detached(projectId), Object.fromEntries(marks), marks.size === 0),
       loadArchived: async (projectId) => parseArchivedSessions(await storage.get(STORAGE_KEYS.archivedSessions(projectId))),
       saveArchived: (projectId, ids) => ids.size === 0 ? storage.delete(STORAGE_KEYS.archivedSessions(projectId)) : storage.set(STORAGE_KEYS.archivedSessions(projectId), [...ids].slice(-ARCHIVED_MAX)),
+      loadArchivedTasks: async (projectId) => parseArchivedTasks(await storage.get(STORAGE_KEYS.archivedTasks(projectId))),
+      saveArchivedTasks: (projectId, marks) => put(STORAGE_KEYS.archivedTasks(projectId), serializeArchived(marks), marks.size === 0),
       loadSections: async () => parseSections(await storage.get(STORAGE_KEYS.detailSections)),
       saveSections: (sections2) => {
         const clean2 = parseSections(sections2);
@@ -10677,6 +10720,7 @@ ${ref}`,
       disposers.push(mountBadge(badges, { label: label !== void 0 && label !== task.state ? label : task.state, tone: stateTone(task.state) }).dispose);
       if (task.type !== null) disposers.push(mountBadge(badges, { label: task.type, tone: "neutral" }).dispose);
       if (task.kind === "parent") disposers.push(mountBadge(badges, { label: "parent", tone: "primary" }).dispose);
+      if (m.archived) disposers.push(mountBadge(badges, { label: "archived", tone: "neutral" }).dispose);
       if (m.busy) {
         const spin = el5("span", "kb-inline-spin");
         badges.append(spin);
@@ -10684,6 +10728,9 @@ ${ref}`,
       }
       row.append(badges);
       const session = el5("div", "kb-modal-session");
+      if (m.archived) {
+        disposers.push(mountButton(session, { label: "Unarchive", variant: "outline", size: "sm", onClick: callbacks.onUnarchive }).dispose);
+      }
       if (m.session === "open") {
         disposers.push(mountButton(session, { label: "Open session", variant: "default", size: "sm", onClick: callbacks.onOpenSession }).dispose);
       } else if (m.session === "archived") {
@@ -11190,7 +11237,8 @@ ${ref}`,
         summary: deps.summary.model(task),
         session: sessionView(task),
         children: tasks.filter((t) => t.parentId === task.id).map((t) => ({ id: t.id, title: t.title, state: t.state })),
-        addSubtask: canAddSubtask(task, deps.tracker())
+        addSubtask: canAddSubtask(task, deps.tracker()),
+        archived: deps.archive.has(task)
       };
     };
     const loadCard = (taskId) => {
@@ -11305,6 +11353,10 @@ ${ref}`,
           return null;
         },
         onSections: deps.sections.save,
+        onUnarchive: () => {
+          deps.archive.unarchive(id);
+          refreshDetail();
+        },
         loadModels: deps.loadModels,
         onStartOptions: (options) => {
           if (card === null || card.taskId !== id) return;
@@ -12018,6 +12070,7 @@ ${note}` : note;
     node.dataset.taskId = task.id;
     node.tabIndex = 0;
     node.setAttribute("aria-label", `${task.title} (${task.id})`);
+    if (model.archived) node.classList.add("is-archived");
     if (busy) {
       node.classList.add("is-busy");
       node.setAttribute("aria-busy", "true");
@@ -12050,6 +12103,7 @@ ${note}` : note;
     } else if (model.starting) {
       badge2("starting agent\u2026", "info");
     }
+    if (model.archived) badge2("archived", "neutral");
     if (model.ledByOrchestrator) badge2("led by orchestrator", "primary");
     if (task.kind === "parent") badge2("parent", "primary");
     if (task.type !== null) badge2(task.type, typeTone(task.type));
@@ -12087,6 +12141,7 @@ ${note}` : note;
   };
 
   // src/panel/ui/board.ts
+  var NO_TOOLS = { archivable: 0, archived: 0, showArchived: false };
   var div2 = (className) => {
     const node = document.createElement("div");
     node.className = className;
@@ -12130,6 +12185,22 @@ ${note}` : note;
     const refresh = mountButton(refreshSlot, { label: "Refresh", variant: "outline", size: "sm", onClick: callbacks.onRefresh });
     let statusDispose = null;
     let cardDisposers = [];
+    const doneTools = (done) => {
+      const tools = div2("kb-column-tools");
+      if (done.archivable > 0) {
+        const slot = div2("kb-archive-button");
+        tools.append(slot);
+        cardDisposers.push(mountButton(slot, { label: "Archive done", variant: "outline", size: "xs", onClick: callbacks.onArchiveDone }).dispose);
+      }
+      if (done.archived > 0) {
+        const slot = div2("kb-show-archived");
+        tools.append(slot);
+        cardDisposers.push(
+          mountSwitch(slot, { label: `Show archived (${done.archived})`, checked: done.showArchived, onChange: callbacks.onShowArchived }).dispose
+        );
+      }
+      return tools;
+    };
     return {
       /** The persistent container the cards are drawn in; drag listeners live here. */
       columns,
@@ -12167,7 +12238,7 @@ ${note}` : note;
         }
       },
       /** Draws the columns; null hides them (no project, no tracker, or an error). */
-      render: (board2, busy = /* @__PURE__ */ new Set(), summaryOf = () => null) => {
+      render: (board2, busy = /* @__PURE__ */ new Set(), summaryOf = () => null, done = NO_TOOLS) => {
         for (const d of cardDisposers) d();
         cardDisposers = [];
         columns.replaceChildren();
@@ -12184,6 +12255,8 @@ ${note}` : note;
           count.className = "kb-count";
           count.textContent = String(cards.length);
           head.append(name, count);
+          column.append(head);
+          if (id === "done" && (done.archivable > 0 || done.archived > 0)) column.append(doneTools(done));
           const list3 = div2("kb-cards");
           if (cards.length === 0) {
             const none = div2("kb-none");
@@ -12195,7 +12268,7 @@ ${note}` : note;
             list3.append(card.node);
             cardDisposers.push(card.dispose);
           }
-          column.append(head, list3);
+          column.append(list3);
           columns.append(column);
         }
       }
@@ -12247,6 +12320,9 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
 .kb-card:focus-visible { outline: 2px solid var(--oc-focus); outline-offset: 1px; }
 .kb-card.is-dragging { opacity: 0.4; }
 .kb-card.is-busy { opacity: 0.6; cursor: progress; }
+.kb-card.is-archived { opacity: 0.55; border-style: dashed; }
+.kb-column-tools { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.375rem 0.5rem;
+  padding: 0 0.25rem; font-size: 0.85em; }
 .kb-ghost { position: fixed; left: 0; top: 0; z-index: 60; pointer-events: none; margin: 0; cursor: grabbing;
   box-shadow: 0 8px 24px rgb(0 0 0 / 0.25); }
 :root.kb-dragging, :root.kb-dragging * { cursor: grabbing !important; }
@@ -12436,7 +12512,10 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     detached: /* @__PURE__ */ new Map(),
     detachedFor: null,
     archived: /* @__PURE__ */ new Set(),
-    archivedFor: null
+    archivedFor: null,
+    archivedTasks: /* @__PURE__ */ new Map(),
+    archivedTasksFor: null,
+    showArchived: false
   };
   var store = createSettingsStore(host.storage);
   var fail = (message) => void host.toast({ kind: "error", message }).catch(() => {
@@ -12445,6 +12524,9 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
   });
   var detached = () => state.detachedFor === state.projectId ? state.detached : /* @__PURE__ */ new Map();
   var archived = () => state.archivedFor === state.projectId ? state.archived : /* @__PURE__ */ new Set();
+  var archivedTasks = () => state.archivedTasksFor === state.projectId ? state.archivedTasks : /* @__PURE__ */ new Map();
+  var archiveEdits = 0;
+  var archiveWritten = 0;
   var saver = createLatestSaver(
     (_key, run) => run(),
     (e) => fail(`Could not save settings: ${e instanceof Error ? e.message : String(e)}`)
@@ -12593,10 +12675,27 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
       board.render(null);
       return;
     }
-    const model = groupTasks(state.tasks, state.sessions, starter.isStarting, state.hideSubtasks, starter.links(), starter.queuedIds(), starter.queueErrors(), detached());
+    const marks = archivedTasks();
+    const archivedCount = archivedShown(state.tasks, marks);
+    if (archivedCount === 0) state.showArchived = false;
+    const model = groupTasks(
+      state.tasks,
+      state.sessions,
+      starter.isStarting,
+      state.hideSubtasks,
+      starter.links(),
+      starter.queuedIds(),
+      starter.queueErrors(),
+      detached(),
+      { ids: new Set(marks.keys()), show: state.showArchived }
+    );
     for (const [column, cards] of Object.entries(model)) for (const c of cards) state.columns.set(c.task.id, column);
     setBadge(model.review.length || null);
-    board.render(model, editor.busy, (task) => summaries.get(task));
+    board.render(model, editor.busy, (task) => summaries.get(task), {
+      archivable: archivableIds(state.tasks, marks).length,
+      archived: archivedCount,
+      showArchived: state.showArchived
+    });
     auditLinks();
     if (state.tasks.length === 0) {
       board.setStatus({
@@ -12691,10 +12790,12 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
         showWizard(api, remote);
         return;
       }
-      const [tasks, marks, gone] = await Promise.all([
+      const edits = archiveWritten === archiveEdits ? archiveEdits : -1;
+      const [tasks, marks, gone, shelved] = await Promise.all([
         api.list(),
         store.loadDetached(p.id).catch(() => null),
         store.loadArchived(p.id).catch(() => null),
+        store.loadArchivedTasks(p.id).catch(() => null),
         starter.refresh(p.id, p.directory)
       ]);
       if (mine !== generation) return;
@@ -12708,6 +12809,11 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
         state.archived = /* @__PURE__ */ new Set([...archived(), ...gone]);
         state.archivedFor = p.id;
       }
+      const base2 = shelved !== null && edits === archiveEdits ? shelved : archivedTasks();
+      const fixed = reconcileArchived(base2, tasks);
+      state.archivedTasks = fixed.marks;
+      state.archivedTasksFor = p.id;
+      if (fixed.changed) saveArchivedTasks(p.id, fixed.marks);
       state.config = result.config;
       state.tasks = tasks;
       state.view = "board";
@@ -12739,6 +12845,9 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     state.detachedFor = null;
     state.archived = /* @__PURE__ */ new Set();
     state.archivedFor = null;
+    state.archivedTasks = /* @__PURE__ */ new Map();
+    state.archivedTasksFor = null;
+    state.showArchived = false;
     audited.clear();
     starter.reset();
     state.config = null;
@@ -12838,6 +12947,42 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     saver.save(STORAGE_KEYS.detached(id), () => store.saveDetached(id, saved));
     info("Moved; the agent session keeps running \u2014 open it from the session list");
   };
+  var saveArchivedTasks = (projectId, marks) => saver.save(STORAGE_KEYS.archivedTasks(projectId), () => store.saveArchivedTasks(projectId, marks));
+  var setArchivedTasks = (projectId, marks) => {
+    const n = ++archiveEdits;
+    state.archivedTasks = marks;
+    state.archivedTasksFor = projectId;
+    saver.save(STORAGE_KEYS.archivedTasks(projectId), async () => {
+      try {
+        await store.saveArchivedTasks(projectId, marks);
+      } finally {
+        if (n > archiveWritten) archiveWritten = n;
+      }
+    });
+    draw();
+    editor.refresh();
+  };
+  var archiveDone = async () => {
+    const id = state.projectId;
+    if (id === null || state.tasks === null) return;
+    const n = archivableIds(state.tasks, archivedTasks()).length;
+    if (n === 0) return;
+    const answer = await askChoice(
+      `Archive ${n} done task${n === 1 ? "" : "s"}?`,
+      "They leave the board. Nothing changes in the repository or on GitHub; \u201CShow archived\u201D brings them back, and a reopened task returns on its own.",
+      [{ id: "archive", label: "Archive" }]
+    );
+    if (answer === null || state.projectId !== id || state.tasks === null) return;
+    const ids = archivableIds(state.tasks, archivedTasks());
+    if (ids.length === 0) return;
+    setArchivedTasks(id, archiveTasks(archivedTasks(), ids, Date.now()));
+    info(`Archived ${ids.length} done task${ids.length === 1 ? "" : "s"}`);
+  };
+  var unarchive = (taskId) => {
+    const id = state.projectId;
+    if (id === null || !archivedTasks().has(taskId)) return;
+    setArchivedTasks(id, unarchiveTask(archivedTasks(), taskId));
+  };
   var checkSessions = async (sessionIds) => {
     const projectId = state.projectId;
     const lists = await Promise.allSettled(state.projects.map((p) => host.listSessions(p.id)));
@@ -12894,7 +13039,12 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
       },
       onRefresh: () => void load(),
       onAdd: () => editor.showAdd(),
-      onSettings: showSettings
+      onSettings: showSettings,
+      onArchiveDone: () => void archiveDone(),
+      onShowArchived: (show) => {
+        state.showArchived = show;
+        draw();
+      }
     });
     editor = createEditor({
       host,
@@ -12919,6 +13069,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
         open: (id) => void host.openSession(id).catch((e) => fail(`Could not open the session: ${errorText4(e)}`))
       },
       sections: { get: () => sections, save: saveSections },
+      archive: { has: (task) => task.state === "done" && archivedTasks().has(task.id), unarchive },
       baseTypes: () => settings().types,
       start: {
         context: startContext,

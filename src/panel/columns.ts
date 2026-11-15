@@ -183,7 +183,14 @@ export type CardModel = {
   queueError: string | null;
   /** A sub-task whose parent's orchestrator session works now (see ledByOrchestrator). */
   ledByOrchestrator: boolean;
+  /** An archived done task, drawn (muted) only while "Show archived" is on (archive.ts). */
+  archived: boolean;
 };
+
+/** Done tasks the user archived (archive.ts) and whether they are shown. */
+export type ArchiveView = { ids: ReadonlySet<string>; show: boolean };
+
+const NO_ARCHIVE: ArchiveView = { ids: new Set(), show: false };
 
 export type BoardModel = Record<Column, CardModel[]>;
 
@@ -191,6 +198,7 @@ export type BoardModel = Record<Column, CardModel[]>;
  * Sort tasks into columns. Within a column the service's order is kept, except that a sub-task
  * whose parent sits in the same column follows it directly. `hideSubtasks` drops every task with a parent.
  * `starting` (starts in flight) and `queued` (the start queue) both put a card in In Progress.
+ * `archive`: archived done tasks are left out unless shown; a parent's progress still counts them.
  */
 export const groupTasks = (
   tasks: Task[],
@@ -201,6 +209,7 @@ export const groupTasks = (
   queued: ReadonlySet<string> = new Set(),
   queueErrors: ReadonlyMap<string, string> = new Map(),
   detached: Detached = NONE,
+  archive: ArchiveView = NO_ARCHIVE,
 ): BoardModel => {
   const byId = new Map(tasks.map((t) => [t.id, t]));
   const children = new Map<string, Task[]>();
@@ -225,6 +234,8 @@ export const groupTasks = (
   const cards = new Map<string, { column: Column; card: CardModel }>();
   for (const task of tasks) {
     if (hideSubtasks && task.parentId !== null) continue;
+    const isArchived = task.state === 'done' && archive.ids.has(task.id);
+    if (isArchived && !archive.show) continue;
     const session = sessionForTask(task.id, sessions, links, detached.get(task.id));
     const kids = children.get(task.id) ?? [];
     const led = task.state !== 'done' && parentRunning(task.parentId);
@@ -243,6 +254,7 @@ export const groupTasks = (
         queued: queued.has(task.id) && !starting.has(task.id) && task.state !== 'done',
         queueError: queued.has(task.id) && !starting.has(task.id) && task.state !== 'done' ? (queueErrors.get(task.id) ?? null) : null,
         ledByOrchestrator: led,
+        archived: isArchived,
       },
     });
   }

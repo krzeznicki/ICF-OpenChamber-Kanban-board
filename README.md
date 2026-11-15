@@ -88,6 +88,14 @@ Types: `bug` and `enhancement` (a feature), plus your own (`chore` and `research
 - A drop on Backlog or Ready changes one line of the task file (local) or swaps the state label (GitHub). The rest of the file is left as it is.
 - Dragging a card out of In Progress or Review to Backlog or Ready detaches it from its session: the card follows its state again, and the session keeps running (open it from the session list). Starting the card again later links it to the new session.
 
+### Archiving done tasks
+
+**Archive done** in the Done column's header clears the column: after an in-panel confirm with the count, every done task (sub-tasks hidden by **Hide sub-tasks** too) leaves the board. Nothing changes in the repository or on GitHub — done tasks are already resolved or closed; the board only remembers the archived ids per project in the extension's storage (`archivedTasks:<projectId>`, `{ id, archivedAt }[]`, the newest 400 kept).
+
+- **Show archived (N)** in the Done header draws them again, muted and marked `archived` (until the panel reloads). Their modal has **Unarchive**, which puts the task back in Done.
+- A task that leaves Done (reopened by hand, by the CLI or on GitHub) is unarchived on its own; ids the tracker no longer lists (e.g. issues closed more than 30 days ago) are dropped on the next load.
+- A parent's progress (`3/5 sub-tasks done`) still counts its archived done sub-tasks.
+
 ## Adding tasks
 
 **Add task** in the toolbar opens a modal with everything a task can carry:
@@ -261,6 +269,7 @@ Not done yet; each needs the extension installed in OpenChamber:
 8. Summaries: generated automatically, regenerated after a body edit, the Summarise button, per-card language.
 9. Agent skills: an agent finds the CLI from the instructions and creates, claims and closes a task with the skills.
 10. The task modal: a Review card whose path B session was archived shows **Session archived** and opens nothing; **Open session** on a live path B session in a worktree opens that session.
+11. Archive done: the confirm counts the done tasks; after it Done is empty in both the rail panel and the full-screen page; **Show archived** and **Unarchive** work; reopening an archived task (CLI or GitHub) brings it back without a click.
 
 ## Development
 

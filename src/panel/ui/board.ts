@@ -1,5 +1,6 @@
 // The board shell: a toolbar (project switcher, "Hide sub-tasks", Add task, Settings, Refresh), a
-// status slot for banners, spinner and empty states, and the five columns.
+// status slot for banners, spinner and empty states, and the five columns. The Done header carries
+// "Archive done" and "Show archived (N)" (archive.ts).
 // It draws what main.ts hands it and reports clicks back; it holds no data of its own. Dragging
 // is attached to `columns` by the editor (ui/dnd.ts).
 import { mountBanner, mountButton, mountEmpty, mountSelect, mountSpinner, mountSwitch } from '@openchamber/sdk/ui';
@@ -14,7 +15,16 @@ export type BoardCallbacks = {
   onRefresh: () => void;
   onAdd: () => void;
   onSettings: () => void;
+  /** The Done header's "Archive done" (the caller asks to confirm). */
+  onArchiveDone: () => void;
+  /** The Done header's "Show archived (N)" switch. */
+  onShowArchived: (show: boolean) => void;
 };
+
+/** The Done header's archive tools: how many done tasks "Archive done" takes, how many are archived. */
+export type DoneTools = { archivable: number; archived: number; showArchived: boolean };
+
+const NO_TOOLS: DoneTools = { archivable: 0, archived: 0, showArchived: false };
 
 export type BoardStatus =
   | { kind: 'none' }
@@ -71,6 +81,24 @@ export const createBoard = (root: HTMLElement, callbacks: BoardCallbacks) => {
   let statusDispose: (() => void) | null = null;
   let cardDisposers: Array<() => void> = [];
 
+  /** "Archive done" and "Show archived (N)" under the Done header; disposed with the cards. */
+  const doneTools = (done: DoneTools): HTMLElement => {
+    const tools = div('kb-column-tools');
+    if (done.archivable > 0) {
+      const slot = div('kb-archive-button');
+      tools.append(slot);
+      cardDisposers.push(mountButton(slot, { label: 'Archive done', variant: 'outline', size: 'xs', onClick: callbacks.onArchiveDone }).dispose);
+    }
+    if (done.archived > 0) {
+      const slot = div('kb-show-archived');
+      tools.append(slot);
+      cardDisposers.push(
+        mountSwitch(slot, { label: `Show archived (${done.archived})`, checked: done.showArchived, onChange: callbacks.onShowArchived }).dispose,
+      );
+    }
+    return tools;
+  };
+
   return {
     /** The persistent container the cards are drawn in; drag listeners live here. */
     columns,
@@ -108,7 +136,12 @@ export const createBoard = (root: HTMLElement, callbacks: BoardCallbacks) => {
       }
     },
     /** Draws the columns; null hides them (no project, no tracker, or an error). */
-    render: (board: BoardModel | null, busy: ReadonlySet<string> = new Set(), summaryOf: (task: Task) => string | null = () => null) => {
+    render: (
+      board: BoardModel | null,
+      busy: ReadonlySet<string> = new Set(),
+      summaryOf: (task: Task) => string | null = () => null,
+      done: DoneTools = NO_TOOLS,
+    ) => {
       for (const d of cardDisposers) d();
       cardDisposers = [];
       columns.replaceChildren();
@@ -125,6 +158,8 @@ export const createBoard = (root: HTMLElement, callbacks: BoardCallbacks) => {
         count.className = 'kb-count';
         count.textContent = String(cards.length);
         head.append(name, count);
+        column.append(head);
+        if (id === 'done' && (done.archivable > 0 || done.archived > 0)) column.append(doneTools(done));
         const list = div('kb-cards');
         if (cards.length === 0) {
           const none = div('kb-none');
@@ -136,7 +171,7 @@ export const createBoard = (root: HTMLElement, callbacks: BoardCallbacks) => {
           list.append(card.node);
           cardDisposers.push(card.dispose);
         }
-        column.append(head, list);
+        column.append(list);
         columns.append(column);
       }
     },

@@ -1,4 +1,4 @@
-// One task card: title, id, badges (session, led by orchestrator, type, ready-for-human, wontfix, blocked) and, for a parent,
+// One task card: title, id, badges (archived, session, led by orchestrator, type, ready-for-human, wontfix, blocked) and, for a parent,
 // its done/total sub-tasks with a progress bar. Focusable: a click or Enter opens the task modal
 // (ui/detail.ts), and a press starts a drag (ui/dnd.ts). A card whose move is in flight is drawn busy. Under the title,
 // the task's personal summary (summaries.ts) when there is one for its current body, cut to three lines.
@@ -40,6 +40,7 @@ export const renderCard = (
   node.dataset.taskId = task.id;
   node.tabIndex = 0;
   node.setAttribute('aria-label', `${task.title} (${task.id})`);
+  if (model.archived) node.classList.add('is-archived');
   if (busy) {
     node.classList.add('is-busy');
     node.setAttribute('aria-busy', 'true');
@@ -74,6 +75,7 @@ export const renderCard = (
   } else if (model.starting) {
     badge('starting agent…', 'info');
   }
+  if (model.archived) badge('archived', 'neutral');
   if (model.ledByOrchestrator) badge('led by orchestrator', 'primary');
   if (task.kind === 'parent') badge('parent', 'primary');
   if (task.type !== null) badge(task.type, typeTone(task.type));
