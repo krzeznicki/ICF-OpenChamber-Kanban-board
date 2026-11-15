@@ -292,6 +292,22 @@ var realExec = (cmd, args, opts) => new Promise((resolve) => {
   );
 });
 
+// src/service/instructions.ts
+var instructionsText = (cliPath) => {
+  const tb = `node ${JSON.stringify(cliPath)}`;
+  return `Task board (ICF-kanban): in projects with docs/agents/issue-tracker.md, tasks are managed with \`${tb}\` (run in the project root or add --dir): \`list --ready\` or \`next\` for ready tickets, \`show <id>\`, \`claim <id>\` before working, \`state <id> <state>\` (done closes), \`create --title <t> [--type bug|enhancement] [--parent <id>]\`; --json for data. Skills icf-kanban-create/status/next/start describe the steps. The ICF-kanban board in OpenChamber shows the same tasks.`;
+};
+var publishInstructions = async (host2, cliPath, log = console.error) => {
+  log("icf-kanban: setting agent instructions");
+  try {
+    await host2.setInstructions(null, instructionsText(cliPath));
+    return true;
+  } catch (e) {
+    log(`icf-kanban: setInstructions failed: ${e instanceof Error ? e.message : String(e)}`);
+    return false;
+  }
+};
+
 // src/service/routes.ts
 import { stat as stat2 } from "node:fs/promises";
 import { isAbsolute } from "node:path";
@@ -1686,6 +1702,7 @@ var server = createServer((req, res) => {
   });
 });
 server.listen(port, "127.0.0.1");
+void publishInstructions(host, defaultCliPath());
 var stop = () => {
   server.close(() => process.exit(0));
   server.closeAllConnections();

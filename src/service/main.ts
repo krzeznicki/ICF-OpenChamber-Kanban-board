@@ -7,7 +7,8 @@ import { createServer } from 'node:http';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { createServiceHost } from '@openchamber/sdk';
 import { realExec } from '../core/exec.ts';
-import { handle, type Deps } from './routes.ts';
+import { publishInstructions } from './instructions.ts';
+import { defaultCliPath, handle, type Deps } from './routes.ts';
 
 const MAX_BODY = 1024 * 1024;
 
@@ -75,6 +76,9 @@ const server = createServer((req, res) => {
 });
 
 server.listen(port, '127.0.0.1');
+
+// Once per start: every agent session learns where the task-board CLI is (contributes.instructions).
+void publishInstructions(host, defaultCliPath());
 
 const stop = (): void => {
   server.close(() => process.exit(0));

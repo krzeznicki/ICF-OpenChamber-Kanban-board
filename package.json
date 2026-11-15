@@ -56,7 +56,9 @@
           "turn-finished",
           "turn-failed"
         ]
-      }
+      },
+      "instructions": true,
+      "skills": "skills"
     }
   }
 }

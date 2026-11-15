@@ -113,7 +113,8 @@ const newTask = (v: unknown): NewTask => {
   return task;
 };
 
-const defaultCliPath = (): string => fileURLToPath(new URL('../build/cli/task-board.mjs', import.meta.url));
+/** The built CLI next to the service bundle (`service/main.js` -> `build/cli/task-board.mjs`). */
+export const defaultCliPath = (): string => fileURLToPath(new URL('../build/cli/task-board.mjs', import.meta.url));
 
 type Route = (body: Body, dir: string, deps: Deps) => Promise<unknown>;
 
