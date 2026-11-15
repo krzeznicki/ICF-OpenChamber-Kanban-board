@@ -174,7 +174,7 @@ A preset text (built-in or your own) may use `{cli}` (the `task-board` command w
 
 Edits and your own sets are kept in the extension's storage under `presetSets`. 0.2's `presets` value is moved there once: its edits and own presets go to every built-in set (Matt Pocock's skills, Superpowers and Plain), since in 0.2 they applied whichever text was in use. So whichever set a project uses — the default still follows what is installed; no set is chosen for you — a session runs the text you wrote and your own presets are there.
 
-Which preset a card gets: the card's own choice, else Break down and orchestrate for a parent, else the preset for its type (`enhancement` → Implement, `bug` → Diagnose, `research` → Plan), else the default preset; a preset the project's set does not have becomes Implement. A preset you set for `bug` yourself always wins.
+Which preset a card gets: the card's own choice, else Break down and orchestrate for a parent, else the preset for its type (`enhancement` → Implement, `bug` → Diagnose, `research` → Plan), else the default preset; a preset the project's set does not have becomes Implement. A bug always gets the preset for `bug`, even as a parent (in the local tracker every top-level task is a parent).
 
 ## Settings
 

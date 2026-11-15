@@ -206,7 +206,7 @@ export const suggestEnabled = (globalLoaded: boolean, global: SettingsLayer): bo
 
 /**
  * The options a session starts with: the card's choice, else the settings. The preset is the
- * card's, else 'orchestrate' for a parent (a feature), else the default for the task's type, else defaults.presetId; whichever id is chosen,
+ * card's, else 'orchestrate' for a parent (a feature) that is not a bug, else the default for the task's type, else defaults.presetId; whichever id is chosen,
  * one that is not among `presets` (a deleted preset, or one the project's set does not have) becomes
  * 'implement'. `presets` defaults to the Plain set; pass the project's set (listPresets) so its own count.
  */
@@ -217,8 +217,10 @@ export const resolveStart = (
   presets: readonly Preset[] = BUILTIN_PRESETS,
 ): StartOptions => {
   const c = parseCardOptions(card);
-  const byKind = task.kind === 'parent' ? ORCHESTRATE_PRESET_ID : undefined;
   const byType = task.type !== null ? s.presetByType[task.type] : undefined;
+  // A bug is diagnosed, not broken down: its type preset beats the parent default. Locally every
+  // top-level task is a spec.md parent, so a new bug would otherwise always orchestrate.
+  const byKind = task.kind === 'parent' && !(task.type === 'bug' && byType !== undefined) ? ORCHESTRATE_PRESET_ID : undefined;
   const wanted = c.presetId ?? byKind ?? byType ?? s.defaults.presetId;
   const model = c.model ?? s.defaults.model;
   return {

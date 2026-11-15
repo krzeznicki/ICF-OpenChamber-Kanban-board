@@ -211,6 +211,14 @@ test('a parent defaults to orchestrate; the card choice still wins', () => {
   assert.equal(resolveStart(s, task('enhancement'), {}).presetId, 'plan');
 });
 
+test('a bug keeps its type preset even as a parent (a local top-level task is a spec.md parent)', () => {
+  const s = resolveSettings({}, {});
+  assert.equal(resolveStart(s, task('bug', 'parent'), {}).presetId, 'diagnose');
+  const mine = resolveSettings({ presetByType: { bug: 'triage' } }, {});
+  assert.equal(resolveStart(mine, task('bug', 'parent'), {}).presetId, 'triage');
+  assert.equal(resolveStart(s, task('bug', 'parent'), { presetId: 'orchestrate' }).presetId, 'orchestrate');
+});
+
 test('an unknown preset id falls back to implement', () => {
   const s = resolveSettings({ defaults: { presetId: 'gone' } }, {});
   assert.equal(resolveStart(s, task('chore'), {}).presetId, 'implement');
