@@ -1,6 +1,6 @@
 // The task detail: a side sheet over the board. The personal summary comes first (or a Summarise
 // button when there is none), the full body as plain text sits collapsed under "Full task"; then state and type
-// selects, "Move to" buttons (the keyboard path for drag and drop) and Close / Close with sub-tasks.
+// selects and "Move to" buttons (the keyboard path for drag and drop; Done asks about open sub-tasks).
 // Below them, the card's options (preset, model, agent, location, summary language), each unset field showing
 // what it inherits from the settings. It draws what it is given and reports choices; the editor (edit.ts) runs them and asks to confirm.
 import { mountBadge, mountButton, mountSelect, mountSpinner } from '@openchamber/sdk/ui';
@@ -56,7 +56,6 @@ export type DetailCallbacks = {
   onMove: (to: Column) => void;
   onState: (state: TaskState) => void;
   onType: (type: string) => void;
-  onClose: (withChildren: boolean) => void;
   onOpenUrl: (url: string) => void;
   onDismiss: () => void;
 };
@@ -221,7 +220,14 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks): De
     titles.append(el('h2', 'kb-sheet-title', task.title), el('div', 'kb-card-id', task.id));
     const closeSlot = el('div', 'kb-sheet-x');
     head.append(titles, closeSlot);
-    disposers.push(mountButton(closeSlot, { label: 'Done', variant: 'ghost', size: 'sm', onClick: callbacks.onDismiss }).dispose);
+    disposers.push(mountButton(closeSlot, { label: '×', variant: 'ghost', size: 'sm', onClick: callbacks.onDismiss }).dispose);
+    // The kit's button has no icon-only form: name the × for screen readers and the tooltip.
+    const x = closeSlot.querySelector('button');
+    if (x !== null) {
+      x.setAttribute('aria-label', 'Close');
+      x.title = 'Close';
+      x.classList.add('kb-icon-close');
+    }
     top.append(head);
 
     const badges = el('div', 'kb-badges');
@@ -287,31 +293,14 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks): De
       top.append(moveRow);
     }
 
-    const actions = el('div', 'kb-actions kb-actions-start');
-    if (task.state !== 'done') {
-      disposers.push(
-        mountButton(actions, { label: 'Close', variant: 'secondary', size: 'sm', disabled: m.busy, onClick: () => callbacks.onClose(false) })
-          .dispose,
-      );
-      if (m.openChildren > 0) {
-        disposers.push(
-          mountButton(actions, {
-            label: 'Close with sub-tasks',
-            variant: 'destructive',
-            size: 'sm',
-            disabled: m.busy,
-            onClick: () => callbacks.onClose(true),
-          }).dispose,
-        );
-      }
-    }
     const url = task.url;
     if (url !== null) {
+      const actions = el('div', 'kb-actions kb-actions-start');
       disposers.push(
         mountButton(actions, { label: 'Open on GitHub', variant: 'ghost', size: 'sm', onClick: () => callbacks.onOpenUrl(url) }).dispose,
       );
+      top.append(actions);
     }
-    if (actions.childElementCount > 0) top.append(actions);
     drawStart(task.id, m.start);
 
     // Plain text: textContent never interprets the markdown or any HTML in it.

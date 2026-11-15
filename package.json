@@ -27,13 +27,13 @@
     "contributes": {
       "panel": {
         "id": "icf-kanban",
-        "name": "ICF-kanban",
-        "icon": "kanban-view",
+        "name": "Kanban Board",
+        "icon": "assets/kanban.svg",
         "entry": "panel/index.html"
       },
       "page": {
         "entry": "panel/page.html",
-        "title": "Board"
+        "title": "Kanban Board"
       },
       "capabilities": [
         "sessions",

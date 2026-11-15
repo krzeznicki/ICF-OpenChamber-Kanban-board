@@ -55,6 +55,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
 .kb-sheet { width: min(36rem, 100%); height: 100%; overflow-y: auto; display: flex; flex-direction: column; gap: 0.75rem;
   padding: 1rem; background: var(--oc-bg); color: var(--oc-fg); border-left: 1px solid var(--oc-border); outline: none; }
 .kb-sheet-head { display: flex; align-items: flex-start; gap: 0.5rem; }
+.kb-icon-close { font-size: 1.25em; line-height: 1; padding-inline: 0.5rem; }
 .kb-sheet-titles { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 0.25rem; }
 .kb-sheet-title { margin: 0; font-size: 1.1em; font-weight: 600; overflow-wrap: anywhere; }
 .kb-inline-spin { display: inline-flex; align-items: center; }

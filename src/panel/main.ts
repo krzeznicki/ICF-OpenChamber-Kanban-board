@@ -447,7 +447,7 @@ const summaries = createSummaries({
         kind: 'info',
         message:
           code === 'NOT_GRANTED'
-            ? 'Summaries need the “model” permission for ICF-kanban (Settings → Extensions). Automatic summaries are off for now.'
+            ? 'Summaries need the “model” permission for Kanban Board (Settings → Extensions). Automatic summaries are off for now.'
             : 'No small model is set, so automatic summaries are off for now. Choose a Small Model in OpenChamber settings, then press Summarise in a task.',
       })
       .catch(() => {}),
@@ -594,7 +594,7 @@ const start = (ctx: HostReadyContext): void => {
         kind: 'banner',
         tone: 'error',
         title: 'Projects are not available',
-        body: `${e instanceof Error ? e.message : String(e)}. Allow the “sessions” capability for ICF-kanban in Settings → Extensions.`,
+        body: `${e instanceof Error ? e.message : String(e)}. Allow the “sessions” capability for Kanban Board in Settings → Extensions.`,
       });
     });
 

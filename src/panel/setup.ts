@@ -24,7 +24,7 @@ const TITLES: Record<string, string> = {
   GH_MISSING: 'GitHub CLI is not installed',
   GH_OLD: 'GitHub CLI is too old',
   GH_AUTH: 'GitHub CLI is not logged in',
-  NO_SERVICE: 'The ICF-kanban service is not allowed or not running',
+  NO_SERVICE: 'The Kanban Board service is not allowed or not running',
 };
 
 /** The notice for a failed load: the error's message with a Retry button. */

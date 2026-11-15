@@ -224,20 +224,6 @@ export const createEditor = (deps: EditorDeps) => {
         refreshDetail(); // the select snaps back until the reload shows the saved state
       },
       onType: (type) => void run(id, (api) => api.setType(id, type)),
-      onClose: (withChildren) => {
-        const t = find(id);
-        if (t === null) return;
-        if (!withChildren) {
-          void run(id, (api) => api.close(id, false));
-          return;
-        }
-        const n = openChildren(t, deps.tasks());
-        void askChoice(`Close “${t.title}” and its sub-tasks?`, `This closes the task and its ${n} open sub-task${n === 1 ? '' : 's'}.`, [
-          { id: 'all', label: 'Close with sub-tasks', variant: 'destructive' },
-        ]).then((answer) => {
-          if (answer === 'all') void run(id, (api) => api.close(id, true));
-        });
-      },
       onOpenUrl: (url) => void deps.host.openUrl(url).catch((e: unknown) => fail(errorText(e))),
       onDismiss: closeDetail,
     });

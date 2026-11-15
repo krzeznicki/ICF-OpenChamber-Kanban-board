@@ -4143,7 +4143,13 @@ ${ref}`,
       titles.append(el3("h2", "kb-sheet-title", task.title), el3("div", "kb-card-id", task.id));
       const closeSlot = el3("div", "kb-sheet-x");
       head.append(titles, closeSlot);
-      disposers.push(mountButton(closeSlot, { label: "Done", variant: "ghost", size: "sm", onClick: callbacks.onDismiss }).dispose);
+      disposers.push(mountButton(closeSlot, { label: "\xD7", variant: "ghost", size: "sm", onClick: callbacks.onDismiss }).dispose);
+      const x = closeSlot.querySelector("button");
+      if (x !== null) {
+        x.setAttribute("aria-label", "Close");
+        x.title = "Close";
+        x.classList.add("kb-icon-close");
+      }
       top.append(head);
       const badges = el3("div", "kb-badges");
       if (task.kind === "parent") disposers.push(mountBadge(badges, { label: "parent", tone: "primary" }).dispose);
@@ -4204,30 +4210,14 @@ ${ref}`,
         }
         top.append(moveRow);
       }
-      const actions = el3("div", "kb-actions kb-actions-start");
-      if (task.state !== "done") {
-        disposers.push(
-          mountButton(actions, { label: "Close", variant: "secondary", size: "sm", disabled: m.busy, onClick: () => callbacks.onClose(false) }).dispose
-        );
-        if (m.openChildren > 0) {
-          disposers.push(
-            mountButton(actions, {
-              label: "Close with sub-tasks",
-              variant: "destructive",
-              size: "sm",
-              disabled: m.busy,
-              onClick: () => callbacks.onClose(true)
-            }).dispose
-          );
-        }
-      }
       const url = task.url;
       if (url !== null) {
+        const actions = el3("div", "kb-actions kb-actions-start");
         disposers.push(
           mountButton(actions, { label: "Open on GitHub", variant: "ghost", size: "sm", onClick: () => callbacks.onOpenUrl(url) }).dispose
         );
+        top.append(actions);
       }
-      if (actions.childElementCount > 0) top.append(actions);
       drawStart(task.id, m.start);
       const body = el3("pre", "kb-detail-body", task.body.trim() === "" ? "No description." : task.body);
       if (task.body.trim() === "") body.classList.add("is-empty");
@@ -4584,20 +4574,6 @@ ${ref}`,
           refreshDetail();
         },
         onType: (type) => void run(id, (api) => api.setType(id, type)),
-        onClose: (withChildren) => {
-          const t = find(id);
-          if (t === null) return;
-          if (!withChildren) {
-            void run(id, (api) => api.close(id, false));
-            return;
-          }
-          const n = openChildren(t, deps.tasks());
-          void askChoice(`Close \u201C${t.title}\u201D and its sub-tasks?`, `This closes the task and its ${n} open sub-task${n === 1 ? "" : "s"}.`, [
-            { id: "all", label: "Close with sub-tasks", variant: "destructive" }
-          ]).then((answer) => {
-            if (answer === "all") void run(id, (api) => api.close(id, true));
-          });
-        },
         onOpenUrl: (url) => void deps.host.openUrl(url).catch((e) => fail2(errorText2(e))),
         onDismiss: closeDetail
       });
@@ -4682,7 +4658,7 @@ ${ref}`,
     GH_MISSING: "GitHub CLI is not installed",
     GH_OLD: "GitHub CLI is too old",
     GH_AUTH: "GitHub CLI is not logged in",
-    NO_SERVICE: "The ICF-kanban service is not allowed or not running"
+    NO_SERVICE: "The Kanban Board service is not allowed or not running"
   };
   var loadNotice = (e) => ({
     tone: e.code === "UNSUPPORTED" ? "warning" : "error",
@@ -5487,6 +5463,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
 .kb-sheet { width: min(36rem, 100%); height: 100%; overflow-y: auto; display: flex; flex-direction: column; gap: 0.75rem;
   padding: 1rem; background: var(--oc-bg); color: var(--oc-fg); border-left: 1px solid var(--oc-border); outline: none; }
 .kb-sheet-head { display: flex; align-items: flex-start; gap: 0.5rem; }
+.kb-icon-close { font-size: 1.25em; line-height: 1; padding-inline: 0.5rem; }
 .kb-sheet-titles { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 0.25rem; }
 .kb-sheet-title { margin: 0; font-size: 1.1em; font-weight: 600; overflow-wrap: anywhere; }
 .kb-inline-spin { display: inline-flex; align-items: center; }
@@ -5549,7 +5526,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     const body = element(
       "p",
       "kb-wizard-body",
-      "Choose where the tasks live. ICF-kanban writes docs/agents/issue-tracker.md in the format the agent skills read."
+      "Choose where the tasks live. Kanban Board writes docs/agents/issue-tracker.md in the format the agent skills read."
     );
     const listSlot = element("div", "kb-wizard-choices");
     const actions = element("div", "kb-wizard-actions");
@@ -5928,7 +5905,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     onChange: summaryChanged,
     onUnavailable: (code) => void host.toast({
       kind: "info",
-      message: code === "NOT_GRANTED" ? "Summaries need the \u201Cmodel\u201D permission for ICF-kanban (Settings \u2192 Extensions). Automatic summaries are off for now." : "No small model is set, so automatic summaries are off for now. Choose a Small Model in OpenChamber settings, then press Summarise in a task."
+      message: code === "NOT_GRANTED" ? "Summaries need the \u201Cmodel\u201D permission for Kanban Board (Settings \u2192 Extensions). Automatic summaries are off for now." : "No small model is set, so automatic summaries are off for now. Choose a Small Model in OpenChamber settings, then press Summarise in a task."
     }).catch(() => {
     })
   });
@@ -6048,7 +6025,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
         kind: "banner",
         tone: "error",
         title: "Projects are not available",
-        body: `${e instanceof Error ? e.message : String(e)}. Allow the \u201Csessions\u201D capability for ICF-kanban in Settings \u2192 Extensions.`
+        body: `${e instanceof Error ? e.message : String(e)}. Allow the \u201Csessions\u201D capability for Kanban Board in Settings \u2192 Extensions.`
       });
     });
     setInterval(() => {

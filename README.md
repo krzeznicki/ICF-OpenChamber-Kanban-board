@@ -1,4 +1,4 @@
-# ICF-kanban
+# Kanban Board (ICF-kanban)
 
 A Kanban board for [OpenChamber](https://github.com/openchamber/openchamber) over your project's own task files. It reads and writes the format used by Matt Pocock's agent skills: local Markdown files in `.scratch/`, or GitHub Issues. You and your agents work on the same tasks.
 
@@ -15,8 +15,9 @@ Requires OpenChamber 2.7.1 or later. Licence: MIT.
 
 Not taken yet: the extension has to be running in OpenChamber. To do, saved in [`docs/screenshots/`](docs/screenshots/):
 
+- [ ] `rail-icon.png`: the **Kanban Board** icon in the side rail
 - [ ] `board.png`: the board with cards in every column
-- [ ] `card-detail.png`: a card's detail sheet with its summary
+- [ ] `card-detail.png`: a card's detail sheet with its summary, Move to buttons and the × close button
 - [ ] `settings.png`: the Settings sheet
 - [ ] `wizard.png`: the setup wizard (Local or GitHub)
 
@@ -40,11 +41,11 @@ openchamber://extensions/install?url=https://github.com/krzeznicki/ICF-OpenChamb
 
 Nothing is built on install: the built files (`panel/main.js`, `service/main.js`, `build/cli/task-board.mjs`) are committed.
 
-OpenChamber asks you to approve the permissions below. The board opens from the **ICF-kanban** icon in the side rail, or full screen as **Board** from the sidebar's Extension pages menu.
+OpenChamber asks you to approve the permissions below. The board opens from the **Kanban Board** icon in the side rail, or full screen as **Kanban Board** from the sidebar's Extension pages menu.
 
 ## Permissions
 
-| Permission | What ICF-kanban uses it for |
+| Permission | What Kanban Board uses it for |
 |---|---|
 | `sessions` | Reads the session list to place cards in In Progress and Review, and opens a card's session. |
 | `prompt` | Starts an agent session from a card (path A, see [Starting agents](#starting-agents)). |
@@ -56,7 +57,7 @@ OpenChamber asks you to approve the permissions below. The board opens from the 
 | Instructions | One paragraph added to every agent session: where the `task-board` CLI is and its main commands. |
 | Skills | Four agent skills: `icf-kanban-create`, `icf-kanban-status`, `icf-kanban-next`, `icf-kanban-start`. |
 
-Settings, presets, per-card options and summaries are kept in the extension's storage in OpenChamber, per user, never in the repository. ICF-kanban never reads or writes OpenChamber's own files.
+Settings, presets, per-card options and summaries are kept in the extension's storage in OpenChamber, per user, never in the repository. Kanban Board never reads or writes OpenChamber's own files.
 
 ## Tracker setup
 
@@ -65,7 +66,7 @@ When you open a project that has no `docs/agents/issue-tracker.md`, the board sh
 - **Local** writes `docs/agents/issue-tracker.md` for local Markdown. Tasks live in `.scratch/<feature>/spec.md` (the feature, a parent) and `.scratch/<feature>/issues/NN-slug.md` (its tickets), with `**Status:**`, `**Blocked by:**` and an optional `**Type:**` line.
 - **GitHub** first checks that the folder has a github.com remote, and that `gh` is installed, version 2.94 or later, and logged in; if not, nothing is written and the board says what to fix. Then it writes `docs/agents/issue-tracker.md` for GitHub and creates the triage labels and the `bug` / `enhancement` labels the repository does not have yet. Parents are issues with sub-issues; blockers are GitHub issue dependencies.
 
-An existing `issue-tracker.md` is never overwritten. If the project already uses Matt Pocock's `setup-matt-pocock-skills`, the board reads its files as they are, including the label names in `docs/agents/triage-labels.md`. ICF-kanban does not write `triage-labels.md`.
+An existing `issue-tracker.md` is never overwritten. If the project already uses Matt Pocock's `setup-matt-pocock-skills`, the board reads its files as they are, including the label names in `docs/agents/triage-labels.md`. Kanban Board does not write `triage-labels.md`.
 
 Types: `bug` and `enhancement` (a feature), plus your own (`chore` and `research` by default). Locally a type is the `**Type:**` line; on GitHub it is the `bug` / `enhancement` label or a `type:<name>` label.
 
@@ -83,6 +84,7 @@ Types: `bug` and `enhancement` (a feature), plus your own (`chore` and `research
 - `ready-for-human` and `wontfix` show as badges on the card in Backlog.
 - A claimed ticket (`Status: claimed` locally, an assignee on GitHub) stays `ready-for-agent`.
 - To start a Done card, move it back to Backlog or Ready first.
+- To close a task, drag it to Done or use **Move to → Done** in its detail sheet (the × at the top right only closes the sheet, as does Escape).
 - A drop on Backlog or Ready changes one line of the task file (local) or swaps the state label (GitHub). The rest of the file is left as it is.
 - Dragging a card out of In Progress or Review to Backlog or Ready detaches it from its session: the card follows its state again, and the session keeps running (open it from the session list). Starting the card again later links it to the new session.
 
@@ -90,7 +92,7 @@ Types: `bug` and `enhancement` (a feature), plus your own (`chore` and `research
 
 A parent (a feature with sub-tasks) is a card too, with its progress (`2/5 sub-tasks done`). Sub-tasks are drawn indented under their parent when both sit in the same column; **Hide sub-tasks** in the toolbar hides them.
 
-Dragging a parent to In Progress starts one orchestrator session with the **Break down and orchestrate** preset (unless the card picks another). The orchestrator creates sub-tasks if there are none, claims them through the CLI and hands them to subagents. While it runs, its sub-tasks show **led by orchestrator**, a claimed one sits in In Progress, and dropping one of them on In Progress starts nothing. Closing a parent with open sub-tasks asks whether to close them too.
+Dragging a parent to In Progress starts one orchestrator session with the **Break down and orchestrate** preset (unless the card picks another). The orchestrator creates sub-tasks if there are none, claims them through the CLI and hands them to subagents. While it runs, its sub-tasks show **led by orchestrator**, a claimed one sits in In Progress, and dropping one of them on In Progress starts nothing. Moving a parent with open sub-tasks to Done asks whether to close them too.
 
 ## Starting agents
 
