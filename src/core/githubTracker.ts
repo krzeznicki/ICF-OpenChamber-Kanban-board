@@ -5,6 +5,7 @@ import type { LabelRole, ProjectConfig } from './config.ts';
 import type { Exec, NewTask, Task, TaskState, Tracker } from './types.ts';
 import { TrackerError } from './types.ts';
 
+/** gh 2.94.0 (released 2026-06-10) added `gh issue create --parent` and `--blocked-by`, which create() uses (checked against its release notes and `gh issue create --help` of 2.103). */
 const MIN_GH: [number, number] = [2, 94];
 const DONE_WINDOW_MS = 30 * 24 * 3600 * 1000;
 const ROLES: readonly LabelRole[] = ['needs-triage', 'needs-info', 'ready-for-agent', 'ready-for-human', 'wontfix'];

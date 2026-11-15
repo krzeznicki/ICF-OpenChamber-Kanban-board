@@ -50,7 +50,7 @@ OpenChamber asks you to approve the permissions below. The board opens from the 
 | `prompt` | Starts an agent session from a card (path A, see [Starting agents](#starting-agents)). |
 | `model` | Writes the card summaries with your model (`generate`). |
 | Service (`service/main.js`, runs on your machine) | Reads and writes the project's tracker files: `docs/agents/issue-tracker.md` and `.scratch/**`. Keeps its own files in `~/.icf-kanban/`: `links.json` (which session works on which card) and `queue.json` (the start queue). |
-| Service programs: `git`, `gh` | `git remote -v` to suggest GitHub in the wizard; `git worktree add` for path B starts. `gh` for everything on GitHub Issues: issues, labels, sub-issues, dependencies. |
+| Service programs: `git`, `gh` | `git remote -v` to suggest GitHub in the wizard (and to refuse GitHub setup without a github.com remote); `git worktree add` for path B starts, which creates a `<parent>/<repo>-worktrees/` folder next to the project and `icf/*` branches in the repository (a start that fails removes its worktree and branch again with `git worktree remove` and `git branch -D`). `gh` for everything on GitHub Issues: issues, labels, sub-issues, dependencies. |
 | Session control (`sessionControl`) | The service starts sessions itself (path B) and reads their status, also while the board is closed. |
 | Session events (`turn-finished`, `turn-failed`) | When a session finishes or fails a turn, the service starts the next queued card. |
 | Instructions | One paragraph added to every agent session: where the `task-board` CLI is and its main commands. |
@@ -60,10 +60,10 @@ Settings, presets, per-card options and summaries are kept in the extension's st
 
 ## Tracker setup
 
-When you open a project that has no `docs/agents/issue-tracker.md`, the board shows a setup wizard: pick **Local** or **GitHub** (GitHub is preselected when the project has a github.com remote) and press **Set up board**.
+When you open a project that has no `docs/agents/issue-tracker.md`, the board shows a setup wizard: pick **Local** or **GitHub** (GitHub is preselected when the project has a github.com remote, and cannot be picked without one) and press **Set up board**.
 
 - **Local** writes `docs/agents/issue-tracker.md` for local Markdown. Tasks live in `.scratch/<feature>/spec.md` (the feature, a parent) and `.scratch/<feature>/issues/NN-slug.md` (its tickets), with `**Status:**`, `**Blocked by:**` and an optional `**Type:**` line.
-- **GitHub** first checks that `gh` is installed, version 2.94 or later, and logged in; if not, nothing is written and the board says what to fix. Then it writes `docs/agents/issue-tracker.md` for GitHub and creates the triage labels and the `bug` / `enhancement` labels the repository does not have yet. Parents are issues with sub-issues; blockers are GitHub issue dependencies.
+- **GitHub** first checks that the folder has a github.com remote, and that `gh` is installed, version 2.94 or later, and logged in; if not, nothing is written and the board says what to fix. Then it writes `docs/agents/issue-tracker.md` for GitHub and creates the triage labels and the `bug` / `enhancement` labels the repository does not have yet. Parents are issues with sub-issues; blockers are GitHub issue dependencies.
 
 An existing `issue-tracker.md` is never overwritten. If the project already uses Matt Pocock's `setup-matt-pocock-skills`, the board reads its files as they are, including the label names in `docs/agents/triage-labels.md`. ICF-kanban does not write `triage-labels.md`.
 
@@ -84,6 +84,7 @@ Types: `bug` and `enhancement` (a feature), plus your own (`chore` and `research
 - A claimed ticket (`Status: claimed` locally, an assignee on GitHub) stays `ready-for-agent`.
 - To start a Done card, move it back to Backlog or Ready first.
 - A drop on Backlog or Ready changes one line of the task file (local) or swaps the state label (GitHub). The rest of the file is left as it is.
+- Dragging a card out of In Progress or Review to Backlog or Ready detaches it from its session: the card follows its state again, and the session keeps running (open it from the session list). Starting the card again later links it to the new session.
 
 ## Parents and orchestration
 
@@ -96,7 +97,9 @@ Dragging a parent to In Progress starts one orchestrator session with the **Brea
 A card starts with its **preset**, **model**, **agent** and **location** (a new worktree, the default, or the project folder). There are two ways the start happens:
 
 - **Path A** (a card with no model and no agent set): the board calls OpenChamber's own start. OpenChamber makes the worktree (when the location is a new worktree), the session is linked to the card, and it runs on the model and agent currently selected in your composer.
-- **Path B** (a card with a model or agent set, and every queued card the service starts; also a task whose id is longer than 128 characters, too long to link to the session the path A way): when the location is a new worktree, the service creates it itself with `git worktree add -b icf/<slug> <parent>/<repo>-worktrees/<slug>` (with the project folder it makes none); it then starts the session with that model and agent, and records the link in `~/.icf-kanban/links.json`.
+- **Path B** (a card with a model or agent set, and every queued card the service starts; also a task whose id is longer than 128 characters, too long to link to the session the path A way): when the location is a new worktree, the service creates it itself with `git worktree add -b icf/<slug> <parent>/<repo>-worktrees/<slug>` (with the project folder it makes none); it then starts the session with that model and agent, and records the link in `~/.icf-kanban/links.json`. If the session cannot be started, the new worktree and branch are removed again.
+
+The first message tells the agent how to move the task with the `task-board` CLI, always with `--dir <project root>`: the agent usually works in its own worktree, where the CLI would otherwise not find the tracker (GitHub) or would write to a copy of `.scratch/` the board never reads (local). A ticket started from the board does not need to be claimed; an orchestrator claims each sub-task it takes, which needs the sub-task to be `ready-for-agent`.
 
 With **Start at once** off, dropping a card on In Progress opens a small form to adjust the options before it starts.
 
@@ -144,7 +147,7 @@ All of them are per user and stored in the extension's storage.
 
 **Sessions at a time** limits how many agents run in a project at once. A card dropped on In Progress over the limit waits there with a **Queued** badge and starts when a slot frees up, oldest first. Only cards you move are queued; nothing is picked up on its own.
 
-The queue lives in `~/.icf-kanban/queue.json`. While the board is open it drains on every change of the session list. With the board closed, the service drains it when a session in that project finishes or fails a turn, and starts those cards by path B. A start that fails puts the card back at the front of the queue with the reason shown on the card; it is tried again on the next drain. A linked session that was deleted, or a link older than a day whose status cannot be read, never holds a slot.
+The queue lives in `~/.icf-kanban/queue.json`. While the board is open it drains on every change of the session list. With the board closed, the service drains it when a session in that project finishes or fails a turn, and starts those cards by path B. A start that fails puts the card back at the front of the queue with the reason shown on the card; it is tried again on the next drain. After three failed starts it stays queued with the error but is no longer tried on its own: move it out of In Progress and back to try again. A queued card's first message is built when it is queued, so edits to the task or its preset made while it waits are not included. A linked session that was deleted, or a link older than a day whose status cannot be read, never holds a slot.
 
 ## Summaries
 
@@ -200,7 +203,8 @@ Found while building it (see [the session-start findings](docs/superpowers/specs
 - **Path A uses your current model.** OpenChamber's own start has no model or agent field: a card without a model or agent runs on whatever your composer has selected when it starts.
 - **Path B makes its own worktree.** A card with a model or agent set (and every card the service starts from the queue) whose location is a new worktree gets a worktree made with `git` under `<parent>/<repo>-worktrees/`, on a branch `icf/<slug>`, not by OpenChamber's Quick worktree. Such sessions may look different in the sidebar.
 - **With the board closed, the queue drains only by path B.** Queued cards then run with the model and agent stored on the card, or the session default when none is set.
-- Worktrees are never merged or removed for you.
+- Worktrees of started sessions are never merged or removed for you (only the worktree of a path B start that failed is removed).
+- A card's "don't claim" rule is told to the agent in its first message; an agent already running keeps the prompt it got.
 - The open live checks below have not been done yet.
 
 ## Manual checks before first release
@@ -240,4 +244,4 @@ The design is in [docs/superpowers/specs/2026-11-15-task-board-design.md](docs/s
 
 ## Licence
 
-MIT. See [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE). The built panel and service include `@openchamber/sdk` (MIT); its licence is in [THIRD_PARTY_LICENSES](THIRD_PARTY_LICENSES).
