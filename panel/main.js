@@ -2490,21 +2490,21 @@ ${GUEST_UI_LOOK_CSS}`;
     ensureStyle(UI_CSS);
     let props = initial;
     const uid = `oc-sdk-list-${listCount += 1}`;
-    const list2 = el("div", "oc-sdk oc-sdk-list");
-    list2.setAttribute("role", "listbox");
-    list2.tabIndex = 0;
-    root.append(list2);
+    const list3 = el("div", "oc-sdk oc-sdk-list");
+    list3.setAttribute("role", "listbox");
+    list3.tabIndex = 0;
+    root.append(list3);
     let activeId = null;
     const rowId = (id) => `${uid}-${id}`;
     const setActive = (id) => {
       activeId = id;
-      for (const row of Array.from(list2.children)) {
+      for (const row of Array.from(list3.children)) {
         if (row instanceof HTMLElement) {
           row.dataset.active = row.id === rowId(id ?? "") ? "true" : "false";
         }
       }
-      setAttr(list2, "aria-activedescendant", id ? rowId(id) : null);
-      list2.querySelector('[data-active="true"]')?.scrollIntoView({ block: "nearest" });
+      setAttr(list3, "aria-activedescendant", id ? rowId(id) : null);
+      list3.querySelector('[data-active="true"]')?.scrollIntoView({ block: "nearest" });
     };
     const span = (className, text3) => {
       const node = el("span", className);
@@ -2512,10 +2512,10 @@ ${GUEST_UI_LOOK_CSS}`;
       return node;
     };
     const paint = () => {
-      clearNode(list2);
-      setAttr(list2, "aria-label", props.ariaLabel);
+      clearNode(list3);
+      setAttr(list3, "aria-label", props.ariaLabel);
       if (props.items.length === 0) {
-        list2.append(span("oc-sdk-list-empty", props.emptyText ?? "Nothing here"));
+        list3.append(span("oc-sdk-list-empty", props.emptyText ?? "Nothing here"));
         setActive(null);
         return;
       }
@@ -2541,7 +2541,7 @@ ${GUEST_UI_LOOK_CSS}`;
         if (item.meta)
           row.append(span("oc-sdk-row-meta", item.meta));
         row.addEventListener("click", () => props.onSelect(item.id));
-        list2.append(row);
+        list3.append(row);
       }
       const stillThere = props.items.some((item) => item.id === activeId && !item.disabled);
       setActive(stillThere ? activeId : props.selectedId ?? null);
@@ -2558,7 +2558,7 @@ ${GUEST_UI_LOOK_CSS}`;
         props.onSelect(activeId);
       }
     };
-    list2.addEventListener("keydown", onKeyDown);
+    list3.addEventListener("keydown", onKeyDown);
     paint();
     return {
       update: (next) => {
@@ -2566,8 +2566,8 @@ ${GUEST_UI_LOOK_CSS}`;
         paint();
       },
       dispose: () => {
-        list2.removeEventListener("keydown", onKeyDown);
-        list2.remove();
+        list3.removeEventListener("keydown", onKeyDown);
+        list3.remove();
       }
     };
   };
@@ -2798,6 +2798,8 @@ ${GUEST_UI_LOOK_CSS}`;
       addLink: (taskId, sessionId, sessionDirectory) => call("POST", "/links/add", { taskId, sessionId, sessionDirectory }).then(() => void 0),
       /** `opencode models` (cached by the service); a failure comes back as `{ models: [], error }`. */
       listModels: () => call("POST", "/models/list"),
+      /** Which of Matt Pocock's skills are installed for this project (cached by the service). */
+      detectSkills: () => call("POST", "/skills/detect").then((r) => r.found),
       listQueue: () => call("POST", "/queue/list").then((r) => r.queue),
       /** Idempotent per task; `maxParallel` is stored so the service drains with the same limit. */
       addToQueue: (entry, maxParallel) => call("POST", "/queue/add", { entry, maxParallel }).then((r) => r.queue),
@@ -2886,9 +2888,9 @@ ${GUEST_UI_LOOK_CSS}`;
     const children = /* @__PURE__ */ new Map();
     for (const t of tasks) {
       if (t.parentId === null || !byId.has(t.parentId)) continue;
-      const list2 = children.get(t.parentId) ?? [];
-      list2.push(t);
-      children.set(t.parentId, list2);
+      const list3 = children.get(t.parentId) ?? [];
+      list3.push(t);
+      children.set(t.parentId, list3);
     }
     const parentWorking = /* @__PURE__ */ new Map();
     const parentRunning = (parentId) => {
@@ -3002,11 +3004,33 @@ ${GUEST_UI_LOOK_CSS}`;
   };
   var partialMessage = (taskId, failed) => {
     const n = failed.length;
-    const list2 = failed.map((f) => `\u201C${f.title}\u201D (${f.message})`).join("; ");
-    return `Created ${taskId}, but ${n} sub-task${n === 1 ? " was" : "s were"} not created: ${list2}.`;
+    const list3 = failed.map((f) => `\u201C${f.title}\u201D (${f.message})`).join("; ");
+    return `Created ${taskId}, but ${n} sub-task${n === 1 ? " was" : "s were"} not created: ${list3}.`;
   };
 
+  // src/core/skills.ts
+  var MATT_SKILLS = [
+    "grill-with-docs",
+    "to-spec",
+    "to-tickets",
+    "prototype",
+    "handoff",
+    "implement",
+    "implement-spec",
+    "tdd",
+    "code-review",
+    "diagnosing-bugs",
+    "triage"
+  ];
+
   // src/panel/presets.ts
+  var NO_SKILLS = Object.freeze({ use: false, found: [] });
+  var SKILLS_NOTE = [
+    "About the skills: load each skill named here with your skill tool; if it cannot be loaded, read its SKILL.md and follow it.",
+    "Matt's skills and the task-board CLI write the same format: the skills read the tracker setup in docs/agents/issue-tracker.md, which the board wrote, so what they create shows on the board (do not run /setup-matt-pocock-skills).",
+    "Still change states with the task-board CLI (`state`, and `claim` for sub-tasks) as shown above, so the board follows."
+  ].join("\n");
+  var withSkills = (lines) => [...lines, SKILLS_NOTE].join("\n");
   var BUILTIN_PRESETS = [
     {
       id: "plan",
@@ -3017,7 +3041,15 @@ ${GUEST_UI_LOOK_CSS}`;
         "- Read the task and the code it touches.",
         "- Write a short plan: the steps, the files to change, how you will test it, and the open questions.",
         "- Ask the user to approve the plan and answer the questions. Do not write code until they do."
-      ].join("\n")
+      ].join("\n"),
+      skills: ["grill-with-docs", "to-spec", "to-tickets"],
+      mattText: withSkills([
+        "Plan this task with Matt Pocock's skills before changing any code.",
+        "- Run /grill-with-docs to sharpen the task with the user, a round of questions at a time; it keeps the terms in GLOSSARY.md and the decisions as ADRs.",
+        "- If a question needs a runnable answer, do not build it here: suggest a Prototype task for it.",
+        "- If this is a multi-session build, stay in this context and run /to-spec, then /to-tickets: the spec and its tickets (each with its blocking edges, ready-for-agent) land on the board as a feature with its sub-tasks.",
+        "- Otherwise finish with the sharpened plan and ask the user to approve it. Do not write code."
+      ])
     },
     {
       id: "prototype",
@@ -3028,7 +3060,14 @@ ${GUEST_UI_LOOK_CSS}`;
         "- Keep it small and apart from production code.",
         "- Skip polish, tests and edge cases unless the question is about them.",
         "- Finish with the answer, what the prototype shows, and what a real implementation would need."
-      ].join("\n")
+      ].join("\n"),
+      skills: ["prototype", "handoff"],
+      mattText: withSkills([
+        "Answer this task's design question with Matt Pocock's skills.",
+        "- Run /prototype: throwaway code that answers the one question in this task, kept on a `prototype/<name>` branch out of main.",
+        "- Record the answer on this task: the verdict, the question it settled and the branch (a comment on the GitHub issue, or a note in the local issue file).",
+        "- Finish with /handoff, so the session that plans or builds this picks up what you learned, and say where the handoff file is."
+      ])
     },
     {
       id: "implement",
@@ -3041,7 +3080,14 @@ ${GUEST_UI_LOOK_CSS}`;
         "- Keep the change focused on the task; note anything else you find instead of fixing it.",
         "- When a decision is unclear, ask the user before going on.",
         "- Finish with a short summary of what changed and how you tested it."
-      ].join("\n")
+      ].join("\n"),
+      skills: ["implement", "tdd", "code-review"],
+      mattText: withSkills([
+        "Implement this task with Matt Pocock's skills.",
+        "- Run /implement with this task as its ticket. It drives /tdd (agree the seams, then one red-green slice at a time) and closes with /code-review of your diff against the branch you started from.",
+        "- When a decision is unclear, ask the user before going on.",
+        "- Finish with a short summary of what changed and how you tested it."
+      ])
     },
     {
       id: "implement-no-questions",
@@ -3053,7 +3099,14 @@ ${GUEST_UI_LOOK_CSS}`;
         "- Write or update tests with the change and run them until they pass.",
         "- When a decision is unclear, choose the simplest reasonable option and go on.",
         "- Finish with a short summary of what changed, how you tested it, and every assumption you made."
-      ].join("\n")
+      ].join("\n"),
+      skills: ["implement", "tdd", "code-review"],
+      mattText: withSkills([
+        "Implement this task with Matt Pocock's skills, without stopping to ask questions.",
+        "- Run /implement with this task as its ticket; it drives /tdd and closes with /code-review.",
+        "- Where a skill would ask the user (the seams for /tdd, the fixed point for /code-review, an unclear decision), decide yourself: choose the simplest reasonable option and go on.",
+        "- Finish with a short summary of what changed, how you tested it, and every assumption you made."
+      ])
     },
     {
       id: "orchestrate",
@@ -3066,11 +3119,75 @@ ${GUEST_UI_LOOK_CSS}`;
         "- Hand each ticket to a subagent; start a ticket only when the tickets blocking it are done.",
         "- Move each ticket with the task-board CLI as it starts and finishes.",
         "- Keep working until all sub-tasks are done, then summarise the result."
-      ].join("\n")
+      ].join("\n"),
+      skills: ["to-tickets", "implement-spec", "tdd", "code-review"],
+      mattText: withSkills([
+        "Break this task down and orchestrate the work with Matt Pocock's skills.",
+        "- If it has no sub-tasks yet, run /to-tickets on it: tracer-bullet tickets with their blocking edges, published as sub-tasks of this task in ready-for-agent.",
+        "- Then run /implement-spec over the sub-tasks: it reads them as a task graph, runs implementer subagents (each driving /tdd) across the ready frontier on one integration branch, and ends with one /code-review.",
+        "- Claim each sub-task as its implementer starts and move it to done once merged.",
+        "- Keep working until all sub-tasks are done, then summarise the result and name the integration branch."
+      ])
+    },
+    {
+      id: "diagnose",
+      name: "Diagnose",
+      builtin: true,
+      text: [
+        "Diagnose this bug, then fix it.",
+        "- Reproduce it first: a test or command that fails on this bug.",
+        "- Find the cause before changing code; check one guess at a time.",
+        "- Fix it with a regression test, and run the tests until they pass.",
+        "- Finish with the cause, the fix and how you checked it."
+      ].join("\n"),
+      skills: ["diagnosing-bugs", "implement", "tdd", "code-review"],
+      mattText: withSkills([
+        "Diagnose and fix this bug with Matt Pocock's skills.",
+        "- Run /diagnosing-bugs: build a tight feedback loop that goes red on this bug before any theory, reproduce and minimise, rank hypotheses, instrument.",
+        "- Once the cause is found, make the fix through /implement: the minimised repro is the first /tdd slice, as a regression test, and it closes with /code-review.",
+        "- Finish with the cause, the fix, and the command that went red before and green after."
+      ])
+    },
+    {
+      id: "triage",
+      name: "Triage",
+      builtin: true,
+      text: [
+        "Triage this task; do not implement it.",
+        "- Read it and the code it touches; check whether it is already done, a duplicate, or was rejected before.",
+        "- For a bug, try to reproduce it.",
+        "- Decide its state: ready-for-agent with a short brief (what to build, how to check it), needs-info with specific questions, ready-for-human with the reason, or wontfix with the reason.",
+        "- Write the brief, questions or reason on the task, and set the state with the task-board CLI."
+      ].join("\n"),
+      skills: ["triage"],
+      mattText: withSkills([
+        "Triage this task with Matt Pocock's skills; it arrived raw and nobody has evaluated it yet.",
+        "- Run /triage on this task: gather context, check it is not already implemented or rejected, recommend a category and state, verify the claim (reproduce a bug), and grill it into shape if needed.",
+        "- Apply the outcome as /triage says: an agent brief for ready-for-agent, triage notes for needs-info, a reason for ready-for-human or wontfix.",
+        "- Do not implement it."
+      ])
     }
   ];
+  var list = (names) => names.map((n) => `/${n}`).join(", ");
+  var skillsFoundLine = (found) => {
+    if (found === null) return "Could not check which of Matt Pocock's skills are installed; open a project.";
+    if (found.length === 0) {
+      return "None of Matt Pocock's skills were found in ~/.config/opencode/skills, ~/.claude/skills, ~/.agents/skills or the project's .opencode/skills and .claude/skills.";
+    }
+    const missing = MATT_SKILLS.filter((n) => !found.includes(n));
+    return `Matt Pocock's skills found: ${found.join(", ")}.${missing.length > 0 ? ` Missing: ${missing.join(", ")}.` : ""}`;
+  };
+  var presetSkillsNote = (preset, skills, edited) => {
+    if (!preset.builtin || preset.skills === void 0) return null;
+    if (edited) return "Your text is used, whatever skills are installed.";
+    if (usesMattSkills(preset, skills)) return `Runs with Matt Pocock's skills: ${list(preset.skills)}.`;
+    if (!skills.use) return "Plain instructions: Matt Pocock's skills are switched off (Global).";
+    const missing = preset.skills.filter((n) => !skills.found.includes(n));
+    return `Plain instructions until ${list(missing)} ${missing.length === 1 ? "is" : "are"} installed.`;
+  };
   var BUILTIN_IDS = new Set(BUILTIN_PRESETS.map((p) => p.id));
-  var builtinText = (id) => BUILTIN_PRESETS.find((p) => p.id === id)?.text;
+  var shipped = (id) => BUILTIN_PRESETS.find((p) => p.id === id);
+  var usesMattSkills = (preset, skills) => skills.use && preset.mattText !== void 0 && preset.skills !== void 0 && preset.skills.length > 0 && preset.skills.every((name) => skills.found.includes(name));
   var record = (v2) => typeof v2 === "object" && v2 !== null && !Array.isArray(v2) ? v2 : null;
   var parseStoredPresets = (raw) => {
     const r = record(raw);
@@ -3092,17 +3209,17 @@ ${GUEST_UI_LOOK_CSS}`;
     }
     return { builtin, custom };
   };
-  var listPresets = (stored) => [
-    ...BUILTIN_PRESETS.map((p) => ({ ...p, text: stored.builtin[p.id] ?? p.text })),
+  var listPresets = (stored, skills = NO_SKILLS) => [
+    ...BUILTIN_PRESETS.map((p) => ({ ...p, text: stored.builtin[p.id] ?? (usesMattSkills(p, skills) ? p.mattText : p.text) })),
     ...stored.custom.map((c) => ({ ...c, builtin: false }))
   ];
   var isEdited = (stored, id) => Object.hasOwn(stored.builtin, id);
   var isPristine = (stored) => Object.keys(stored.builtin).length === 0 && stored.custom.length === 0;
   var setPresetText = (stored, id, text3) => {
-    const original = builtinText(id);
+    const original = shipped(id);
     if (original !== void 0) {
       const builtin = { ...stored.builtin };
-      if (text3 === original) delete builtin[id];
+      if (text3 === original.text || text3 === original.mattText) delete builtin[id];
       else builtin[id] = text3;
       return { ...stored, builtin };
     }
@@ -3390,6 +3507,7 @@ ${ref}`,
   var MAX_PARALLEL_MAX = 10;
   var FALLBACK_PRESET_ID = "implement";
   var ORCHESTRATE_PRESET_ID = "orchestrate";
+  var DIAGNOSE_PRESET_ID = "diagnose";
   var DEFAULT_SETTINGS = {
     autoStart: true,
     maxParallel: 3,
@@ -3397,7 +3515,8 @@ ${ref}`,
     presetByType: { enhancement: "implement", bug: "implement", research: "plan" },
     summary: { auto: true, language: "Polish", prompt: DEFAULT_SUMMARY_PROMPT },
     hideChildren: false,
-    types: ["enhancement", "bug", "chore", "research"]
+    types: ["enhancement", "bug", "chore", "research"],
+    useMattSkills: true
   };
   var record2 = (v2) => typeof v2 === "object" && v2 !== null && !Array.isArray(v2) ? v2 : null;
   var text = (v2) => typeof v2 === "string" && v2.trim() !== "" ? v2.trim() : void 0;
@@ -3428,6 +3547,7 @@ ${ref}`,
     if (typeof r.autoStart === "boolean") out.autoStart = r.autoStart;
     if (typeof r.maxParallel === "number" && Number.isFinite(r.maxParallel)) out.maxParallel = clampParallel(r.maxParallel);
     if (typeof r.hideChildren === "boolean") out.hideChildren = r.hideChildren;
+    if (typeof r.useMattSkills === "boolean") out.useMattSkills = r.useMattSkills;
     if (Array.isArray(r.types)) {
       const types = [...new Set(r.types.map(text).filter((t) => t !== void 0))];
       if (types.length > 0) out.types = types;
@@ -3454,28 +3574,33 @@ ${ref}`,
     }
     return out;
   };
-  var resolveSettings = (global, project2) => {
+  var diagnose = BUILTIN_PRESETS.find((p) => p.id === DIAGNOSE_PRESET_ID);
+  var skillUse = (s, found) => ({ use: s.useMattSkills, found });
+  var resolveSettings = (global, project2, found = []) => {
     const g = parseSettings(global);
     const p = parseSettings(project2);
     const d = DEFAULT_SETTINGS;
     const maxParallel = p.maxParallel ?? g.maxParallel ?? d.maxParallel;
+    const useMattSkills = g.useMattSkills ?? d.useMattSkills;
+    const byType = usesMattSkills(diagnose, { use: useMattSkills, found }) ? { ...d.presetByType, bug: DIAGNOSE_PRESET_ID } : d.presetByType;
     return {
       autoStart: p.autoStart ?? g.autoStart ?? d.autoStart,
       maxParallel: clampParallel(maxParallel),
       defaults: { ...d.defaults, ...g.defaults, ...p.defaults },
-      presetByType: { ...d.presetByType, ...g.presetByType, ...p.presetByType },
+      presetByType: { ...byType, ...g.presetByType, ...p.presetByType },
       summary: { ...d.summary, ...g.summary, ...p.summary },
       hideChildren: p.hideChildren ?? g.hideChildren ?? d.hideChildren,
-      types: [...p.types ?? g.types ?? d.types]
+      types: [...p.types ?? g.types ?? d.types],
+      useMattSkills
     };
   };
-  var resolveStart = (s, task, card, presets = BUILTIN_PRESETS) => {
+  var resolveStart = (s, task, card, presets2 = BUILTIN_PRESETS) => {
     const c = parseCardOptions(card);
     const byKind = task.kind === "parent" ? ORCHESTRATE_PRESET_ID : void 0;
     const byType = task.type !== null ? s.presetByType[task.type] : void 0;
     const wanted = c.presetId ?? byKind ?? byType ?? s.defaults.presetId;
     return {
-      presetId: presets.some((p) => p.id === wanted) ? wanted : FALLBACK_PRESET_ID,
+      presetId: presets2.some((p) => p.id === wanted) ? wanted : FALLBACK_PRESET_ID,
       model: c.model ?? s.defaults.model,
       agent: c.agent ?? s.defaults.agent,
       location: c.location ?? s.defaults.location
@@ -3713,10 +3838,10 @@ ${ref}`,
       error2 = void 0;
       select.update({ options: options() });
       props.loadModels().then(
-        (list2) => {
+        (list3) => {
           loading = false;
           if (disposed) return;
-          models = list2;
+          models = list3;
           select.update({ options: options() });
         },
         (e) => {
@@ -3850,11 +3975,11 @@ ${ref}`,
     disposers.push(field2.dispose, reset.dispose);
   };
   var onOff = (b) => b ? "On" : "Off";
-  var presetName = (presets, id) => presets.find((p) => p.id === id)?.name ?? id;
-  var presetOptions = (presets) => presets.map((p) => ({ id: p.id, label: p.name }));
+  var presetName = (presets2, id) => presets2.find((p) => p.id === id)?.name ?? id;
+  var presetOptions = (presets2) => presets2.map((p) => ({ id: p.id, label: p.name }));
   var drawLayerForm = (root, disposers, opts) => {
     const layer = structuredClone(parseSettings(opts.layer));
-    const { base: base2, inheritWord, presets } = opts;
+    const { base: base2, inheritWord, presets: presets2 } = opts;
     const emit = () => opts.onChange(parseSettings(layer));
     const inherit = (shown) => `${inheritWord} (${shown})`;
     const section = (title, hint) => {
@@ -3909,8 +4034,8 @@ ${ref}`,
     mountInheritSelect(cell(r2), disposers, {
       label: "Default preset",
       value: layer.defaults?.presetId,
-      inheritLabel: inherit(presetName(presets, base2.defaults.presetId)),
-      options: presetOptions(presets),
+      inheritLabel: inherit(presetName(presets2, base2.defaults.presetId)),
+      options: presetOptions(presets2),
       onChange: (v2) => {
         defaults().presetId = v2;
         emit();
@@ -3951,6 +4076,14 @@ ${ref}`,
         emit();
       }
     });
+    if (opts.skillsLine !== void 0) {
+      const skills = section(
+        "Matt Pocock's skills",
+        "When on, a built-in preset whose skills are all installed tells the agent to run them (Settings \u2192 Presets shows which), and a bug starts with Diagnose."
+      );
+      bool(row(skills), "Use Matt Pocock's skills when installed", () => layer.useMattSkills, (v2) => layer.useMattSkills = v2, base2.useMattSkills);
+      skills.append(el2("p", "kb-settings-hint", opts.skillsLine));
+    }
     const types = layer.types ?? base2.types;
     const byType = section("Preset per type", "Used when a card sets no preset. Unset types use the default preset.");
     const r4 = row(byType);
@@ -3959,8 +4092,8 @@ ${ref}`,
       mountInheritSelect(cell(r4), disposers, {
         label: type,
         value: layer.presetByType?.[type],
-        inheritLabel: inherit(inherited !== void 0 ? presetName(presets, inherited) : "default preset"),
-        options: presetOptions(presets),
+        inheritLabel: inherit(inherited !== void 0 ? presetName(presets2, inherited) : "default preset"),
+        options: presetOptions(presets2),
         onChange: (v2) => {
           const map2 = { ...layer.presetByType };
           if (v2 === void 0) delete map2[type];
@@ -3980,8 +4113,8 @@ ${ref}`,
       resetLabel: inheritWord,
       helper: "Comma-separated. Applies the next time this sheet opens.",
       onChange: (v2) => {
-        const list2 = v2?.split(",").map((t) => t.trim()).filter((t) => t !== "");
-        layer.types = list2 === void 0 || list2.length === 0 ? void 0 : list2;
+        const list3 = v2?.split(",").map((t) => t.trim()).filter((t) => t !== "");
+        layer.types = list3 === void 0 || list3.length === 0 ? void 0 : list3;
         emit();
       }
     });
@@ -4010,11 +4143,12 @@ ${ref}`,
       }
     });
   };
-  var drawPresets = (root, disposers, getStored, setStored, redraw) => {
+  var drawPresets = (root, disposers, getStored, setStored, redraw, skills) => {
     root.append(
-      el2("p", "kb-settings-hint", "A preset is a block of instructions added to the agent\u2019s start prompt. Built-ins can be edited and reset.")
+      el2("p", "kb-settings-hint", "A preset is a block of instructions added to the agent\u2019s start prompt. Built-ins can be edited and reset."),
+      el2("p", "kb-settings-hint", skills.line)
     );
-    for (const preset of listPresets(getStored())) {
+    for (const preset of listPresets(getStored(), skills.use)) {
       const box = el2("section", "kb-preset");
       root.append(box);
       const head = el2("div", "kb-preset-head");
@@ -4036,6 +4170,9 @@ ${ref}`,
       }
       const buttons = el2("div", "kb-actions");
       head.append(buttons);
+      const note = presetSkillsNote(preset, skills.use, isEdited(getStored(), preset.id));
+      const noteLine = note === null ? null : el2("p", "kb-settings-hint", note);
+      if (noteLine !== null) box.append(noteLine);
       const textSlot = el2("div", "");
       box.append(textSlot);
       let reset = null;
@@ -4049,6 +4186,7 @@ ${ref}`,
           const next = setPresetText(getStored(), preset.id, v2);
           setStored(next);
           reset?.update({ disabled: !isEdited(next, preset.id) });
+          if (noteLine !== null) noteLine.textContent = presetSkillsNote(preset, skills.use, isEdited(next, preset.id)) ?? "";
         }
       });
       disposers.push(text3.dispose);
@@ -4122,17 +4260,24 @@ ${ref}`,
       for (const d of disposers) d();
       disposers = [];
       body.replaceChildren();
-      const presets = listPresets(m.presets);
+      const found = m.skills ?? [];
+      const use = skillUse(resolveSettings(m.global, {}, found), found);
+      const skillsLine = skillsFoundLine(m.skills);
+      const presets2 = listPresets(m.presets, use);
       if (m.tab === "global") {
         drawLayerForm(body, disposers, {
           layer: m.global,
-          base: DEFAULT_SETTINGS,
+          // The built-in defaults, with the toggle as set here (a bug's default follows it).
+          base: resolveSettings({ useMattSkills: m.global.useMattSkills ?? DEFAULT_SETTINGS.useMattSkills }, {}, found),
           inheritWord: "Default",
-          presets,
+          presets: presets2,
           loadModels: callbacks.loadModels,
+          skillsLine,
           onChange: (layer) => {
+            const toggled = (layer.useMattSkills ?? DEFAULT_SETTINGS.useMattSkills) !== (m.global.useMattSkills ?? DEFAULT_SETTINGS.useMattSkills);
             m.global = layer;
             callbacks.onGlobal(layer);
+            if (toggled) queueMicrotask(draw2);
           }
         });
       } else if (m.tab === "project") {
@@ -4143,9 +4288,9 @@ ${ref}`,
           body.append(el2("p", "kb-settings-hint", `Only for ${project2.name}. Unset fields use the global settings.`));
           drawLayerForm(body, disposers, {
             layer: project2.layer,
-            base: resolveSettings(m.global, {}),
+            base: resolveSettings(m.global, {}, found),
             inheritWord: "Use global",
-            presets,
+            presets: presets2,
             loadModels: callbacks.loadModels,
             onChange: (layer) => {
               project2.layer = layer;
@@ -4162,7 +4307,8 @@ ${ref}`,
             m.presets = s;
             callbacks.onPresets(s);
           },
-          draw2
+          draw2,
+          { use, line: skillsLine }
         );
       }
     };
@@ -4399,10 +4545,10 @@ ${ref}`,
         blockersBox.append(el3("p", "kb-muted", why));
         return;
       }
-      const list2 = el3("div", "kb-add-checks");
+      const list3 = el3("div", "kb-add-checks");
       const drawList = () => {
         const shown = new Set(filterSelectOptions(offered, blockerFilter).map((c) => c.id));
-        for (const node of list2.children) {
+        for (const node of list3.children) {
           const id = node.dataset.id ?? "";
           node.hidden = !shown.has(id) && !d.blockedBy.includes(id);
         }
@@ -4425,7 +4571,7 @@ ${ref}`,
       for (const c of offered) {
         const cell = el3("div", "kb-add-check");
         cell.dataset.id = c.id;
-        list2.append(cell);
+        list3.append(cell);
         const box = mountCheckbox(cell, {
           label: c.label,
           description: c.hint ?? c.id,
@@ -4438,7 +4584,7 @@ ${ref}`,
         });
         blockerDisposers.push(box.dispose);
       }
-      blockersBox.append(list2);
+      blockersBox.append(list3);
       drawList();
     };
     let subDisposers = [];
@@ -6184,12 +6330,12 @@ ${ref}`,
     });
     this.__cache__ = null;
   };
-  Ruler.prototype.enable = function(list2, ignoreInvalid) {
-    if (!Array.isArray(list2)) {
-      list2 = [list2];
+  Ruler.prototype.enable = function(list3, ignoreInvalid) {
+    if (!Array.isArray(list3)) {
+      list3 = [list3];
     }
     const result = [];
-    list2.forEach(function(name) {
+    list3.forEach(function(name) {
       const idx = this.__find__(name);
       if (idx < 0) {
         if (ignoreInvalid) {
@@ -6203,21 +6349,21 @@ ${ref}`,
     this.__cache__ = null;
     return result;
   };
-  Ruler.prototype.enableOnly = function(list2, ignoreInvalid) {
-    if (!Array.isArray(list2)) {
-      list2 = [list2];
+  Ruler.prototype.enableOnly = function(list3, ignoreInvalid) {
+    if (!Array.isArray(list3)) {
+      list3 = [list3];
     }
     this.__rules__.forEach(function(rule) {
       rule.enabled = false;
     });
-    this.enable(list2, ignoreInvalid);
+    this.enable(list3, ignoreInvalid);
   };
-  Ruler.prototype.disable = function(list2, ignoreInvalid) {
-    if (!Array.isArray(list2)) {
-      list2 = [list2];
+  Ruler.prototype.disable = function(list3, ignoreInvalid) {
+    if (!Array.isArray(list3)) {
+      list3 = [list3];
     }
     const result = [];
-    list2.forEach(function(name) {
+    list3.forEach(function(name) {
       const idx = this.__find__(name);
       if (idx < 0) {
         if (ignoreInvalid) {
@@ -7423,7 +7569,7 @@ ${ref}`,
       }
     }
   }
-  function list(state2, startLine, endLine, silent) {
+  function list2(state2, startLine, endLine, silent) {
     let max, pos, start2, token;
     let nextLine = startLine;
     let tight = true;
@@ -8082,7 +8228,7 @@ ${ref}`,
     ["fence", fence, ["paragraph", "reference", "blockquote", "list"]],
     ["blockquote", blockquote, ["paragraph", "reference", "blockquote", "list"]],
     ["hr", hr, ["paragraph", "reference", "blockquote", "list"]],
-    ["list", list, ["paragraph", "reference", "blockquote"]],
+    ["list", list2, ["paragraph", "reference", "blockquote"]],
     ["reference", reference],
     ["html_block", html_block, ["paragraph", "reference", "blockquote"]],
     ["heading", heading, ["paragraph", "reference", "blockquote"]],
@@ -9656,15 +9802,15 @@ ${ref}`,
     this.__compiled__[match2.schema].normalize(match2, this);
     return match2;
   };
-  LinkifyIt.prototype.tlds = function tlds(list2, keepOld) {
-    list2 = Array.isArray(list2) ? list2 : [list2];
+  LinkifyIt.prototype.tlds = function tlds(list3, keepOld) {
+    list3 = Array.isArray(list3) ? list3 : [list3];
     if (!keepOld) {
-      this.__tlds__ = list2.slice();
+      this.__tlds__ = list3.slice();
       this.__tlds_replaced__ = true;
       compile(this);
       return this;
     }
-    this.__tlds__ = this.__tlds__.concat(list2).sort().filter(function(el7, idx, arr) {
+    this.__tlds__ = this.__tlds__.concat(list3).sort().filter(function(el7, idx, arr) {
       return el7 !== arr[idx - 1];
     }).reverse();
     compile(this);
@@ -10157,43 +10303,43 @@ ${ref}`,
     assign(this.options, options);
     return this;
   };
-  MarkdownIt.prototype.configure = function(presets) {
+  MarkdownIt.prototype.configure = function(presets2) {
     const self = this;
-    if (isString(presets)) {
-      const presetName2 = presets;
-      presets = config[presetName2];
-      if (!presets) {
+    if (isString(presets2)) {
+      const presetName2 = presets2;
+      presets2 = config[presetName2];
+      if (!presets2) {
         throw new Error('Wrong `markdown-it` preset "' + presetName2 + '", check name');
       }
     }
-    if (!presets) {
+    if (!presets2) {
       throw new Error("Wrong `markdown-it` preset, can't be empty");
     }
-    if (presets.options) {
-      self.set(presets.options);
+    if (presets2.options) {
+      self.set(presets2.options);
     }
-    if (presets.components) {
-      Object.keys(presets.components).forEach(function(name) {
-        if (presets.components[name].rules) {
-          self[name].ruler.enableOnly(presets.components[name].rules);
+    if (presets2.components) {
+      Object.keys(presets2.components).forEach(function(name) {
+        if (presets2.components[name].rules) {
+          self[name].ruler.enableOnly(presets2.components[name].rules);
         }
-        if (presets.components[name].rules2) {
-          self[name].ruler2.enableOnly(presets.components[name].rules2);
+        if (presets2.components[name].rules2) {
+          self[name].ruler2.enableOnly(presets2.components[name].rules2);
         }
       });
     }
     return this;
   };
-  MarkdownIt.prototype.enable = function(list2, ignoreInvalid) {
+  MarkdownIt.prototype.enable = function(list3, ignoreInvalid) {
     let result = [];
-    if (!Array.isArray(list2)) {
-      list2 = [list2];
+    if (!Array.isArray(list3)) {
+      list3 = [list3];
     }
     ["core", "block", "inline"].forEach(function(chain) {
-      result = result.concat(this[chain].ruler.enable(list2, true));
+      result = result.concat(this[chain].ruler.enable(list3, true));
     }, this);
-    result = result.concat(this.inline.ruler2.enable(list2, true));
-    const missed = list2.filter(function(name) {
+    result = result.concat(this.inline.ruler2.enable(list3, true));
+    const missed = list3.filter(function(name) {
       return result.indexOf(name) < 0;
     });
     if (missed.length && !ignoreInvalid) {
@@ -10201,16 +10347,16 @@ ${ref}`,
     }
     return this;
   };
-  MarkdownIt.prototype.disable = function(list2, ignoreInvalid) {
+  MarkdownIt.prototype.disable = function(list3, ignoreInvalid) {
     let result = [];
-    if (!Array.isArray(list2)) {
-      list2 = [list2];
+    if (!Array.isArray(list3)) {
+      list3 = [list3];
     }
     ["core", "block", "inline"].forEach(function(chain) {
-      result = result.concat(this[chain].ruler.disable(list2, true));
+      result = result.concat(this[chain].ruler.disable(list3, true));
     }, this);
-    result = result.concat(this.inline.ruler2.disable(list2, true));
-    const missed = list2.filter(function(name) {
+    result = result.concat(this.inline.ruler2.disable(list3, true));
+    const missed = list3.filter(function(name) {
       return result.indexOf(name) < 0;
     });
     if (missed.length && !ignoreInvalid) {
@@ -10700,7 +10846,7 @@ ${ref}`,
     let busy = false;
     let errorDispose = null;
     let disposed = false;
-    const typeOptions = (list2) => [{ id: NO_TYPE, label: "No type" }, ...list2.map((t) => ({ id: t, label: t }))];
+    const typeOptions = (list3) => [{ id: NO_TYPE, label: "No type" }, ...list3.map((t) => ({ id: t, label: t }))];
     const titleField = mountTextField(titleSlot, {
       label: "Title",
       value: "",
@@ -10758,7 +10904,7 @@ ${ref}`,
       submit();
     });
     return {
-      setTypes: (list2) => typeSelect.update({ options: typeOptions(list2) }),
+      setTypes: (list3) => typeSelect.update({ options: typeOptions(list3) }),
       dispose: () => {
         disposed = true;
         errorDispose?.();
@@ -11422,7 +11568,7 @@ ${note}` : note;
     if (text3 !== void 0) node.textContent = text3;
     return node;
   };
-  var askStart = (title, initial, presets, loadModels2) => new Promise((resolve) => {
+  var askStart = (title, initial, presets2, loadModels2) => new Promise((resolve) => {
     const options = { ...initial };
     const backdrop = el6("div", "kb-backdrop kb-confirm-backdrop");
     const box = el6("div", "kb-confirm");
@@ -11442,7 +11588,7 @@ ${note}` : note;
     const preset = mountSelect(cells[0], {
       label: "Preset",
       value: options.presetId,
-      options: presets.map((p) => ({ id: p.id, label: p.name })),
+      options: presets2.map((p) => ({ id: p.id, label: p.name })),
       onChange: (id) => {
         options.presetId = id;
         preset.update({ value: id });
@@ -11609,8 +11755,8 @@ ${note}` : note;
       const p = deps.project();
       if (p === null) throw new Error("No project is open");
       const ctx = deps.context();
-      const presets = ctx?.presets ?? [];
-      const preset = presets.find((x) => x.id === opts.presetId) ?? presets.find((x) => x.id === "implement") ?? presets[0];
+      const presets2 = ctx?.presets ?? [];
+      const preset = presets2.find((x) => x.id === opts.presetId) ?? presets2.find((x) => x.id === "implement") ?? presets2[0];
       if (preset === void 0) throw new Error("Settings are loading, try again in a moment");
       const children = (deps.tasks() ?? []).filter((t) => t.parentId === task.id);
       return buildPrompt2(task, preset, await cliPath(p.directory), p.directory, children);
@@ -11642,13 +11788,13 @@ ${note}` : note;
     const drainOnce = async () => {
       const ctx = deps.context();
       const p = deps.project();
-      const list2 = deps.tasks();
-      if (ctx === null || p === null || p.id !== ctx.projectId || list2 === null || shown !== p.id || queue.length === 0) return;
+      const list3 = deps.tasks();
+      if (ctx === null || p === null || p.id !== ctx.projectId || list3 === null || shown !== p.id || queue.length === 0) return;
       const api = createApi(host2, p.directory);
       const max = ctx.settings.maxParallel;
       let r;
       try {
-        const running = list2.filter((t) => hasLiveSession(t.id)).map((t) => t.id);
+        const running = list3.filter((t) => hasLiveSession(t.id)).map((t) => t.id);
         r = await api.takeFromQueue(max, launcher.starting(), running);
       } catch {
         return;
@@ -11660,7 +11806,7 @@ ${note}` : note;
       }
       queue = r.queue;
       for (const e of r.taken) {
-        const task = list2.find((t) => t.id === e.taskId);
+        const task = list3.find((t) => t.id === e.taskId);
         if (task === void 0 || task.state === "done") {
           void api.removeFromQueue(e.taskId).catch(() => {
           });
@@ -12005,18 +12151,18 @@ ${note}` : note;
           count.className = "kb-count";
           count.textContent = String(cards.length);
           head.append(name, count);
-          const list2 = div2("kb-cards");
+          const list3 = div2("kb-cards");
           if (cards.length === 0) {
             const none = div2("kb-none");
             none.textContent = "Nothing here";
-            list2.append(none);
+            list3.append(none);
           }
           for (const model of cards) {
             const card = renderCard(model, busy.has(model.task.id), summaryOf(model.task));
-            list2.append(card.node);
+            list3.append(card.node);
             cardDisposers.push(card.dispose);
           }
-          column.append(head, list2);
+          column.append(head, list3);
           columns.append(column);
         }
       }
@@ -12195,7 +12341,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     const actions = element("div", "kb-wizard-actions");
     wrap.append(title, body, listSlot, actions);
     root.append(wrap);
-    const list2 = mountList(listSlot, {
+    const list3 = mountList(listSlot, {
       ariaLabel: "Tracker",
       selectedId: choice2,
       items: [
@@ -12211,7 +12357,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
       onSelect: (id) => {
         if (busy || id !== "local" && id !== "github" || id === "github" && github.disabled) return;
         choice2 = id;
-        list2.update({ selectedId: id });
+        list3.update({ selectedId: id });
       }
     });
     const button2 = mountButton(actions, {
@@ -12226,7 +12372,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
         button2.update({ loading: next, disabled: next });
       },
       dispose: () => {
-        list2.dispose();
+        list3.dispose();
         button2.dispose();
         wrap.remove();
       }
@@ -12253,6 +12399,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     projectSettings: {},
     settingsFor: null,
     presets: parseStoredPresets(void 0),
+    skills: null,
     detached: /* @__PURE__ */ new Map(),
     detachedFor: null,
     archived: /* @__PURE__ */ new Set(),
@@ -12273,9 +12420,9 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
   var globalLoaded = false;
   var loadGlobalSettings = async () => {
     try {
-      const [global, presets] = await Promise.all([store.loadGlobal(), store.loadPresets()]);
+      const [global, presets2] = await Promise.all([store.loadGlobal(), store.loadPresets()]);
       state.globalSettings = global;
-      state.presets = presets;
+      state.presets = presets2;
       globalLoaded = true;
       applySettings();
       summariseShown();
@@ -12300,7 +12447,11 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     if (p === null) throw new Error("Open a project to list the models");
     return createApi(host, p.directory).listModels();
   });
-  var settings = () => resolveSettings(state.globalSettings, state.settingsFor !== null && state.settingsFor === state.projectId ? state.projectSettings : {});
+  var settings = () => {
+    const loaded = state.settingsFor !== null && state.settingsFor === state.projectId;
+    return resolveSettings(state.globalSettings, loaded ? state.projectSettings : {}, loaded ? state.skills ?? [] : []);
+  };
+  var presets = () => listPresets(state.presets, skillUse(settings(), state.settingsFor === state.projectId ? state.skills ?? [] : []));
   var applySettings = () => {
     const hide = settings().hideChildren;
     if (hide !== state.hideSubtasks) {
@@ -12311,15 +12462,29 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     editor.refresh();
     summarySettingsChanged();
   };
+  var detectSkills = async (id) => {
+    const p = state.projects.find((x) => x.id === id);
+    if (p === void 0) return null;
+    try {
+      return await createApi(host, p.directory).detectSkills();
+    } catch {
+      return null;
+    }
+  };
   var loadProjectSettings = async (id) => {
+    const skills = detectSkills(id);
     try {
       const layer = await store.loadProject(id);
+      const found = await skills;
       if (state.projectId !== id) return;
       state.projectSettings = layer;
+      state.skills = found;
       state.settingsFor = id;
     } catch (e) {
+      const found = await skills;
       if (state.projectId !== id) return;
       state.projectSettings = {};
+      state.skills = found;
       state.settingsFor = id;
       fail(`Could not read the project settings: ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -12351,7 +12516,8 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
         tab: "global",
         global: state.globalSettings,
         project: p !== null && id !== null ? { name: p.name, layer: state.projectSettings } : null,
-        presets: state.presets
+        presets: state.presets,
+        skills: id !== null ? state.skills : null
       },
       {
         onGlobal: (layer) => {
@@ -12529,6 +12695,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     editor.reset();
     closeSettings();
     state.settingsFor = null;
+    state.skills = null;
     state.projectSettings = {};
     if (id !== null) void loadProjectSettings(id);
     state.sessions = [];
@@ -12610,7 +12777,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
   var errorText4 = (e) => e instanceof Error ? e.message : String(e);
   var startContext = () => {
     const id = state.projectId;
-    return id === null || !globalLoaded || state.settingsFor !== id ? null : { projectId: id, settings: settings(), presets: listPresets(state.presets) };
+    return id === null || !globalLoaded || state.settingsFor !== id ? null : { projectId: id, settings: settings(), presets: presets() };
   };
   var starter = createStarter({
     host,

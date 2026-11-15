@@ -11,10 +11,13 @@ import {
   deletePreset,
   isEdited,
   listPresets,
+  presetSkillsNote,
   renamePreset,
   resetPreset,
   setPresetText,
+  skillsFoundLine,
   type Preset,
+  type SkillUse,
   type StoredPresets,
 } from '../presets.ts';
 import {
@@ -23,6 +26,7 @@ import {
   MAX_PARALLEL_MIN,
   parseSettings,
   resolveSettings,
+  skillUse,
   type Location,
   type Settings,
   type SettingsLayer,
@@ -40,6 +44,8 @@ export type SettingsModel = {
   /** Null when no project is open. */
   project: { name: string; layer: SettingsLayer } | null;
   presets: StoredPresets;
+  /** Matt Pocock's skills found for the open project; null when no project is open or the check failed. */
+  skills: string[] | null;
 };
 
 export type SettingsCallbacks = {
@@ -140,6 +146,8 @@ const drawLayerForm = (
     inheritWord: string;
     presets: readonly Preset[];
     loadModels: () => Promise<string[]>;
+    /** Global only: the "Use Matt Pocock's skills" toggle, with this line saying what was found. */
+    skillsLine?: string;
     onChange: (layer: SettingsLayer) => void;
   },
 ): void => {
@@ -245,6 +253,15 @@ const drawLayerForm = (
     },
   });
 
+  if (opts.skillsLine !== undefined) {
+    const skills = section(
+      "Matt Pocock's skills",
+      'When on, a built-in preset whose skills are all installed tells the agent to run them (Settings → Presets shows which), and a bug starts with Diagnose.',
+    );
+    bool(row(skills), "Use Matt Pocock's skills when installed", () => layer.useMattSkills, (v) => (layer.useMattSkills = v), base.useMattSkills);
+    skills.append(el('p', 'kb-settings-hint', opts.skillsLine));
+  }
+
   const types = layer.types ?? base.types;
   const byType = section('Preset per type', 'Used when a card sets no preset. Unset types use the default preset.');
   const r4 = row(byType);
@@ -316,11 +333,13 @@ const drawPresets = (
   getStored: () => StoredPresets,
   setStored: (s: StoredPresets) => void,
   redraw: () => void,
+  skills: { use: SkillUse; line: string },
 ): void => {
   root.append(
     el('p', 'kb-settings-hint', 'A preset is a block of instructions added to the agent’s start prompt. Built-ins can be edited and reset.'),
+    el('p', 'kb-settings-hint', skills.line),
   );
-  for (const preset of listPresets(getStored())) {
+  for (const preset of listPresets(getStored(), skills.use)) {
     const box = el('section', 'kb-preset');
     root.append(box);
     const head = el('div', 'kb-preset-head');
@@ -342,6 +361,9 @@ const drawPresets = (
     }
     const buttons = el('div', 'kb-actions');
     head.append(buttons);
+    const note = presetSkillsNote(preset, skills.use, isEdited(getStored(), preset.id));
+    const noteLine = note === null ? null : el('p', 'kb-settings-hint', note);
+    if (noteLine !== null) box.append(noteLine);
     const textSlot = el('div', '');
     box.append(textSlot);
     let reset: ReturnType<typeof mountButton> | null = null;
@@ -355,6 +377,7 @@ const drawPresets = (
         const next = setPresetText(getStored(), preset.id, v);
         setStored(next);
         reset?.update({ disabled: !isEdited(next, preset.id) });
+        if (noteLine !== null) noteLine.textContent = presetSkillsNote(preset, skills.use, isEdited(next, preset.id)) ?? '';
       },
     });
     disposers.push(text.dispose);
@@ -431,17 +454,25 @@ export const openSettings = (initial: SettingsModel, callbacks: SettingsCallback
     for (const d of disposers) d();
     disposers = [];
     body.replaceChildren();
-    const presets = listPresets(m.presets);
+    const found = m.skills ?? [];
+    const use = skillUse(resolveSettings(m.global, {}, found), found);
+    const skillsLine = skillsFoundLine(m.skills);
+    const presets = listPresets(m.presets, use);
     if (m.tab === 'global') {
       drawLayerForm(body, disposers, {
         layer: m.global,
-        base: DEFAULT_SETTINGS,
+        // The built-in defaults, with the toggle as set here (a bug's default follows it).
+        base: resolveSettings({ useMattSkills: m.global.useMattSkills ?? DEFAULT_SETTINGS.useMattSkills }, {}, found),
         inheritWord: 'Default',
         presets,
         loadModels: callbacks.loadModels,
+        skillsLine,
         onChange: (layer) => {
+          const toggled = (layer.useMattSkills ?? DEFAULT_SETTINGS.useMattSkills) !== (m.global.useMattSkills ?? DEFAULT_SETTINGS.useMattSkills);
           m.global = layer;
           callbacks.onGlobal(layer);
+          // The bug type's default preset shown in this form follows the toggle.
+          if (toggled) queueMicrotask(draw);
         },
       });
     } else if (m.tab === 'project') {
@@ -452,7 +483,7 @@ export const openSettings = (initial: SettingsModel, callbacks: SettingsCallback
         body.append(el('p', 'kb-settings-hint', `Only for ${project.name}. Unset fields use the global settings.`));
         drawLayerForm(body, disposers, {
           layer: project.layer,
-          base: resolveSettings(m.global, {}),
+          base: resolveSettings(m.global, {}, found),
           inheritWord: 'Use global',
           presets,
           loadModels: callbacks.loadModels,
@@ -472,6 +503,7 @@ export const openSettings = (initial: SettingsModel, callbacks: SettingsCallback
           callbacks.onPresets(s);
         },
         draw,
+        { use, line: skillsLine },
       );
     }
   };

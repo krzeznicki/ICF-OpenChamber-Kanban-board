@@ -2,7 +2,7 @@
 // All of it lives in the extension's instance storage, never in the repo. The resolvers are pure
 // so they run under node:test; createSettingsStore is the only part that touches storage.
 import type { Task } from '../core/types.ts';
-import { BUILTIN_PRESETS, isPristine, parseStoredPresets, type Preset, type StoredPresets } from './presets.ts';
+import { BUILTIN_PRESETS, isPristine, parseStoredPresets, usesMattSkills, type Preset, type SkillUse, type StoredPresets } from './presets.ts';
 import { DEFAULT_SUMMARY_PROMPT } from './summaries.ts';
 
 export type { Preset } from './presets.ts';
@@ -20,6 +20,8 @@ export type Settings = {
   summary: SummarySettings;
   hideChildren: boolean;
   types: string[];
+  /** "Use Matt Pocock's skills when installed": global only (a project layer's value is ignored). */
+  useMattSkills: boolean;
 };
 
 /**
@@ -39,6 +41,8 @@ export const MAX_PARALLEL_MAX = 10;
 export const FALLBACK_PRESET_ID = 'implement';
 /** A parent (feature) starts one orchestrator session with this preset unless its card says otherwise. */
 export const ORCHESTRATE_PRESET_ID = 'orchestrate';
+/** With Matt Pocock's skills in use, a bug defaults to this preset (unless the user set the bug type). */
+export const DIAGNOSE_PRESET_ID = 'diagnose';
 export const LOCATIONS: readonly Location[] = ['worktree', 'project'];
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -49,6 +53,7 @@ export const DEFAULT_SETTINGS: Settings = {
   summary: { auto: true, language: 'Polish', prompt: DEFAULT_SUMMARY_PROMPT },
   hideChildren: false,
   types: ['enhancement', 'bug', 'chore', 'research'],
+  useMattSkills: true,
 };
 
 const record = (v: unknown): Record<string, unknown> | null =>
@@ -89,6 +94,7 @@ export const parseSettings = (raw: unknown): SettingsLayer => {
   if (typeof r.autoStart === 'boolean') out.autoStart = r.autoStart;
   if (typeof r.maxParallel === 'number' && Number.isFinite(r.maxParallel)) out.maxParallel = clampParallel(r.maxParallel);
   if (typeof r.hideChildren === 'boolean') out.hideChildren = r.hideChildren;
+  if (typeof r.useMattSkills === 'boolean') out.useMattSkills = r.useMattSkills;
   if (Array.isArray(r.types)) {
     const types = [...new Set(r.types.map(text).filter((t): t is string => t !== undefined))];
     if (types.length > 0) out.types = types;
@@ -117,20 +123,33 @@ export const parseSettings = (raw: unknown): SettingsLayer => {
   return out;
 };
 
-/** Global, then project, over the defaults, field by field. Layers go through parseSettings first. */
-export const resolveSettings = (global: SettingsLayer, project: SettingsLayer): Settings => {
+const diagnose = BUILTIN_PRESETS.find((p) => p.id === DIAGNOSE_PRESET_ID) as Preset;
+
+/** The skills a session may use under these settings, given what the service found installed. */
+export const skillUse = (s: Settings, found: readonly string[]): SkillUse => ({ use: s.useMattSkills, found });
+
+/**
+ * Global, then project, over the defaults, field by field. Layers go through parseSettings first.
+ * `found` is the Matt Pocock skills installed for the project (POST /skills/detect): when they are
+ * in use and cover Diagnose, the built-in default for `bug` is Diagnose instead of Implement. A
+ * preset the user set for `bug` in either layer still wins.
+ */
+export const resolveSettings = (global: SettingsLayer, project: SettingsLayer, found: readonly string[] = []): Settings => {
   const g = parseSettings(global);
   const p = parseSettings(project);
   const d = DEFAULT_SETTINGS;
   const maxParallel = p.maxParallel ?? g.maxParallel ?? d.maxParallel;
+  const useMattSkills = g.useMattSkills ?? d.useMattSkills;
+  const byType = usesMattSkills(diagnose, { use: useMattSkills, found }) ? { ...d.presetByType, bug: DIAGNOSE_PRESET_ID } : d.presetByType;
   return {
     autoStart: p.autoStart ?? g.autoStart ?? d.autoStart,
     maxParallel: clampParallel(maxParallel),
     defaults: { ...d.defaults, ...g.defaults, ...p.defaults },
-    presetByType: { ...d.presetByType, ...g.presetByType, ...p.presetByType },
+    presetByType: { ...byType, ...g.presetByType, ...p.presetByType },
     summary: { ...d.summary, ...g.summary, ...p.summary },
     hideChildren: p.hideChildren ?? g.hideChildren ?? d.hideChildren,
     types: [...(p.types ?? g.types ?? d.types)],
+    useMattSkills,
   };
 };
 

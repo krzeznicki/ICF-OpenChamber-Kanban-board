@@ -124,3 +124,17 @@ test('orchestrate preset: sub-tasks are created ready-for-agent and claim needs 
   assert.match(o.text, /claim needs ready-for-agent/);
   assert.match(o.text, /move a sub-task to ready-for-agent first if needed/);
 });
+
+test('prompt: a built-in runs its skills text when Matt Pocock skills are in use, the user edit when edited', async () => {
+  const { listPresets, parseStoredPresets, setPresetText } = await import('../src/panel/presets.ts');
+  const { MATT_SKILLS } = await import('../src/core/skills.ts');
+  const on = { use: true, found: [...MATT_SKILLS] };
+  const pick = (stored: ReturnType<typeof parseStoredPresets>) => listPresets(stored, on).find((p) => p.id === 'implement')!;
+  const p = buildPrompt(task(), pick(parseStoredPresets(undefined)), CLI, DIR, []);
+  assert.ok(p.includes(implement.mattText!.trim()));
+  assert.ok(p.includes('Run /implement'));
+  assert.ok(p.includes(`${TB} state .scratch/board/issues/03-drag.md <state>`), 'the CLI line stays');
+  assert.ok(!p.includes(implement.text));
+  const edited = buildPrompt(task(), pick(setPresetText(parseStoredPresets(undefined), 'implement', 'My way.')), CLI, DIR, []);
+  assert.ok(edited.endsWith('## Instructions (Implement)\nMy way.'));
+});

@@ -135,17 +135,21 @@ With **Start at once** off, dropping a card on In Progress opens a small form to
 
 A preset is a block of instructions added to the agent's first message. Built in:
 
-| Preset | Use |
-|---|---|
-| Plan | Plan first; write no code until you approve the plan. |
-| Prototype | A quick, throwaway prototype that answers the task's question. |
-| Implement | Implement with tests; ask when a decision is unclear. The default. |
-| Implement without questions | The same, choosing the simplest option instead of asking, listing every assumption. |
-| Break down and orchestrate | Split into tickets, hand them to subagents, work until all are done. The default for parents. |
+| Preset | Use | With Matt Pocock's skills |
+|---|---|---|
+| Plan | Plan first; write no code until you approve the plan. | `/grill-with-docs` to sharpen the task; for a multi-session build `/to-spec`, then `/to-tickets` (they land on the board as a feature with sub-tasks). |
+| Prototype | A quick, throwaway prototype that answers the task's question. | `/prototype` on a `prototype/<name>` branch, the answer recorded on the task, then `/handoff`. |
+| Implement | Implement with tests; ask when a decision is unclear. The default. | `/implement`, which drives `/tdd` and closes with `/code-review`. |
+| Implement without questions | The same, choosing the simplest option instead of asking, listing every assumption. | `/implement`, deciding the skills' questions itself and listing every assumption. |
+| Break down and orchestrate | Split into tickets, hand them to subagents, work until all are done. The default for parents. | `/to-tickets` if there are no sub-tasks, then `/implement-spec` over them as a task graph (`/tdd` per ticket, one `/code-review`). |
+| Diagnose | Reproduce the bug, find the cause, fix it with a regression test. | `/diagnosing-bugs`, then the fix through `/implement` (`/tdd`, `/code-review`). The default for bugs when its skills are installed. |
+| Triage | Evaluate a raw task: reproduce, decide its state, write a brief or questions. No code. | `/triage`. |
 
-In **Settings → Presets** you can edit the built-in texts (**Reset** brings the original back) and add, rename and delete your own. A card whose preset was deleted falls back to Implement.
+**Matt Pocock's skills.** When [Matt Pocock's skills](https://github.com/mattpocock/skills) are installed, a built-in tells the agent to run them instead of its plain instructions, but only if **every** skill it names is installed (Implement needs `implement`, `tdd` and `code-review`, for example). The service looks for `<name>/SKILL.md` in `~/.config/opencode/skills`, `~/.claude/skills`, `~/.agents/skills` and the project's `.opencode/skills` and `.claude/skills` (read only, cached 5 minutes per project; it never reads `~/.config/openchamber`). The skills text also tells the agent that the skills and the `task-board` CLI write the same format (the tracker setup in `docs/agents/issue-tracker.md`), and that states still change through the CLI (`state`, `claim`) so the board follows. Turn it off with **Settings → Global → Use Matt Pocock's skills when installed** (on by default); that section and Settings → Presets list which skills were found, and each built-in says which text it runs with. The board checks when a project opens.
 
-Which preset a card gets: the card's own choice, else Break down and orchestrate for a parent, else the preset for its type (`enhancement` → Implement, `bug` → Implement, `research` → Plan), else the default preset.
+In **Settings → Presets** you can edit the built-in texts (**Reset** brings the shipped text back) and add, rename and delete your own. An edited built-in keeps your text whether or not the skills are installed. A card whose preset was deleted falls back to Implement.
+
+Which preset a card gets: the card's own choice, else Break down and orchestrate for a parent, else the preset for its type (`enhancement` → Implement, `bug` → Diagnose when Matt's skills are on and Diagnose's skills are installed, else Implement, `research` → Plan), else the default preset. A preset you set for `bug` yourself always wins.
 
 ## Settings
 
@@ -166,7 +170,8 @@ All of them are per user and stored in the extension's storage.
 | Default preset | Implement |
 | Location | New worktree |
 | Model / Agent | your current model / agent |
-| Preset per type | `enhancement` and `bug` → Implement, `research` → Plan |
+| Preset per type | `enhancement` → Implement, `bug` → Diagnose with Matt's skills (else Implement), `research` → Plan |
+| Use Matt Pocock's skills when installed (Global only) | on |
 | Hide sub-tasks | off |
 | Types | `enhancement`, `bug`, `chore`, `research` |
 | Summarise automatically | on |

@@ -309,7 +309,7 @@ var publishInstructions = async (host2, cliPath, log = console.error) => {
 };
 
 // src/service/routes.ts
-import { stat as stat2 } from "node:fs/promises";
+import { stat as stat3 } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -1160,9 +1160,61 @@ var createModelList = (exec, now = Date.now) => {
   };
 };
 
-// src/service/queue.ts
+// src/service/skills.ts
+import { stat as stat2 } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join as join3 } from "node:path";
+
+// src/core/skills.ts
+var MATT_SKILLS = [
+  "grill-with-docs",
+  "to-spec",
+  "to-tickets",
+  "prototype",
+  "handoff",
+  "implement",
+  "implement-spec",
+  "tdd",
+  "code-review",
+  "diagnosing-bugs",
+  "triage"
+];
+
+// src/service/skills.ts
+var SKILLS_TTL_MS = 5 * 60 * 1e3;
+var skillRoots = (home, project) => [
+  join3(home, ".config", "opencode", "skills"),
+  join3(home, ".claude", "skills"),
+  join3(home, ".agents", "skills"),
+  join3(project, ".opencode", "skills"),
+  join3(project, ".claude", "skills")
+];
+var isFile = async (path) => {
+  try {
+    return (await stat2(path)).isFile();
+  } catch {
+    return false;
+  }
+};
+var detectSkills = async (home, project, names = MATT_SKILLS) => {
+  const roots = skillRoots(home, project);
+  const found = await Promise.all(names.map(async (name) => (await Promise.all(roots.map((r) => isFile(join3(r, name, "SKILL.md"))))).some(Boolean)));
+  return names.filter((_, i) => found[i]);
+};
+var createSkillDetector = (home = homedir(), now = Date.now) => {
+  const cache = /* @__PURE__ */ new Map();
+  return async (directory) => {
+    const hit = cache.get(directory);
+    if (hit !== void 0 && now() - hit.at < SKILLS_TTL_MS) return { found: [...hit.found] };
+    const found = await detectSkills(home, directory);
+    cache.set(directory, { at: now(), found });
+    return { found: [...found] };
+  };
+};
+
+// src/service/queue.ts
+import { homedir as homedir2 } from "node:os";
+import { join as join4 } from "node:path";
 
 // src/core/queue.ts
 var MAX_START_FAILURES = 3;
@@ -1212,7 +1264,7 @@ var serial = (file, fn) => {
 };
 
 // src/service/queue.ts
-var defaultQueueFile = () => join3(homedir(), ".icf-kanban", "queue.json");
+var defaultQueueFile = () => join4(homedir2(), ".icf-kanban", "queue.json");
 var DEFAULT_MAX_PARALLEL = 3;
 var MAX_PARALLEL_LIMIT = 10;
 var RESERVE_MS = 18e4;
@@ -1329,10 +1381,10 @@ var takeFromQueue = (file, dir, input) => update(file, dir, async (q) => {
 
 // src/service/sessions.ts
 import { randomBytes as randomBytes2 } from "node:crypto";
-import { homedir as homedir2 } from "node:os";
-import { basename, dirname as dirname2, join as join4, sep } from "node:path";
+import { homedir as homedir3 } from "node:os";
+import { basename, dirname as dirname2, join as join5, sep } from "node:path";
 var LINKS_PER_PROJECT = 500;
-var defaultLinksFile = () => join4(homedir2(), ".icf-kanban", "links.json");
+var defaultLinksFile = () => join5(homedir3(), ".icf-kanban", "links.json");
 var isLink = (v) => {
   const l = v;
   return typeof l === "object" && l !== null && typeof l.taskId === "string" && typeof l.sessionId === "string" && typeof l.directory === "string" && typeof l.createdAt === "number";
@@ -1398,7 +1450,7 @@ var worktreeSlug = (taskId, title, suffix = randomBytes2(3).toString("hex")) => 
   const name = base(title) || base(taskId.replace(/^.*\//, "").replace(/\.md$/, "")) || "task";
   return `${name}-${suffix}`;
 };
-var worktreesRoot = (directory) => join4(dirname2(directory), `${basename(directory)}-worktrees`);
+var worktreesRoot = (directory) => join5(dirname2(directory), `${basename(directory)}-worktrees`);
 var message2 = (e) => e instanceof Error ? e.message : String(e);
 var removeWorktree = async (deps2, directory, path, branch) => {
   const log = deps2.log ?? ((m) => console.error(m));
@@ -1421,7 +1473,7 @@ var startSession = async (input, deps2) => {
   let branch = "";
   if (input.location === "worktree") {
     const slug = worktreeSlug(input.taskId, input.title, deps2.suffix?.());
-    const path = join4(worktreesRoot(input.directory), slug);
+    const path = join5(worktreesRoot(input.directory), slug);
     branch = `icf/${slug}`;
     const r = await deps2.exec("git", ["-C", input.directory, "worktree", "add", "-b", branch, path], { cwd: input.directory });
     if (r.code !== 0) {
@@ -1479,7 +1531,7 @@ var directoryOf = async (body) => {
   if (typeof dir !== "string" || !isAbsolute(dir)) return invalid('"directory" must be an absolute path');
   let isDir = false;
   try {
-    isDir = (await stat2(dir)).isDirectory();
+    isDir = (await stat3(dir)).isDirectory();
   } catch {
   }
   return isDir ? dir : invalid(`"directory" is not an existing directory: ${dir}`);
@@ -1579,6 +1631,8 @@ var modelList = (deps2) => {
   }
   return list;
 };
+var defaultSkills = null;
+var skillDetector = (deps2) => deps2.skills ?? (defaultSkills ??= createSkillDetector());
 var tracker = (dir, deps2) => openTracker(dir, deps2.exec);
 var existingConfig = async (dir) => {
   try {
@@ -1687,6 +1741,8 @@ var POST = {
   },
   /** `{ models: ['provider/model', …] }`; a failure is `{ models: [], error }`, never an error status. */
   "/models/list": async (_body, dir, deps2) => modelList(deps2)(dir),
+  /** `{ found: [...] }`: which of Matt Pocock's skills are installed for this project (core/skills.ts). */
+  "/skills/detect": async (_body, dir, deps2) => skillDetector(deps2)(dir),
   "/queue/list": async (_body, dir, deps2) => ({ queue: await listQueue(queueFile(deps2), dir) }),
   "/queue/add": async (body, dir, deps2) => ({ queue: await addToQueue(queueFile(deps2), dir, queueEntry(body.entry), maxParallelOf(body)) }),
   "/queue/remove": async (body, dir, deps2) => ({ queue: await removeFromQueue(queueFile(deps2), dir, str(body, "taskId")) }),

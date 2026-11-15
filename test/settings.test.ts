@@ -20,10 +20,15 @@ import {
   isEdited,
   listPresets,
   parseStoredPresets,
+  presetSkillsNote,
   renamePreset,
+  NO_SKILLS,
   resetPreset,
   setPresetText,
+  skillsFoundLine,
+  usesMattSkills,
 } from '../src/panel/presets.ts';
+import { MATT_SKILLS } from '../src/core/skills.ts';
 
 const task = (type: string | null, kind: Task['kind'] = 'ticket'): Task => ({
   id: '.scratch/f/issues/01-a.md',
@@ -51,6 +56,7 @@ test('defaults when nothing is stored', () => {
   assert.deepEqual(s.summary, { auto: true, language: 'Polish', prompt: DEFAULT_SUMMARY_PROMPT });
   assert.equal(s.hideChildren, false);
   assert.deepEqual(s.types, ['enhancement', 'bug', 'chore', 'research']);
+  assert.equal(s.useMattSkills, true);
 });
 
 test('project overrides global field by field, nested fields included', () => {
@@ -175,10 +181,10 @@ test('empty card model or agent inherits; card null presetId is ignored', () => 
 
 // --- presets ---
 
-test('built-in presets: the five ids in order, each with text', () => {
+test('built-in presets: the seven ids in order, each with text', () => {
   assert.deepEqual(
     BUILTIN_PRESETS.map((p) => p.id),
-    ['plan', 'prototype', 'implement', 'implement-no-questions', 'orchestrate'],
+    ['plan', 'prototype', 'implement', 'implement-no-questions', 'orchestrate', 'diagnose', 'triage'],
   );
   for (const p of BUILTIN_PRESETS) {
     assert.equal(p.builtin, true);
@@ -186,7 +192,7 @@ test('built-in presets: the five ids in order, each with text', () => {
   }
   assert.deepEqual(
     BUILTIN_PRESETS.map((p) => p.name),
-    ['Plan', 'Prototype', 'Implement', 'Implement without questions', 'Break down and orchestrate'],
+    ['Plan', 'Prototype', 'Implement', 'Implement without questions', 'Break down and orchestrate', 'Diagnose', 'Triage'],
   );
 });
 
@@ -216,14 +222,14 @@ test('custom presets: add, rename, edit, delete', () => {
   stored = renamePreset(stored, 'custom-review', 'Code review');
   stored = setPresetText(stored, 'custom-review', 'Review the diff.');
   const list = listPresets(stored);
-  assert.deepEqual(list.slice(5), [
+  assert.deepEqual(list.slice(7), [
     { id: 'custom-review', name: 'Code review', text: 'Review the diff.', builtin: false },
     { id: 'custom-review-2', name: 'Review', text: '', builtin: false },
   ]);
   stored = deletePreset(stored, 'custom-review');
   assert.deepEqual(
     listPresets(stored).map((p) => p.id),
-    ['plan', 'prototype', 'implement', 'implement-no-questions', 'orchestrate', 'custom-review-2'],
+    ['plan', 'prototype', 'implement', 'implement-no-questions', 'orchestrate', 'diagnose', 'triage', 'custom-review-2'],
   );
   // Built-ins cannot be renamed or deleted.
   assert.deepEqual(deletePreset(stored, 'plan'), stored);
@@ -385,4 +391,97 @@ test('archived sessions: parsed defensively, stored per project under archivedSe
   assert.deepEqual([...(await store.loadArchived('p1'))], ['s1']);
   await store.saveArchived('p1', new Set());
   assert.equal(data.has('archivedSessions:p1'), false);
+});
+
+// --- Matt Pocock's skills ---
+
+const ALL = [...MATT_SKILLS];
+const preset = (id: string) => BUILTIN_PRESETS.find((p) => p.id === id)!;
+
+test('every built-in names its skills and carries a mattText that invokes each of them', () => {
+  for (const p of BUILTIN_PRESETS) {
+    assert.ok(p.skills !== undefined && p.skills.length > 0, p.id);
+    assert.ok(p.mattText !== undefined && p.mattText.trim().length > 80, p.id);
+    for (const name of p.skills) {
+      assert.ok((MATT_SKILLS as readonly string[]).includes(name), `${p.id}: ${name} is detected`);
+      assert.ok(p.mattText.includes(`/${name}`), `${p.id} mattText names /${name}`);
+    }
+    // Board state still moves through the task-board CLI, which writes the same format as the skills.
+    assert.match(p.mattText, /task-board CLI/, p.id);
+    assert.match(p.mattText, /same format/, p.id);
+  }
+  assert.deepEqual(preset('plan').skills, ['grill-with-docs', 'to-spec', 'to-tickets']);
+  assert.deepEqual(preset('prototype').skills, ['prototype', 'handoff']);
+  assert.deepEqual(preset('implement').skills, ['implement', 'tdd', 'code-review']);
+  assert.deepEqual(preset('implement-no-questions').skills, ['implement', 'tdd', 'code-review']);
+  assert.deepEqual(preset('orchestrate').skills, ['to-tickets', 'implement-spec', 'tdd', 'code-review']);
+  assert.deepEqual(preset('diagnose').skills, ['diagnosing-bugs', 'implement', 'tdd', 'code-review']);
+  assert.deepEqual(preset('triage').skills, ['triage']);
+  assert.match(preset('prototype').mattText!, /prototype\/<name>/);
+  assert.match(preset('orchestrate').mattText!, /task graph/);
+});
+
+test('usesMattSkills: only when switched on and every skill the preset names is found', () => {
+  const implement = preset('implement');
+  assert.equal(usesMattSkills(implement, { use: true, found: ALL }), true);
+  assert.equal(usesMattSkills(implement, { use: false, found: ALL }), false);
+  assert.equal(usesMattSkills(implement, { use: true, found: ['implement', 'tdd'] }), false);
+  assert.equal(usesMattSkills(implement, NO_SKILLS), false);
+  assert.equal(usesMattSkills({ id: 'custom-x', name: 'X', text: 'x', builtin: false }, { use: true, found: ALL }), false);
+});
+
+test('listPresets: mattText when the skills are in use, text otherwise; a user edit wins over both', () => {
+  const pristine = parseStoredPresets(undefined);
+  const on = { use: true, found: ALL };
+  const byId = (list: ReturnType<typeof listPresets>, id: string) => list.find((p) => p.id === id)!.text;
+  assert.equal(byId(listPresets(pristine, on), 'implement'), preset('implement').mattText);
+  assert.equal(byId(listPresets(pristine, { use: false, found: ALL }), 'implement'), preset('implement').text);
+  assert.equal(byId(listPresets(pristine), 'implement'), preset('implement').text);
+  // Only the presets whose skills are all found switch.
+  const some = listPresets(pristine, { use: true, found: ['triage', 'implement'] });
+  assert.equal(byId(some, 'triage'), preset('triage').mattText);
+  assert.equal(byId(some, 'implement'), preset('implement').text);
+  // An edited built-in keeps the user's text whatever is installed.
+  const edited = setPresetText(pristine, 'implement', 'My way.');
+  assert.equal(byId(listPresets(edited, on), 'implement'), 'My way.');
+  assert.equal(byId(listPresets(edited), 'implement'), 'My way.');
+  // Typing the shipped skills text back is not an edit either.
+  assert.deepEqual(setPresetText(edited, 'implement', preset('implement').mattText!), { builtin: {}, custom: [] });
+});
+
+test('bug defaults to diagnose only when the toggle is on and Diagnose\'s skills are found', () => {
+  const diag = preset('diagnose').skills!;
+  assert.equal(resolveSettings({}, {}, ALL).presetByType.bug, 'diagnose');
+  assert.equal(resolveSettings({}, {}, [...diag]).presetByType.bug, 'diagnose');
+  assert.equal(resolveSettings({}, {}).presetByType.bug, 'implement');
+  assert.equal(resolveSettings({}, {}, diag.slice(1)).presetByType.bug, 'implement');
+  assert.equal(resolveSettings({ useMattSkills: false }, {}, ALL).presetByType.bug, 'implement');
+  // The toggle is global: a project layer cannot turn it off.
+  assert.equal(resolveSettings({}, { useMattSkills: false }, ALL).useMattSkills, true);
+  // A type the user set keeps the user's preset.
+  assert.equal(resolveSettings({ presetByType: { bug: 'plan' } }, {}, ALL).presetByType.bug, 'plan');
+  assert.equal(resolveSettings({}, { presetByType: { bug: 'implement' } }, ALL).presetByType.bug, 'implement');
+  // The other defaults do not move.
+  assert.deepEqual(resolveSettings({}, {}, ALL).presetByType, { enhancement: 'implement', bug: 'diagnose', research: 'plan' });
+  // And a bug card starts Diagnose.
+  assert.equal(resolveStart(resolveSettings({}, {}, ALL), task('bug'), {}).presetId, 'diagnose');
+});
+
+test('parseSettings keeps a boolean useMattSkills only', () => {
+  assert.deepEqual(parseSettings({ useMattSkills: false }), { useMattSkills: false });
+  assert.deepEqual(parseSettings({ useMattSkills: 'no' }), {});
+});
+
+test('the Settings lines: which skills were found, and what each built-in runs with', () => {
+  assert.equal(skillsFoundLine(['implement', 'tdd']), "Matt Pocock's skills found: implement, tdd. Missing: grill-with-docs, to-spec, to-tickets, prototype, handoff, implement-spec, code-review, diagnosing-bugs, triage.");
+  assert.equal(skillsFoundLine(ALL), `Matt Pocock's skills found: ${ALL.join(', ')}.`);
+  assert.match(skillsFoundLine([]), /^None of Matt Pocock's skills were found/);
+  assert.match(skillsFoundLine(null), /^Could not check/);
+  const on = { use: true, found: ALL };
+  assert.equal(presetSkillsNote(preset('implement'), on, false), "Runs with Matt Pocock's skills: /implement, /tdd, /code-review.");
+  assert.equal(presetSkillsNote(preset('implement'), { use: false, found: ALL }, false), "Plain instructions: Matt Pocock's skills are switched off (Global).");
+  assert.equal(presetSkillsNote(preset('implement'), { use: true, found: ['implement'] }, false), 'Plain instructions until /tdd, /code-review are installed.');
+  assert.equal(presetSkillsNote(preset('triage'), { use: true, found: [] }, false), 'Plain instructions until /triage is installed.');
+  assert.equal(presetSkillsNote(preset('implement'), on, true), 'Your text is used, whatever skills are installed.');
+  assert.equal(presetSkillsNote({ id: 'custom-x', name: 'X', text: '', builtin: false }, on, false), null);
 });
