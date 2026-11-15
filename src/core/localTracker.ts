@@ -3,7 +3,7 @@
 import type { Dirent } from 'node:fs';
 import { mkdir, readdir, readFile, rmdir, stat, unlink, writeFile } from 'node:fs/promises';
 import { join, posix } from 'node:path';
-import { blockersValue, issueFileName, parseIssue, parseSpec, patchLine, renderIssue, renumberIssue, setTitle, withDescription } from './localFormat.ts';
+import { blockersValue, issueFileName, parseIssue, parseSpec, patchLine, renderIssue, renumberIssue, setTitle, specFromIssue, withDescription } from './localFormat.ts';
 import type { NewTask, Task, TaskEdit, TaskState, Tracker } from './types.ts';
 import { TrackerError } from './types.ts';
 
@@ -195,27 +195,33 @@ export const createLocalTracker = (root: string): Tracker => {
 
   const slugOf = (title: string): string => issueFileName(0, title).slice(3, -3);
 
-  const createParent = async (input: NewTask): Promise<Task> => {
-    const slug = slugOf(input.title);
+  /** Makes a new, empty feature folder named after `title` (`-2`, `-3`... when taken); returns its name. */
+  const newFeature = async (title: string): Promise<string> => {
+    const slug = slugOf(title);
     await mkdir(join(root, SCRATCH), { recursive: true });
     for (let i = 1; ; i++) {
       const feature = i === 1 ? slug : `${slug}-${i}`;
       try {
         await mkdir(featureDir(feature));
+        return feature;
       } catch (e) {
         if ((e as { code?: unknown }).code === 'EEXIST') continue;
         throw e;
       }
-      const parts = [`# ${input.title.trim()}`];
-      const fields: string[] = [];
-      if (input.type !== undefined && input.type.trim() !== '') fields.push(`**Type:** ${input.type.trim()}`);
-      if (input.state !== undefined) fields.push(`**Status:** ${statusWord(input.state)}`);
-      if (fields.length > 0) parts.push(fields.join('\n'));
-      const body = (input.body ?? '').replace(/\r\n/g, '\n').trim();
-      if (body !== '') parts.push(body);
-      await writeFile(abs(specId(feature)), parts.join('\n\n') + '\n', { flag: 'wx' });
-      return get(specId(feature));
     }
+  };
+
+  const createParent = async (input: NewTask): Promise<Task> => {
+    const feature = await newFeature(input.title);
+    const parts = [`# ${input.title.trim()}`];
+    const fields: string[] = [];
+    if (input.type !== undefined && input.type.trim() !== '') fields.push(`**Type:** ${input.type.trim()}`);
+    if (input.state !== undefined) fields.push(`**Status:** ${statusWord(input.state)}`);
+    if (fields.length > 0) parts.push(fields.join('\n'));
+    const body = (input.body ?? '').replace(/\r\n/g, '\n').trim();
+    if (body !== '') parts.push(body);
+    await writeFile(abs(specId(feature)), parts.join('\n\n') + '\n', { flag: 'wx' });
+    return get(specId(feature));
   };
 
   const createTicket = async (input: NewTask, parentId: string): Promise<Task> => {
@@ -386,6 +392,26 @@ export const createLocalTracker = (root: string): Tracker => {
     return [...deleted, task.id];
   };
 
+  /**
+   * Moves a ticket out of its feature into a new feature of its own (`.scratch/<slug>/spec.md`).
+   * Its blocker numbers pointed at its old feature's tickets, so they are dropped, and a feature
+   * cannot be claimed, so `claimed` becomes ready-for-agent.
+   */
+  const removeParent = async (id: string): Promise<Task> => {
+    const ref = parseId(id);
+    if (ref.kind === 'parent') throw new TrackerError('INVALID', `${id} is a feature; it has no parent to remove`);
+    const task = await get(id);
+    let text = specFromIssue(task.body, task.title);
+    if (task.claimed) text = patchLine(text, 'Status', 'ready-for-agent');
+    const feature = await newFeature(task.title);
+    await writeFile(abs(specId(feature)), text, { flag: 'wx' });
+    await unlink(abs(task.id)).catch((e: unknown) => {
+      if (!isNotFound(e)) throw e;
+    });
+    await dropBlocker(ref.feature, fileNumber(ref.file!));
+    return get(specId(feature));
+  };
+
   return {
     remove,
 
@@ -418,6 +444,8 @@ export const createLocalTracker = (root: string): Tracker => {
     edit,
 
     setParent,
+
+    removeParent,
 
     setType(id, type) {
       return patch(id, 'Type', type.trim());

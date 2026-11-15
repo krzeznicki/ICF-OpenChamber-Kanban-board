@@ -16,7 +16,7 @@ import type { Board } from './ui/board.ts';
 import { askChoice } from './ui/confirm.ts';
 import { openDetail, type DetailHandle, type DetailModel, type SessionView, type SummaryModel } from './ui/detail.ts';
 import { attachDrag } from './ui/dnd.ts';
-import { canLinkUnder, followingSetParent, linkChoices, linkConfirm } from './link.ts';
+import { canLinkUnder, followingMove, linkChoices, linkConfirm, unlinkConfirm } from './link.ts';
 import { deleteConfirm } from './taskDelete.ts';
 import { editChanges, editableText, type EditText } from './taskEdit.ts';
 
@@ -51,6 +51,13 @@ export type EditorDeps = {
     check: (sessionId: string) => Promise<SessionLookup>;
     /** Only ever called with an id that is `open` in a host snapshot. */
     open: (sessionId: string) => void;
+  };
+  /** The manual card order (order.ts), kept in the panel's storage. */
+  order: {
+    /** A card dropped in its own column before `before` (null: last). */
+    reorder: (taskId: string, column: Column, before: string | null) => void;
+    /** A task got a new id (a local link moved it): it keeps its place. */
+    rename: (from: string, to: string) => void;
   };
   /** "Archive done" (archive.ts): whether a task is archived, and the modal's "Unarchive". */
   archive: { has: (task: Task) => boolean; unarchive: (taskId: string) => void };
@@ -262,25 +269,44 @@ export const createEditor = (deps: EditorDeps) => {
 
   /**
    * The api's setParent as every link of the panel uses it: a task that comes back with a new id
-   * (local: its file moved) is followed by the open modal, and its stored start options move to
-   * that id (the service re-keys its session links and queue entry).
+   * (local: its file moved) is followed by the open modal, its place in the manual order and its
+   * stored start options move to that id (the service re-keys its session links and queue entry).
    */
-  const setParentOf = (api: Api) =>
-    followingSetParent(
-      api.setParent,
+  const following = <A extends unknown[]>(op: (id: string, ...rest: A) => Promise<Task>) =>
+    followingMove(
+      op,
       async (from, to) => {
         follow(from, to);
+        deps.order.rename(from, to);
         const ctx = deps.start.context();
         if (ctx !== null) await deps.start.move(ctx.projectId, from, to);
       },
       (from, to, e) => fail(`${from} is now ${to}, but its start options could not follow: ${errorText(e)}`),
     );
+  const setParentOf = (api: Api) => following(api.setParent);
 
   /**
    * Links `childId` under `parentId`: the modal's Parent picker and "Link existing task", and a
    * card dropped onto a card. Resolves to null, or the service's error for the caller to show.
    */
-  const linkTask = async (childId: string, parentId: string): Promise<string | null> => {
+  const linkTask = (childId: string, parentId: string): Promise<string | null> =>
+    relink(childId, async (api) => {
+      const moved = await setParentOf(api)(childId, parentId);
+      info(moved.id !== childId ? `Linked ${childId} under ${parentId}; it is now ${moved.id}` : `Linked ${childId} under ${parentId}`);
+    });
+
+  /**
+   * Unlinks `childId` from its parent: "No parent" in the Parent picker, and "Unlink" in a parent's
+   * sub-task list (after a confirm). Resolves to null, or the service's error for the caller to show.
+   */
+  const unlinkTask = (childId: string): Promise<string | null> =>
+    relink(childId, async (api) => {
+      const moved = await following(api.removeParent)(childId);
+      info(moved.id !== childId ? `Unlinked ${childId} from its parent; it is now ${moved.id}` : `Unlinked ${childId} from its parent`);
+    });
+
+  /** Marks `childId` busy while `action` changes its parent, then reloads; an error comes back as text. */
+  const relink = async (childId: string, action: (api: Api) => Promise<void>): Promise<string | null> => {
     const api = deps.api();
     if (api === null) return 'No project is open.';
     if (moving.has(childId)) return null;
@@ -288,8 +314,7 @@ export const createEditor = (deps: EditorDeps) => {
     deps.redraw();
     refreshDetail();
     try {
-      const moved = await setParentOf(api)(childId, parentId);
-      info(moved.id !== childId ? `Linked ${childId} under ${parentId}; it is now ${moved.id}` : `Linked ${childId} under ${parentId}`);
+      await action(api);
       return null;
     } catch (e) {
       return errorText(e);
@@ -448,6 +473,15 @@ export const createEditor = (deps: EditorDeps) => {
       onEdit: (from, draft) => editTask(id, from, draft),
       onDelete: () => void deleteTask(id),
       onLinkChild: (childId) => linkTask(childId, id),
+      onRemoveParent: () => unlinkTask(id),
+      onUnlinkChild: async (childId) => {
+        const child = find(childId);
+        const parent = find(id);
+        if (child === null || parent === null) return null;
+        const { title, body } = unlinkConfirm(deps.tracker(), child, parent.title);
+        if ((await askChoice(title, body, [{ id: 'unlink', label: 'Unlink', variant: 'destructive' }])) !== 'unlink') return null;
+        return unlinkTask(childId);
+      },
       onSections: deps.sections.save,
       onUnarchive: () => {
         deps.archive.unarchive(id);
@@ -594,6 +628,9 @@ export const createEditor = (deps: EditorDeps) => {
       return child !== null && parent !== null && canLinkUnder(deps.tracker(), child, parent, deps.tasks());
     },
     onLink: (id, parentId) => void link(id, parentId),
+    onReorder: (id, column, before) => {
+      if (!moving.has(id)) deps.order.reorder(id, column, before);
+    },
     onOpen: showDetail,
   });
 

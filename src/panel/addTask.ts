@@ -93,6 +93,17 @@ export const canHaveSubtasks = (tracker: TrackerKind, parentId: string): boolean
 export const canAddSubtask = (task: Task, tracker: TrackerKind): boolean =>
   task.state !== 'done' && (tracker === 'github' || task.kind === 'parent');
 
+export type SubtaskMode = 'new' | 'existing';
+
+/**
+ * What the task modal's "Add sub-task" offers: typing a new one (`canAdd`, canAddSubtask) and/or
+ * picking one of the `existing` tasks that may be linked (link.ts childCandidates). Empty: no button.
+ */
+export const subtaskModes = (canAdd: boolean, existing: number): SubtaskMode[] => [
+  ...(canAdd ? (['new'] as const) : []),
+  ...(existing > 0 ? (['existing'] as const) : []),
+];
+
 export const subtaskTitles = (rows: readonly string[]): string[] => rows.map((r) => r.trim()).filter((r) => r !== '');
 
 /** The sub-task titles to create under the new task: none when it may not have any (rows hidden, not cleared). */

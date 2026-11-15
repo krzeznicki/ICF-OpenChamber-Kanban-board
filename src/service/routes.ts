@@ -7,7 +7,7 @@ import { readSessionEventRequest, SESSION_EVENTS_PATH, type GuestSessionEventReq
 import { readConfig, readLabels, writeConfig, type ProjectConfig } from '../core/config.ts';
 import { createGithubTracker } from '../core/githubTracker.ts';
 import { openTracker } from '../core/openTracker.ts';
-import type { Exec, NewTask, TaskEdit, TaskState, Tracker } from '../core/types.ts';
+import type { Exec, NewTask, Task, TaskEdit, TaskState, Tracker } from '../core/types.ts';
 import { TrackerError } from '../core/types.ts';
 import type { QueueEntry } from '../core/queue.ts';
 import { createAgentList, createModelList, type AgentList, type ModelList } from './models.ts';
@@ -258,6 +258,24 @@ const skillDetector = (deps: Deps): SkillDetector => deps.skills ?? (defaultSkil
 
 const tracker = (dir: string, deps: Deps): Promise<Tracker> => openTracker(dir, deps.exec);
 
+/**
+ * A task that got a new id (local: its file moved) takes its session links and queue entry along.
+ * The move is done by then, so a failing re-key is logged and the caller still answers the moved task.
+ */
+const followMove = async (id: string, task: Task, dir: string, deps: Deps): Promise<void> => {
+  if (task.id === id) return;
+  const log = deps.log ?? ((m: string) => console.error(m));
+  const rekey = async (what: string, action: () => Promise<unknown>): Promise<void> => {
+    try {
+      await action();
+    } catch (e) {
+      log(`icf-kanban: ${id} is now ${task.id}, but its ${what} could not follow: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
+  await rekey('session links', () => renameLinks(linksFile(deps), dir, id, task.id));
+  await rekey('queue entry', () => renameInQueue(queueFile(deps), dir, id, task.id));
+};
+
 /** The config already in `dir`, or null when it has none (an unsupported one throws). */
 const existingConfig = async (dir: string): Promise<ProjectConfig | null> => {
   try {
@@ -365,25 +383,20 @@ const POST: Record<string, Route> = {
   },
   /**
    * Links an existing task under an existing parent. The answer's task can have a new id (local:
-   * the file moved); the task's session links and queue entry are re-keyed to it first. The move is
-   * done by then, so a failing re-key is logged and the answer is still the moved task.
+   * the file moved); the task's session links and queue entry are re-keyed to it first.
    */
   '/tasks/parent': async (body, dir, deps) => {
     const id = str(body, 'id');
     const parentId = str(body, 'parentId');
     const task = await (await tracker(dir, deps)).setParent(id, parentId);
-    if (task.id !== id) {
-      const log = deps.log ?? ((m: string) => console.error(m));
-      const rekey = async (what: string, action: () => Promise<unknown>): Promise<void> => {
-        try {
-          await action();
-        } catch (e) {
-          log(`icf-kanban: ${id} is now ${task.id}, but its ${what} could not follow: ${e instanceof Error ? e.message : String(e)}`);
-        }
-      };
-      await rekey('session links', () => renameLinks(linksFile(deps), dir, id, task.id));
-      await rekey('queue entry', () => renameInQueue(queueFile(deps), dir, id, task.id));
-    }
+    await followMove(id, task, dir, deps);
+    return { task };
+  },
+  /** Unlinks a sub-task from its parent; a changed id (local: it became a feature) is re-keyed as in /tasks/parent. */
+  '/tasks/unparent': async (body, dir, deps) => {
+    const id = str(body, 'id');
+    const task = await (await tracker(dir, deps)).removeParent(id);
+    await followMove(id, task, dir, deps);
     return { task };
   },
   '/tasks/close': async (body, dir, deps) => {

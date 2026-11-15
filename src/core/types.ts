@@ -72,6 +72,11 @@ export interface Tracker {
    * cannot be a parent is INVALID.
    */
   setParent(id: string, parentId: string): Promise<Task>;
+  /**
+   * Unlinks a sub-task from its parent; it becomes a top-level task. Like setParent the id can
+   * change (local: the ticket moves out into a feature of its own). A task without a parent is INVALID.
+   */
+  removeParent(id: string): Promise<Task>;
   /** returns every task it closed */
   close(id: string, opts: { withChildren: boolean }): Promise<Task[]>;
   /**

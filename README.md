@@ -6,7 +6,7 @@ A Kanban board for [OpenChamber](https://github.com/openchamber/openchamber) ove
 - Drag a card to **In Progress** and an agent session starts with the card's preset, model, thinking level, agent and location. No dialog unless you want one.
 - Parents (features) start one orchestrator session that works through their sub-tasks.
 - A limit on agents running at once, with a queue that keeps draining while the board is closed.
-- A short personal summary at the top of each card, in your language (default Polish).
+- A short personal summary at the top of each card, in your language (default English).
 - Agent skills and a `task-board` CLI, so agents create, take and close tasks in the same format.
 
 Requires OpenChamber 2.7.1 or later. Licence: MIT.
@@ -87,6 +87,7 @@ Types: `bug` and `enhancement` (a feature), plus your own (`chore` and `research
 - To close a task, drag it to Done or use **Move to → Done** under its modal's header (the × at the top right only closes the modal, as does Escape).
 - A drop on Backlog or Ready changes one line of the task file (local) or swaps the state label (GitHub). The rest of the file is left as it is.
 - Dragging a card out of In Progress or Review to Backlog or Ready detaches it from its session: the card follows its state again, and the session keeps running (open it from the session list). Starting the card again later links it to the new session.
+- Drag a card up or down its own column to reorder it: a line shows where it goes. The order is kept in the board's own storage per project (nothing changes in the repository or on GitHub); cards never reordered keep the tracker's order, below the reordered ones. Sub-tasks stay right under their parent. In its own column, only the middle of a card makes the dragged card its sub-task; the top and bottom edges reorder.
 
 ### Archiving done tasks
 
@@ -174,7 +175,7 @@ A preset text (built-in or your own) may use `{cli}` (the `task-board` command w
 
 Edits and your own sets are kept in the extension's storage under `presetSets`. 0.2's `presets` value is moved there once: its edits and own presets go to every built-in set (Matt Pocock's skills, Superpowers and Plain), since in 0.2 they applied whichever text was in use. So whichever set a project uses — the default still follows what is installed; no set is chosen for you — a session runs the text you wrote and your own presets are there.
 
-Which preset a card gets: the card's own choice, else Break down and orchestrate for a parent, else the preset for its type (`enhancement` → Implement, `bug` → Diagnose, `research` → Plan), else the default preset; a preset the project's set does not have becomes Implement. A preset you set for `bug` yourself always wins.
+Which preset a card gets: the card's own choice, else Break down and orchestrate for a parent, else the preset for its type (`enhancement` → Implement, `bug` → Diagnose, `research` → Plan), else the default preset; a preset the project's set does not have becomes Implement. A bug always gets the preset for `bug`, even as a parent (in the local tracker every top-level task is a parent).
 
 ## Settings
 
@@ -206,7 +207,7 @@ The first entry of each, **Default (…)**, means "not set here" and names what 
 | Hide sub-tasks | off |
 | Types | `enhancement`, `bug`, `chore`, `research` |
 | Summarise automatically | on |
-| Summary language | Polish |
+| Summary language | English |
 | Summary prompt | a built-in prompt (2 to 4 plain sentences); `{language}`, `{title}` and `{body}` are filled in |
 | Suggest type and state for new tasks (Global only) | on |
 

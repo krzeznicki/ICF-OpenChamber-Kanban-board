@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Task } from '../src/core/types.ts';
-import { canLinkUnder, canLinkUnderNew, childCandidates, followingSetParent, linkChoices, linkConfirm, newChildCandidates, parentTargets } from '../src/panel/link.ts';
+import { canLinkUnder, canLinkUnderNew, childCandidates, followingMove, followingSetParent, linkChoices, linkConfirm, newChildCandidates, parentTargets, unlinkConfirm } from '../src/panel/link.ts';
 
 const task = (id: string, over: Partial<Task> = {}): Task => ({
   id,
@@ -188,4 +188,28 @@ test('followingSetParent: a failing follow-up is reported, the link still resolv
   );
   await assert.rejects(bad('a', 'P'), /INVALID/);
   assert.equal(followed, false);
+});
+
+test('followingMove follows any tracker call that may change the id, e.g. removeParent', async () => {
+  const moved: string[][] = [];
+  const removeParent = followingMove(
+    async (id: string) => task(id === 'old' ? 'new' : id),
+    async (from, to) => void moved.push([from, to]),
+    () => assert.fail('no error expected'),
+  );
+  assert.equal((await removeParent('old')).id, 'new');
+  assert.equal((await removeParent('#4')).id, '#4');
+  assert.deepEqual(moved, [['old', 'new']]);
+});
+
+test('unlinkConfirm names both tasks; locally it says the task becomes a feature with a new id and loses its blockers', () => {
+  const local = unlinkConfirm('local', task('.scratch/f/issues/02-fix-x.md', { title: 'Fix X' }), 'Epic');
+  assert.equal(local.title, 'Remove “Fix X” from “Epic”?');
+  assert.match(local.body, /own feature/);
+  assert.match(local.body, /new id/);
+  assert.match(local.body, /blockers/);
+  const gh = unlinkConfirm('github', task('#2', { title: 'Fix X' }), 'Epic');
+  assert.equal(gh.title, 'Remove “Fix X” from “Epic”?');
+  assert.doesNotMatch(gh.body, /new id|blockers/);
+  assert.match(gh.body, /#2/);
 });

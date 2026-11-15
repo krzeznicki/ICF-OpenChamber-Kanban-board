@@ -324,3 +324,18 @@ test('remove by a non-admin is FAILED with a clear message; a missing issue is N
   await rejectsWith(tracker.remove('#4', { withChildren: false }), 'FAILED', /Only repository admins can delete GitHub issues.*close it instead/);
   await rejectsWith(tracker.remove('#99', { withChildren: false }), 'NOT_FOUND');
 });
+
+test('removeParent unlinks the native parent with gh issue edit --remove-parent; the number stays', async () => {
+  const { tracker, gh } = setup();
+  const alone = await tracker.removeParent('#2');
+  assert.equal(alone.id, '#2');
+  assert.equal(alone.parentId, null);
+  assert.deepEqual(gh.commands(), ['gh issue edit 2 --remove-parent']);
+});
+
+test('removeParent refuses an issue without a parent; a missing issue is NOT_FOUND', async () => {
+  const { tracker, gh } = setup();
+  await rejectsWith(tracker.removeParent('#1'), 'INVALID', /no parent/);
+  await rejectsWith(tracker.removeParent('#99'), 'NOT_FOUND');
+  assert.deepEqual(gh.commands(), []);
+});
