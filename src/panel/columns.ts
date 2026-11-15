@@ -32,12 +32,23 @@ export const columnFor = (task: Task, session: SessionInfo | null, queued: boole
   return task.state === 'ready-for-agent' ? 'ready' : 'backlog';
 };
 
-/** The newest non-archived session that carries this task as one of its items. */
-export const sessionForTask = (taskId: string, sessions: GuestSessionRecord[]): SessionInfo | null => {
+/** A session the service started for a task (path B): such a session carries no items. */
+export type SessionLink = { taskId: string; sessionId: string };
+
+/**
+ * The newest non-archived session that carries this task as one of its items, or that the
+ * service's links name for it.
+ */
+export const sessionForTask = (
+  taskId: string,
+  sessions: GuestSessionRecord[],
+  links: readonly SessionLink[] = [],
+): SessionInfo | null => {
+  const linked = new Set(links.filter((l) => l.taskId === taskId).map((l) => l.sessionId));
   let best: GuestSessionRecord | null = null;
   for (const s of sessions) {
     if (s.archivedAt !== null) continue;
-    if (!s.items.some((item) => item.id === taskId)) continue;
+    if (!linked.has(s.id) && !s.items.some((item) => item.id === taskId)) continue;
     if (best === null || s.createdAt > best.createdAt || (s.createdAt === best.createdAt && s.updatedAt > best.updatedAt)) {
       best = s;
     }
@@ -54,6 +65,8 @@ export type CardModel = {
   progress: { done: number; total: number } | null;
   /** Drawn indented right under its parent in the same column. */
   child: boolean;
+  /** Its start is in flight, or its new session has not shown up yet. */
+  starting: boolean;
 };
 
 export type BoardModel = Record<Column, CardModel[]>;
@@ -67,6 +80,7 @@ export const groupTasks = (
   sessions: GuestSessionRecord[],
   queued: ReadonlySet<string>,
   hideSubtasks: boolean,
+  links: readonly SessionLink[] = [],
 ): BoardModel => {
   const byId = new Map(tasks.map((t) => [t.id, t]));
   const children = new Map<string, Task[]>();
@@ -80,7 +94,7 @@ export const groupTasks = (
   const cards = new Map<string, { column: Column; card: CardModel }>();
   for (const task of tasks) {
     if (hideSubtasks && task.parentId !== null) continue;
-    const session = sessionForTask(task.id, sessions);
+    const session = sessionForTask(task.id, sessions, links);
     const kids = children.get(task.id) ?? [];
     cards.set(task.id, {
       column: columnFor(task, session, queued.has(task.id)),
@@ -93,6 +107,7 @@ export const groupTasks = (
         }),
         progress: kids.length === 0 ? null : { done: kids.filter((k) => k.state === 'done').length, total: kids.length },
         child: false,
+        starting: queued.has(task.id) && session === null,
       },
     });
   }

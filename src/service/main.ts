@@ -5,8 +5,9 @@
 import { timingSafeEqual } from 'node:crypto';
 import { createServer } from 'node:http';
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { createServiceHost } from '@openchamber/sdk';
 import { realExec } from '../core/exec.ts';
-import { handle } from './routes.ts';
+import { handle, type Deps } from './routes.ts';
 
 const MAX_BODY = 1024 * 1024;
 
@@ -17,6 +18,9 @@ if (token === '' || !Number.isInteger(port) || port <= 0) {
   process.exit(1);
 }
 const expected = Buffer.from(`Bearer ${token}`);
+// The way back into OpenChamber (contributes.sessionControl): path B session starts.
+const host = createServiceHost({ env: process.env });
+const deps: Deps = { exec: realExec, sessions: { start: (input) => host.sessions.start(input) } };
 
 const authorized = (req: IncomingMessage): boolean => {
   const got = Buffer.from(req.headers.authorization ?? '');
@@ -56,7 +60,7 @@ const server = createServer((req, res) => {
       else send(res, 400, { error: { code: 'INVALID', message: 'Request body is not valid JSON' } });
       return;
     }
-    const reply = await handle(req.method ?? 'GET', path, body, { exec: realExec });
+    const reply = await handle(req.method ?? 'GET', path, body, deps);
     send(res, reply.status, reply.json);
   })().catch((e: unknown) => {
     if (!res.headersSent) send(res, 500, { error: { code: 'FAILED', message: e instanceof Error ? e.message : String(e) } });

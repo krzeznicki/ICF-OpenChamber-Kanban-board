@@ -2,6 +2,199 @@
 import { timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
 
+// node_modules/@openchamber/sdk/dist/scrollbar-style.js
+var GUEST_SCROLLING_ATTRIBUTE = "data-oc-scrolling";
+var GUEST_SCROLLBAR_CSS = `
+:root {
+  /* Quiet at rest like the app's own thumbs; hover gives a clear grab target. */
+  --oc-scrollbar-thumb: color-mix(in srgb, var(--oc-muted, currentColor) 18%, transparent);
+  --oc-scrollbar-thumb-hover: color-mix(in srgb, var(--oc-muted, currentColor) 36%, transparent);
+  scrollbar-gutter: stable;
+}
+* {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+:hover, [${GUEST_SCROLLING_ATTRIBUTE}] {
+  scrollbar-color: var(--oc-scrollbar-thumb) transparent;
+}
+/* Chromium's standard scrollbar properties otherwise override its pseudo-elements. */
+@supports selector(::-webkit-scrollbar) {
+  *, :hover, [${GUEST_SCROLLING_ATTRIBUTE}] { scrollbar-width: auto; scrollbar-color: auto; }
+  ::-webkit-scrollbar { width: 6px; height: 6px; background: transparent; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb {
+    background: transparent;
+    border-radius: 999px;
+    min-width: 24px;
+    min-height: 24px;
+  }
+  :hover::-webkit-scrollbar-thumb, [${GUEST_SCROLLING_ATTRIBUTE}]::-webkit-scrollbar-thumb { background: var(--oc-scrollbar-thumb); }
+  ::-webkit-scrollbar-thumb:hover { background: var(--oc-scrollbar-thumb-hover); }
+  ::-webkit-scrollbar-corner { background: transparent; }
+  ::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
+}
+@media (forced-colors: active) {
+  *, :hover, [${GUEST_SCROLLING_ATTRIBUTE}] { scrollbar-color: auto; }
+  ::-webkit-scrollbar-thumb, ::-webkit-scrollbar-thumb:hover { background: CanvasText; }
+}
+`;
+function installGuestScrollbarActivity(doc) {
+  const root = doc.documentElement;
+  if (root.hasAttribute("data-oc-scrollbar-activity"))
+    return;
+  root.setAttribute("data-oc-scrollbar-activity", "");
+  const timers = /* @__PURE__ */ new WeakMap();
+  doc.addEventListener("scroll", (event) => {
+    const target = event.target === doc ? root : event.target;
+    if (!(target instanceof Element))
+      return;
+    if (!target.hasAttribute("data-oc-scrolling"))
+      target.setAttribute("data-oc-scrolling", "");
+    const pending = timers.get(target);
+    if (pending !== void 0)
+      clearTimeout(pending);
+    timers.set(target, setTimeout(() => {
+      timers.delete(target);
+      target.removeAttribute("data-oc-scrolling");
+    }, 1e3));
+  }, { capture: true, passive: true });
+}
+var GUEST_SCROLLBAR_SCRIPT = `(${installGuestScrollbarActivity.toString()})(document);`;
+
+// node_modules/@openchamber/sdk/dist/manifest.js
+var GUEST_PROVIDER_LOGO_BYTES_MAX = 1024 * 1024;
+var TRACKER_URL_TOKENS = ["{id}", "{segment}", "{segments+}"];
+var TRACKER_URL_TOKEN_SET = new Set(TRACKER_URL_TOKENS);
+
+// node_modules/@openchamber/sdk/dist/session-events.js
+var GUEST_SESSION_EVENT_TYPES = [
+  "turn-finished",
+  "turn-failed",
+  "permission-asked",
+  "question-asked",
+  "turn-started",
+  "session-created",
+  "session-archived",
+  "session-deleted"
+];
+var SESSION_EVENTS_IDLE_MS = 10 * 6e4;
+var EVENT_TYPES = new Set(GUEST_SESSION_EVENT_TYPES);
+
+// node_modules/@openchamber/sdk/dist/service-host.js
+var SERVICE_HOST_PATH = "/service/call";
+var OPENCHAMBER_HOST_CALLBACK_URL_ENV = "OPENCHAMBER_HOST_CALLBACK_URL";
+var SERVICE_HOST_TIMEOUT_MS = 3e4;
+var SERVICE_SCHEDULE_IDLE_MS = 10 * 6e4;
+var MENTIONS_IDLE_MS = 10 * 6e4;
+var ServiceHostError = class extends Error {
+  code;
+  status;
+  constructor(message2, code, status) {
+    super(message2);
+    this.name = "ServiceHostError";
+    this.code = code;
+    this.status = status;
+  }
+};
+var createServiceHost = ({ env }) => {
+  const call = async (method, input) => {
+    const base = env[OPENCHAMBER_HOST_CALLBACK_URL_ENV];
+    const token2 = env.OPENCHAMBER_SERVICE_TOKEN;
+    if (!base || !token2)
+      throw new ServiceHostError("This service was not started by OpenChamber.", "HOST_UNAVAILABLE", 0);
+    let response;
+    try {
+      response = await fetch(`${base.replace(/\/+$/, "")}${SERVICE_HOST_PATH}`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token2}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ method, input }),
+        signal: AbortSignal.timeout(SERVICE_HOST_TIMEOUT_MS)
+      });
+    } catch {
+      throw new ServiceHostError("OpenChamber did not answer.", "HOST_UNAVAILABLE", 0);
+    }
+    const body = await response.json().catch(() => null);
+    if (response.ok && body?.result !== void 0)
+      return body.result;
+    throw new ServiceHostError(body?.error?.message ?? `OpenChamber answered HTTP ${response.status}.`, body?.error?.code ?? "HOST_UNAVAILABLE", response.status);
+  };
+  return {
+    sessions: {
+      start: (input) => call("sessions.start", input),
+      send: (sessionId, prompt) => call("sessions.send", { sessionId, prompt }),
+      retry: (sessionId) => call("sessions.retry", { sessionId }),
+      status: (sessionId) => call("sessions.status", { sessionId }),
+      lastReply: (sessionId) => call("sessions.lastReply", { sessionId }),
+      stop: (sessionId) => call("sessions.stop", { sessionId }),
+      answerPermission: (sessionId, requestId, answer) => call("sessions.answerPermission", { sessionId, requestId, ...answer }),
+      answerForm: (sessionId, formId, values, message2) => call("sessions.answerForm", { sessionId, formId, values, ...message2 === void 0 ? {} : { message: message2 } })
+    },
+    setInstructions: (directory, text) => call("instructions.set", { directory, text }),
+    emit: (topic, data) => call("panels.emit", { topic, data }),
+    readSettings: () => call("settings.read", {}).then(({ settings }) => settings),
+    needsConfiguration: (message2) => call("status.set", { needsConfiguration: message2 }),
+    setMark: (target, mark) => call("marks.set", { target, mark })
+  };
+};
+
+// node_modules/@openchamber/sdk/dist/contract.js
+var GUEST_FILE_STAT_KINDS = ["file", "directory", "other", "missing"];
+var GUEST_GENERATE_LATE_KEEP_MS = 60 * 6e4;
+var HOST_REQUEST_ERROR_CODES = [
+  "HOST_UNAVAILABLE",
+  "HOST_TIMEOUT",
+  "HOST_REJECTED",
+  "DISCONNECTED",
+  "DISABLED",
+  "BAD_PATH",
+  "NO_INTEGRATION",
+  "NO_SERVICE",
+  "SERVICE_FAILED",
+  "REQUEST_FAILED",
+  "RESPONSE_TOO_LARGE",
+  "NO_SESSION",
+  "SESSION_BUSY",
+  "NOT_GRANTED",
+  "NO_DIRECTORY",
+  "NOT_FOUND",
+  "FILE_TOO_LARGE",
+  "DENIED",
+  "NO_MODEL",
+  "MODEL_FAILED",
+  "UNSUPPORTED"
+];
+var SERVICE_STATUS_VALUES = ["stopped", "starting", "ready", "failed"];
+var hostRequestErrorCodeSet = new Set(HOST_REQUEST_ERROR_CODES);
+var serviceStatusSet = new Set(SERVICE_STATUS_VALUES);
+var fileStatKindSet = new Set(GUEST_FILE_STAT_KINDS);
+
+// node_modules/@openchamber/sdk/dist/service-providers.js
+var BROWSER_CONTROL_ACTIONS = [
+  "browser.open",
+  "browser.snapshot",
+  "browser.click",
+  "browser.type",
+  "browser.select",
+  "browser.scroll",
+  "browser.back",
+  "browser.forward",
+  "browser.inspect",
+  "browser.capture",
+  "browser.resize",
+  "browser.close"
+];
+var BROWSER_PROVIDER_IDLE_MS = 10 * 6e4;
+var CONTROL_ACTIONS = new Set(BROWSER_CONTROL_ACTIONS);
+var SOURCE_CONTROL_PROVIDER_IDLE_MS = 10 * 6e4;
+var NOTIFICATIONS_PROVIDER_IDLE_MS = 10 * 6e4;
+var TRACKER_PROVIDER_IDLE_MS = 10 * 6e4;
+var QUOTA_PROVIDER_IDLE_MS = 10 * 6e4;
+
+// node_modules/@openchamber/sdk/dist/service-surface.js
+var SURFACE_CONTROLLERS = ["none", "agent", "user"];
+var CONTROLLERS = new Set(SURFACE_CONTROLLERS);
+
 // src/core/exec.ts
 import { execFile } from "node:child_process";
 var MAX_BUFFER = 64 * 1024 * 1024;
@@ -47,8 +240,8 @@ var TEMPLATES = {
 var TrackerError = class extends Error {
   // Declared explicitly: Node's type stripping does not support constructor parameter properties.
   code;
-  constructor(code, message) {
-    super(message);
+  constructor(code, message2) {
+    super(message2);
     this.name = "TrackerError";
     this.code = code;
   }
@@ -808,15 +1001,106 @@ var openTracker = async (root, exec) => {
   return createGithubTracker(root, exec, config.labels);
 };
 
+// src/service/sessions.ts
+import { randomBytes } from "node:crypto";
+import { mkdir as mkdir3, readFile as readFile3, rename, writeFile as writeFile3 } from "node:fs/promises";
+import { homedir } from "node:os";
+import { basename, dirname, join as join3 } from "node:path";
+var LINKS_PER_PROJECT = 500;
+var defaultLinksFile = () => join3(homedir(), ".icf-kanban", "links.json");
+var isLink = (v) => {
+  const l = v;
+  return typeof l === "object" && l !== null && typeof l.taskId === "string" && typeof l.sessionId === "string" && typeof l.directory === "string" && typeof l.createdAt === "number";
+};
+var readLinksFile = async (file) => {
+  let raw;
+  try {
+    raw = JSON.parse(await readFile3(file, "utf8"));
+  } catch {
+    return { version: 1, projects: {} };
+  }
+  const projects = {};
+  const src = raw?.projects;
+  if (typeof src === "object" && src !== null && !Array.isArray(src)) {
+    for (const [dir, list] of Object.entries(src)) if (Array.isArray(list)) projects[dir] = list.filter(isLink);
+  }
+  return { version: 1, projects };
+};
+var listLinks = async (file, directory) => (await readLinksFile(file)).projects[directory] ?? [];
+var queue = Promise.resolve();
+var addLink = (file, project, link) => {
+  const run = queue.then(async () => {
+    const data = await readLinksFile(file);
+    const list = [...data.projects[project] ?? [], link];
+    data.projects[project] = list.slice(-LINKS_PER_PROJECT);
+    await mkdir3(dirname(file), { recursive: true });
+    const tmp = `${file}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
+    await writeFile3(tmp, `${JSON.stringify(data, null, 2)}
+`, "utf8");
+    await rename(tmp, file);
+  });
+  queue = run.catch(() => {
+  });
+  return run;
+};
+var worktreeSlug = (taskId, title, suffix = randomBytes(3).toString("hex")) => {
+  const base = (s) => s.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40).replace(/-+$/, "");
+  const name = base(title) || base(taskId.replace(/^.*\//, "").replace(/\.md$/, "")) || "task";
+  return `${name}-${suffix}`;
+};
+var worktreesRoot = (directory) => join3(dirname(directory), `${basename(directory)}-worktrees`);
+var message = (e) => e instanceof Error ? e.message : String(e);
+var startSession = async (input, deps2) => {
+  let worktree = null;
+  if (input.location === "worktree") {
+    const slug = worktreeSlug(input.taskId, input.title, deps2.suffix?.());
+    const path = join3(worktreesRoot(input.directory), slug);
+    const r = await deps2.exec("git", ["-C", input.directory, "worktree", "add", "-b", `icf/${slug}`, path], { cwd: input.directory });
+    if (r.code !== 0) {
+      throw new TrackerError("FAILED", `Could not create the worktree ${path}: ${(r.stderr || r.stdout).trim() || `git exited ${r.code}`}`);
+    }
+    worktree = path;
+  }
+  const cwd = worktree ?? input.directory;
+  let started;
+  try {
+    started = await deps2.sessions.start({
+      prompt: input.prompt,
+      directory: cwd,
+      title: input.title,
+      ...input.model !== null ? { model: input.model } : {},
+      ...input.agent !== null ? { agent: input.agent } : {}
+    });
+  } catch (e) {
+    const kept = worktree === null ? "" : ` The worktree ${worktree} was created and is kept; remove it with git worktree remove if you do not need it.`;
+    throw new TrackerError("FAILED", `Could not start the session: ${message(e).replace(/\.$/, "")}.${kept}`);
+  }
+  const directory = started.directory ?? cwd;
+  try {
+    await addLink(deps2.linksFile, input.directory, { taskId: input.taskId, sessionId: started.sessionId, directory, createdAt: Date.now() });
+  } catch (e) {
+    throw new TrackerError(
+      "FAILED",
+      `The session ${started.sessionId} started, but its link to the card could not be saved (${message(e)}); the card will not follow it.`
+    );
+  }
+  return { sessionId: started.sessionId, directory, worktree };
+};
+
 // src/service/routes.ts
 var STATES = ["needs-triage", "needs-info", "ready-for-agent", "ready-for-human", "wontfix", "done"];
 var InvalidRequest = class extends Error {
 };
-var invalid = (message) => {
-  throw new InvalidRequest(message);
+var invalid = (message2) => {
+  throw new InvalidRequest(message2);
 };
-var error = (status, code, message) => ({ status, json: { error: { code, message } } });
+var error = (status, code, message2) => ({ status, json: { error: { code, message: message2 } } });
 var isObject = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
+var optional = (body, key) => {
+  const v = body[key];
+  if (v === void 0 || v === null) return null;
+  return typeof v === "string" ? v.trim() === "" ? null : v.trim() : invalid(`"${key}" must be a string or null`);
+};
 var str = (body, key) => {
   const v = body[key];
   return typeof v === "string" && v.trim() !== "" ? v : invalid(`"${key}" must be a non-empty string`);
@@ -847,7 +1131,7 @@ var newTask = (v) => {
   return task;
 };
 var defaultCliPath = () => fileURLToPath(new URL("../build/cli/task-board.mjs", import.meta.url));
-var tracker = (dir, deps) => openTracker(dir, deps.exec);
+var tracker = (dir, deps2) => openTracker(dir, deps2.exec);
 var existingConfig = async (dir) => {
   try {
     return await readConfig(dir);
@@ -877,7 +1161,7 @@ var POST = {
       throw e;
     }
   },
-  "/config/init": async (body, dir, deps) => {
+  "/config/init": async (body, dir, deps2) => {
     const kind = body.tracker;
     if (kind !== "local" && kind !== "github") return invalid('"tracker" must be "local" or "github"');
     const alreadySetUp = (tracker2) => {
@@ -888,7 +1172,7 @@ var POST = {
     };
     const existing = await existingConfig(dir);
     if (existing !== null && existing.tracker !== kind) alreadySetUp(existing.tracker);
-    const gh = kind === "github" ? createGithubTracker(dir, deps.exec, await readLabels(dir)) : null;
+    const gh = kind === "github" ? createGithubTracker(dir, deps2.exec, await readLabels(dir)) : null;
     await gh?.preflight();
     await writeConfig(dir, kind);
     const config = await readConfig(dir);
@@ -896,50 +1180,65 @@ var POST = {
     await gh?.setupLabels();
     return { config };
   },
-  "/config/detect": async (_body, dir, deps) => {
-    const r = await deps.exec("git", ["remote", "-v"], { cwd: dir });
+  "/config/detect": async (_body, dir, deps2) => {
+    const r = await deps2.exec("git", ["remote", "-v"], { cwd: dir });
     return { remote: r.code === 0 ? githubRemote(r.stdout) : null };
   },
-  "/tasks/list": async (_body, dir, deps) => ({ tasks: await (await tracker(dir, deps)).list() }),
-  "/tasks/get": async (body, dir, deps) => {
+  "/tasks/list": async (_body, dir, deps2) => ({ tasks: await (await tracker(dir, deps2)).list() }),
+  "/tasks/get": async (body, dir, deps2) => {
     const id = str(body, "id");
-    return { task: await (await tracker(dir, deps)).get(id) };
+    return { task: await (await tracker(dir, deps2)).get(id) };
   },
-  "/tasks/create": async (body, dir, deps) => {
+  "/tasks/create": async (body, dir, deps2) => {
     const input = newTask(body.input);
-    return { task: await (await tracker(dir, deps)).create(input) };
+    return { task: await (await tracker(dir, deps2)).create(input) };
   },
-  "/tasks/state": async (body, dir, deps) => {
+  "/tasks/state": async (body, dir, deps2) => {
     const id = str(body, "id");
     const to = state(body.state, "state");
-    return { task: await (await tracker(dir, deps)).setState(id, to) };
+    return { task: await (await tracker(dir, deps2)).setState(id, to) };
   },
-  "/tasks/type": async (body, dir, deps) => {
+  "/tasks/type": async (body, dir, deps2) => {
     const id = str(body, "id");
     const type = str(body, "type");
-    return { task: await (await tracker(dir, deps)).setType(id, type) };
+    return { task: await (await tracker(dir, deps2)).setType(id, type) };
   },
-  "/tasks/close": async (body, dir, deps) => {
+  "/tasks/close": async (body, dir, deps2) => {
     const id = str(body, "id");
     const w = body.withChildren;
     const withChildren = w === void 0 ? false : typeof w === "boolean" ? w : invalid('"withChildren" must be a boolean');
-    return { tasks: await (await tracker(dir, deps)).close(id, { withChildren }) };
-  }
+    return { tasks: await (await tracker(dir, deps2)).close(id, { withChildren }) };
+  },
+  "/sessions/start": async (body, dir, deps2) => {
+    const taskId = str(body, "taskId");
+    const title = str(body, "title");
+    const prompt = str(body, "prompt");
+    const model = optional(body, "model");
+    const agent = optional(body, "agent");
+    const location = body.location;
+    if (location !== "worktree" && location !== "project") return invalid('"location" must be "worktree" or "project"');
+    if (deps2.sessions === void 0) throw new TrackerError("FAILED", "Starting sessions from the service is not available");
+    return startSession(
+      { directory: dir, taskId, title, prompt, model, agent, location },
+      { exec: deps2.exec, sessions: deps2.sessions, linksFile: deps2.linksFile ?? defaultLinksFile(), ...deps2.suffix ? { suffix: deps2.suffix } : {} }
+    );
+  },
+  "/links/list": async (_body, dir, deps2) => ({ links: await listLinks(deps2.linksFile ?? defaultLinksFile(), dir) })
 };
 var GET = {
   "/health": () => ({}),
-  "/cli": (deps) => ({ path: deps.cliPath ?? defaultCliPath() })
+  "/cli": (deps2) => ({ path: deps2.cliPath ?? defaultCliPath() })
 };
-var handle = async (method, path, body, deps) => {
+var handle = async (method, path, body, deps2) => {
   try {
     const m = method.toUpperCase();
     const get = GET[path];
     const post = POST[path];
     if (get === void 0 && post === void 0) return error(404, "NOT_FOUND", `No route ${path}`);
-    if (m === "GET" && get !== void 0) return { status: 200, json: get(deps) };
+    if (m === "GET" && get !== void 0) return { status: 200, json: get(deps2) };
     if (m === "POST" && post !== void 0) {
       const dir = await directoryOf(body);
-      return { status: 200, json: await post(body, dir, deps) };
+      return { status: 200, json: await post(body, dir, deps2) };
     }
     return error(405, "INVALID", `${path} does not accept ${m}`);
   } catch (e) {
@@ -958,6 +1257,8 @@ if (token === "" || !Number.isInteger(port) || port <= 0) {
   process.exit(1);
 }
 var expected = Buffer.from(`Bearer ${token}`);
+var host = createServiceHost({ env: process.env });
+var deps = { exec: realExec, sessions: { start: (input) => host.sessions.start(input) } };
 var authorized = (req) => {
   const got = Buffer.from(req.headers.authorization ?? "");
   return got.length === expected.length && timingSafeEqual(got, expected);
@@ -993,7 +1294,7 @@ var server = createServer((req, res) => {
       else send(res, 400, { error: { code: "INVALID", message: "Request body is not valid JSON" } });
       return;
     }
-    const reply = await handle(req.method ?? "GET", path, body, { exec: realExec });
+    const reply = await handle(req.method ?? "GET", path, body, deps);
     send(res, reply.status, reply.json);
   })().catch((e) => {
     if (!res.headersSent) send(res, 500, { error: { code: "FAILED", message: e instanceof Error ? e.message : String(e) } });

@@ -13,6 +13,8 @@ export type BoardCallbacks = {
   onRefresh: () => void;
   onAdd: () => void;
   onSettings: () => void;
+  /** The Details button of a card with a session. */
+  onDetails: (taskId: string) => void;
 };
 
 export type BoardStatus =
@@ -134,7 +136,7 @@ export const createBoard = (root: HTMLElement, callbacks: BoardCallbacks) => {
           list.append(none);
         }
         for (const model of cards) {
-          const card = renderCard(model, busy.has(model.task.id));
+          const card = renderCard(model, busy.has(model.task.id), callbacks.onDetails);
           list.append(card.node);
           cardDisposers.push(card.dispose);
         }

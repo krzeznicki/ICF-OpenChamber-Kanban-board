@@ -2466,9 +2466,9 @@ ${GUEST_UI_LOOK_CSS}`;
           main.append(span("oc-sdk-row-sub", item.subtitle));
         row.append(main);
         if (item.badge) {
-          const badge = span("oc-sdk-badge", item.badge.label);
-          applyTone(badge, item.badge.tone);
-          row.append(badge);
+          const badge2 = span("oc-sdk-badge", item.badge.label);
+          applyTone(badge2, item.badge.tone);
+          row.append(badge2);
         }
         if (item.meta)
           row.append(span("oc-sdk-row-meta", item.meta));
@@ -2721,7 +2721,13 @@ ${GUEST_UI_LOOK_CSS}`;
       setState: (id, state2) => call("POST", "/tasks/state", { id, state: state2 }).then((r) => r.task),
       setType: (id, type) => call("POST", "/tasks/type", { id, type }).then((r) => r.task),
       close: (id, withChildren = false) => call("POST", "/tasks/close", { id, withChildren }).then((r) => r.tasks),
-      cliPath: () => call("GET", "/cli").then((r) => r.path)
+      cliPath: () => call("GET", "/cli").then((r) => r.path),
+      /** Path B: the service makes the worktree (if asked) and starts the session with this model/agent. */
+      startSession: (input) => call("POST", "/sessions/start", input),
+      /** Sessions the service started for this project's tasks. */
+      listLinks: () => call("POST", "/links/list").then(
+        (r) => r.links
+      )
     };
   };
 
@@ -2744,18 +2750,19 @@ ${GUEST_UI_LOOK_CSS}`;
     }
     return task.state === "ready-for-agent" ? "ready" : "backlog";
   };
-  var sessionForTask = (taskId, sessions) => {
+  var sessionForTask = (taskId, sessions, links = []) => {
+    const linked = new Set(links.filter((l) => l.taskId === taskId).map((l) => l.sessionId));
     let best = null;
     for (const s of sessions) {
       if (s.archivedAt !== null) continue;
-      if (!s.items.some((item) => item.id === taskId)) continue;
+      if (!linked.has(s.id) && !s.items.some((item) => item.id === taskId)) continue;
       if (best === null || s.createdAt > best.createdAt || s.createdAt === best.createdAt && s.updatedAt > best.updatedAt) {
         best = s;
       }
     }
     return best === null ? null : { id: best.id, activity: best.activity, outcome: best.outcome, archived: false };
   };
-  var groupTasks = (tasks, sessions, queued, hideSubtasks) => {
+  var groupTasks = (tasks, sessions, queued, hideSubtasks, links = []) => {
     const byId = new Map(tasks.map((t) => [t.id, t]));
     const children = /* @__PURE__ */ new Map();
     for (const t of tasks) {
@@ -2767,7 +2774,7 @@ ${GUEST_UI_LOOK_CSS}`;
     const cards = /* @__PURE__ */ new Map();
     for (const task of tasks) {
       if (hideSubtasks && task.parentId !== null) continue;
-      const session = sessionForTask(task.id, sessions);
+      const session = sessionForTask(task.id, sessions, links);
       const kids = children.get(task.id) ?? [];
       cards.set(task.id, {
         column: columnFor(task, session, queued.has(task.id)),
@@ -2779,7 +2786,8 @@ ${GUEST_UI_LOOK_CSS}`;
             return b !== void 0 && b.state !== "done";
           }),
           progress: kids.length === 0 ? null : { done: kids.filter((k) => k.state === "done").length, total: kids.length },
-          child: false
+          child: false,
+          starting: queued.has(task.id) && session === null
         }
       });
     }
@@ -4063,7 +4071,7 @@ ${GUEST_UI_LOOK_CSS}`;
     let addDispose = null;
     let card = null;
     const find = (id) => deps.tasks().find((t) => t.id === id) ?? null;
-    const info = (message) => void deps.host.toast({ kind: "info", message }).catch(() => {
+    const info2 = (message) => void deps.host.toast({ kind: "info", message }).catch(() => {
     });
     const fail2 = (message) => void deps.host.toast({ kind: "error", message }).catch(() => {
     });
@@ -4146,7 +4154,7 @@ ${GUEST_UI_LOOK_CSS}`;
     const apply = (task, move2) => {
       switch (move2.kind) {
         case "none":
-          info(move2.reason);
+          info2(move2.reason);
           return;
         case "start":
           deps.onStart(task);
@@ -4252,12 +4260,16 @@ ${GUEST_UI_LOOK_CSS}`;
     const detachDrag = attachDrag(deps.board.columns, {
       canDrag: (id) => !moving.has(id),
       onDrop: move,
-      onOpen: showDetail
+      onOpen: (id) => {
+        if (!deps.openCard(id)) showDetail(id);
+      }
     });
     return {
       /** Ids whose write is in flight; the board draws them busy. */
       busy: moving,
       showAdd,
+      /** The detail sheet of a task (a card's Details button). */
+      showDetail,
       /** Project switch or the board went away: drop the sheet and the form. */
       reset: () => {
         closeDetail();
@@ -4275,6 +4287,82 @@ ${GUEST_UI_LOOK_CSS}`;
         closeAdd();
       }
     };
+  };
+
+  // src/panel/launcher.ts
+  var SETTLE_MS = 6e4;
+  var createLauncher = (deps) => {
+    const now = deps.now ?? Date.now;
+    const waiting = /* @__PURE__ */ new Map();
+    const launch = async (task, opts) => {
+      if (deps.isStarting.has(task.id) || deps.hasLiveSession(task.id)) return "already";
+      deps.isStarting.add(task.id);
+      let sessionId = null;
+      try {
+        const prompt = await deps.prompt(task, opts);
+        sessionId = (await deps.start(task, opts, prompt)).sessionId;
+      } catch (e) {
+        deps.onError(task, e);
+      }
+      if (sessionId === null) {
+        deps.isStarting.delete(task.id);
+        return "failed";
+      }
+      waiting.set(task.id, { sessionId, at: now() });
+      return "started";
+    };
+    const settle = (known) => {
+      let changed = false;
+      for (const [taskId, w] of waiting) {
+        if (!known(w.sessionId) && now() - w.at < SETTLE_MS) continue;
+        waiting.delete(taskId);
+        deps.isStarting.delete(taskId);
+        changed = true;
+      }
+      return changed;
+    };
+    const reset = () => {
+      waiting.clear();
+      deps.isStarting.clear();
+    };
+    return { launch, settle, reset };
+  };
+
+  // src/panel/prompt.ts
+  var PROMPT_MAX = GUEST_ATTACH_TEXT_MAX;
+  var STATES2 = "needs-triage, needs-info, ready-for-agent, ready-for-human, wontfix, done";
+  var shellWord = (s) => /^[A-Za-z0-9_./:@%+=,-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`;
+  var isGithub = (task) => task.url !== null || /^#\d+$/.test(task.id);
+  var buildPrompt = (task, preset, cliPath2, children) => {
+    const cli2 = `node ${shellWord(cliPath2)}`;
+    const id = shellWord(task.id);
+    const head = [`# Task: ${task.title}`, `Id: ${task.id}`, ...task.url !== null ? [`URL: ${task.url}`] : []].join("\n");
+    const tracker = [
+      "## Tracker",
+      isGithub(task) ? "This task is a GitHub issue of this repository." : "This task is a local issue file under .scratch/ in this repository.",
+      `Move it with the task-board CLI: ${cli2} state ${id} <state>`,
+      `States: ${STATES2}. Set "done" only when the work is finished.`
+    ].join("\n");
+    const kids = children.length === 0 ? "" : [
+      "## Sub-tasks",
+      ...children.map((c) => `- ${c.id}: ${c.title} (${c.state})`),
+      "",
+      "Work until every sub-task is done; move each sub-task with the CLI as you go."
+    ].join("\n");
+    const instructions = preset.text.trim() === "" ? "" : `## Instructions (${preset.name})
+${preset.text.trim()}`;
+    const body = task.body.trim() === "" ? "No description." : task.body.trim();
+    const compose = (b) => [head, b, tracker, kids, instructions].filter((part) => part !== "").join("\n\n");
+    const full = compose(body);
+    if (full.length <= PROMPT_MAX) return full;
+    const note = `[\u2026] The description is cut here; read the full task with the CLI: ${cli2} show ${id}`;
+    const room = PROMPT_MAX - compose(`
+
+${note}`).length;
+    const cut = room > 0 ? `${body.slice(0, room).trimEnd()}
+
+${note}` : note;
+    return compose(cut).slice(0, PROMPT_MAX);
   };
 
   // src/panel/setup.ts
@@ -4327,7 +4415,19 @@ ${GUEST_UI_LOOK_CSS}`;
 
   // src/panel/ui/card.ts
   var typeTone = (type) => type === "bug" ? "error" : type === "enhancement" ? "info" : "neutral";
-  var renderCard = (model, busy = false) => {
+  var sessionBadge = (s) => {
+    switch (s.activity) {
+      case "running":
+      case "retrying":
+        return { label: "agent working", tone: "info" };
+      case "waiting-permission":
+      case "waiting-question":
+        return { label: "agent needs you", tone: "warning" };
+      default:
+        return s.outcome === "failed" ? { label: "agent failed", tone: "error" } : s.outcome === "completed" ? { label: "agent finished", tone: "success" } : { label: "agent idle", tone: "neutral" };
+    }
+  };
+  var renderCard = (model, busy = false, onDetails) => {
     const { task } = model;
     const disposers = [];
     const node = document.createElement("article");
@@ -4348,14 +4448,20 @@ ${GUEST_UI_LOOK_CSS}`;
     node.append(title, id);
     const badges = document.createElement("div");
     badges.className = "kb-badges";
-    const badge = (label, tone2) => {
+    const badge2 = (label, tone2) => {
       disposers.push(mountBadge(badges, { label, tone: tone2 }).dispose);
     };
-    if (task.kind === "parent") badge("parent", "primary");
-    if (task.type !== null) badge(task.type, typeTone(task.type));
-    if (task.state === "ready-for-human") badge("ready-for-human", "warning");
-    if (task.state === "wontfix") badge("wontfix", "neutral");
-    if (model.blockers.length > 0) badge(`blocked by ${model.blockers.length}`, "error");
+    if (model.session !== null) {
+      const b = sessionBadge(model.session);
+      badge2(b.label, b.tone);
+    } else if (model.starting) {
+      badge2("starting agent\u2026", "info");
+    }
+    if (task.kind === "parent") badge2("parent", "primary");
+    if (task.type !== null) badge2(task.type, typeTone(task.type));
+    if (task.state === "ready-for-human") badge2("ready-for-human", "warning");
+    if (task.state === "wontfix") badge2("wontfix", "neutral");
+    if (model.blockers.length > 0) badge2(`blocked by ${model.blockers.length}`, "error");
     node.append(badges);
     if (model.blockers.length > 0) badges.title = `Waiting for: ${model.blockers.join(", ")}`;
     if (model.progress !== null && model.progress.total > 0) {
@@ -4370,6 +4476,15 @@ ${GUEST_UI_LOOK_CSS}`;
         mountProgress(wrap, { value: Math.round(done / total * 100), tone: done === total ? "success" : "primary" }).dispose
       );
       node.append(wrap);
+    }
+    if (model.session !== null) {
+      node.title = "Open the agent session";
+      const actions = document.createElement("div");
+      actions.className = "kb-card-actions";
+      disposers.push(
+        mountButton(actions, { label: "Details", variant: "ghost", size: "xs", onClick: () => onDetails?.(task.id) }).dispose
+      );
+      node.append(actions);
     }
     return {
       node,
@@ -4488,7 +4603,7 @@ ${GUEST_UI_LOOK_CSS}`;
             list.append(none);
           }
           for (const model of cards) {
-            const card = renderCard(model, busy.has(model.task.id));
+            const card = renderCard(model, busy.has(model.task.id), callbacks.onDetails);
             list.append(card.node);
             cardDisposers.push(card.dispose);
           }
@@ -4506,6 +4621,86 @@ ${GUEST_UI_LOOK_CSS}`;
     body: model.body,
     action: { label: model.action, onClick: onAction }
   }).dispose;
+
+  // src/panel/ui/startForm.ts
+  var el4 = (tag, className, text2) => {
+    const node = document.createElement(tag);
+    node.className = className;
+    if (text2 !== void 0) node.textContent = text2;
+    return node;
+  };
+  var askStart = (title, initial, presets) => new Promise((resolve) => {
+    const options = { ...initial };
+    const backdrop = el4("div", "kb-backdrop kb-confirm-backdrop");
+    const box = el4("div", "kb-confirm");
+    box.setAttribute("role", "dialog");
+    box.setAttribute("aria-modal", "true");
+    box.append(el4("h2", "kb-confirm-title", `Start an agent on \u201C${title}\u201D`));
+    box.append(el4("p", "kb-confirm-body", "Empty model or agent uses your current selection in OpenChamber."));
+    const row1 = el4("div", "kb-fields");
+    const row2 = el4("div", "kb-fields");
+    const cells = [0, 1, 2, 3].map(() => el4("div", "kb-field"));
+    row1.append(cells[0], cells[1]);
+    row2.append(cells[2], cells[3]);
+    const actions = el4("div", "kb-actions");
+    box.append(row1, row2, actions);
+    backdrop.append(box);
+    const disposers = [];
+    const preset = mountSelect(cells[0], {
+      label: "Preset",
+      value: options.presetId,
+      options: presets.map((p) => ({ id: p.id, label: p.name })),
+      onChange: (id) => {
+        options.presetId = id;
+        preset.update({ value: id });
+      }
+    });
+    const location = mountSelect(cells[1], {
+      label: "Location",
+      value: options.location,
+      options: Object.keys(LOCATION_LABELS).map((id) => ({ id, label: LOCATION_LABELS[id] })),
+      onChange: (id) => {
+        options.location = id;
+        location.update({ value: id });
+      }
+    });
+    const text2 = (slot, label, key, placeholder) => {
+      const field2 = mountTextField(slot, {
+        label,
+        value: options[key] ?? "",
+        placeholder,
+        mono: true,
+        onChange: (v2) => {
+          field2.update({ value: v2 });
+          options[key] = v2.trim() === "" ? null : v2.trim();
+        }
+      });
+      disposers.push(field2.dispose);
+    };
+    text2(cells[2], "Model", "model", "Your current model");
+    text2(cells[3], "Agent", "agent", "Your current agent");
+    disposers.push(preset.dispose, location.dispose);
+    const done = (answer) => {
+      document.removeEventListener("keydown", onKey);
+      for (const d of disposers) d();
+      backdrop.remove();
+      resolve(answer);
+    };
+    const onKey = (e) => {
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      e.preventDefault();
+      e.stopPropagation();
+      done(null);
+    };
+    disposers.push(mountButton(actions, { label: "Start", size: "sm", onClick: () => done({ ...options }) }).dispose);
+    disposers.push(mountButton(actions, { label: "Cancel", variant: "outline", size: "sm", onClick: () => done(null) }).dispose);
+    backdrop.addEventListener("click", (e) => {
+      if (e.target === backdrop) done(null);
+    });
+    document.addEventListener("keydown", onKey);
+    document.body.append(backdrop);
+    actions.querySelector("button")?.focus();
+  });
 
   // src/panel/ui/styles.ts
   var CSS2 = `
@@ -4531,6 +4726,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
 .kb-card-id { color: var(--oc-muted); font-family: var(--oc-mono); font-size: 0.8em; overflow-wrap: anywhere; }
 .kb-badges { display: flex; flex-wrap: wrap; gap: 0.25rem; }
 .kb-badges:empty { display: none; }
+.kb-card-actions { display: flex; justify-content: flex-end; margin: -0.25rem -0.25rem -0.25rem 0; }
 .kb-progress { display: flex; flex-direction: column; gap: 0.25rem; }
 .kb-progress-label { color: var(--oc-muted); font-size: 0.8em; font-variant-numeric: tabular-nums; }
 .kb-wizard { display: flex; flex-direction: column; gap: 0.75rem; max-width: 34rem; margin: 1rem auto; padding: 1rem;
@@ -4667,6 +4863,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     pinned: false,
     hostDirectory: null,
     sessions: [],
+    links: [],
     config: null,
     tasks: null,
     hideSubtasks: false,
@@ -4697,6 +4894,13 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     } catch (e) {
       fail(`Could not read the settings: ${e instanceof Error ? e.message : String(e)}`);
     }
+  };
+  var badge = null;
+  var setBadge = (count) => {
+    if (count === badge) return;
+    badge = count;
+    void host.setBadge(count).catch(() => {
+    });
   };
   var board;
   var editor;
@@ -4786,11 +4990,13 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     board.setCanAdd(state.view === "board" && state.config !== null);
     state.columns = /* @__PURE__ */ new Map();
     if (state.config === null || state.tasks === null) {
+      setBadge(null);
       board.render(null);
       return;
     }
-    const model = groupTasks(state.tasks, state.sessions, /* @__PURE__ */ new Set(), state.hideSubtasks);
+    const model = groupTasks(state.tasks, state.sessions, isStarting, state.hideSubtasks, state.links);
     for (const [column, cards] of Object.entries(model)) for (const c of cards) state.columns.set(c.task.id, column);
+    setBadge(model.review.length || null);
     board.render(model, editor.busy);
     if (state.tasks.length === 0) {
       board.setStatus({
@@ -4885,10 +5091,11 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
         showWizard(api, remote);
         return;
       }
-      const tasks = await api.list();
+      const [tasks, links] = await Promise.all([api.list(), api.listLinks().catch(() => null)]);
       if (mine !== generation) return;
       state.config = result.config;
       state.tasks = tasks;
+      if (links !== null) state.links = links;
       state.view = "board";
       draw();
       editor.refresh();
@@ -4911,6 +5118,8 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     state.projectSettings = {};
     if (id !== null) void loadProjectSettings(id);
     state.sessions = [];
+    state.links = [];
+    launcher.reset();
     state.config = null;
     state.tasks = null;
     board.setProjects(projectOptions(), id);
@@ -4922,6 +5131,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
       const unsubscribe = await host.onSessions(id, (snapshot) => {
         if (snapshot.projectId !== state.projectId) return;
         state.sessions = snapshot.sessions;
+        launcher.settle((id2) => state.sessions.some((s) => s.id === id2));
         draw();
       });
       if (state.projectId === id) unsubscribeSessions = unsubscribe;
@@ -4936,9 +5146,130 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     const next = projectFor(state.hostDirectory) ?? current ?? state.projects[0] ?? null;
     void selectProject(next?.id ?? null);
   };
-  var onStart = (_task) => {
-    void host.toast({ kind: "info", message: "Starting agents is not wired yet" }).catch(() => {
+  var info = (message) => void host.toast({ kind: "info", message }).catch(() => {
+  });
+  var errorText3 = (e) => e instanceof Error ? e.message : String(e);
+  var startContext = () => {
+    const id = state.projectId;
+    return id === null || !globalLoaded || state.settingsFor !== id ? null : { projectId: id, settings: settings(), presets: listPresets(state.presets) };
+  };
+  var LIVE = /* @__PURE__ */ new Set(["running", "retrying", "waiting-permission", "waiting-question"]);
+  var hasLiveSession = (taskId) => {
+    const s = sessionForTask(taskId, state.sessions, state.links);
+    return s !== null && LIVE.has(s.activity);
+  };
+  var cli = null;
+  var cliPath = async (directory) => {
+    if (cli?.directory === directory) return cli.path;
+    const path = await createApi(host, directory).cliPath();
+    cli = { directory, path };
+    return path;
+  };
+  var reloadLinks = async (projectId, directory) => {
+    try {
+      const links = await createApi(host, directory).listLinks();
+      if (state.projectId !== projectId) return;
+      state.links = links;
+      draw();
+    } catch {
+    }
+  };
+  var startTask = async (task, opts, prompt) => {
+    const p = project();
+    if (p === null) throw new Error("No project is open");
+    if (opts.model !== null || opts.agent !== null || task.id.length > GUEST_ATTACH_ID_MAX) {
+      const r = await createApi(host, p.directory).startSession({
+        taskId: task.id,
+        title: task.title,
+        prompt,
+        model: opts.model,
+        agent: opts.agent,
+        location: opts.location
+      });
+      void reloadLinks(p.id, p.directory);
+      return { sessionId: r.sessionId };
+    }
+    const result = await host.startSession(
+      clampStartSessionRequest({
+        providerId: "icf-kanban",
+        id: task.id,
+        title: task.title,
+        url: task.url ?? `https://icf-kanban.local/t/${encodeURIComponent(task.id)}`,
+        text: prompt,
+        projectId: p.id,
+        worktree: opts.location === "worktree" ? true : false,
+        navigation: "preserve"
+      })
+    );
+    if (result.sessionId === null) {
+      const what = result.failure === "bootstrap-failed" ? "setting up the worktree failed" : "the session could not be created";
+      void host.toast({
+        kind: "error",
+        message: `Could not start \u201C${task.title}\u201D: ${what}. The worktree ${result.worktree.directory || result.directory} is kept.`,
+        persistent: true
+      }).catch(() => {
+      });
+      return { sessionId: null };
+    }
+    if (result.sent === "no-model" || result.sent === "failed") {
+      const why = result.sent === "no-model" ? "no model is selected" : "sending failed";
+      fail(`The session for \u201C${task.title}\u201D was created, but its first message was not sent (${why}). Open it and send the task yourself.`);
+    }
+    if (result.linked === false) fail(`The session for \u201C${task.title}\u201D started, but the card could not be linked to it; the card will not follow it.`);
+    return { sessionId: result.sessionId };
+  };
+  var isStarting = /* @__PURE__ */ new Set();
+  var launcher = createLauncher({
+    isStarting,
+    hasLiveSession,
+    start: startTask,
+    prompt: async (task, opts) => {
+      const p = project();
+      if (p === null) throw new Error("No project is open");
+      const presets = listPresets(state.presets);
+      const preset = presets.find((x) => x.id === opts.presetId) ?? presets.find((x) => x.id === "implement") ?? presets[0];
+      const children = (state.tasks ?? []).filter((t) => t.parentId === task.id);
+      return buildPrompt(task, preset, await cliPath(p.directory), children);
+    },
+    onError: (task, e) => fail(`Could not start \u201C${task.title}\u201D: ${errorText3(e)}`)
+  });
+  var onStart = async (task) => {
+    const ctx = startContext();
+    if (ctx === null) {
+      info("Settings are loading, try again in a moment");
+      return;
+    }
+    if (isStarting.has(task.id) || hasLiveSession(task.id)) {
+      info(`\u201C${task.title}\u201D already has an agent working on it`);
+      return;
+    }
+    let card;
+    try {
+      card = await store.loadCard(ctx.projectId, task.id);
+    } catch (e) {
+      fail(`Could not read the card's start options: ${errorText3(e)}`);
+      return;
+    }
+    let opts = resolveStart(ctx.settings, task, card, ctx.presets);
+    if (!ctx.settings.autoStart) {
+      const picked = await askStart(task.title, opts, ctx.presets);
+      if (picked === null) return;
+      opts = picked;
+    }
+    if (state.projectId !== ctx.projectId) return;
+    const pending = launcher.launch(task, opts);
+    draw();
+    const result = await pending;
+    if (result === "already") info(`\u201C${task.title}\u201D already has an agent working on it`);
+    else if (result === "started") void host.toast({ kind: "success", message: `Started an agent on \u201C${task.title}\u201D` }).catch(() => {
     });
+    draw();
+  };
+  var openCard = (taskId) => {
+    const s = sessionForTask(taskId, state.sessions, state.links);
+    if (s === null) return false;
+    void host.openSession(s.id).catch((e) => fail(`Could not open the session: ${errorText3(e)}`));
+    return true;
   };
   var start = (ctx) => {
     injectStyles();
@@ -4957,7 +5288,8 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
       },
       onRefresh: () => void load(),
       onAdd: () => editor.showAdd(),
-      onSettings: showSettings
+      onSettings: showSettings,
+      onDetails: (id) => editor.showDetail(id)
     });
     editor = createEditor({
       host,
@@ -4972,13 +5304,11 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
       columnOf: (id) => state.columns.get(id) ?? null,
       reload: load,
       redraw: draw,
-      onStart,
+      onStart: (task) => void onStart(task),
+      openCard,
       baseTypes: () => settings().types,
       start: {
-        context: () => {
-          const id = state.projectId;
-          return id === null || !globalLoaded || state.settingsFor !== id ? null : { projectId: id, settings: settings(), presets: listPresets(state.presets) };
-        },
+        context: startContext,
         load: (projectId, taskId) => store.loadCard(projectId, taskId),
         save: (projectId, taskId, card) => saver.save(`card:${projectId}:${taskId}`, () => store.saveCard(projectId, taskId, card))
       }

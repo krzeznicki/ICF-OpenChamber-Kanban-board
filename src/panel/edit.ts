@@ -28,8 +28,10 @@ export type EditorDeps = {
   reload: () => Promise<void>;
   /** Redraw from the current state (busy marks changed). */
   redraw: () => void;
-  /** Dropping on In Progress. Task 12 wires sessions here. */
+  /** Dropping on In Progress (also "Move to In Progress" in the detail): starts an agent. */
   onStart: (task: Task) => void;
+  /** A click or Enter on a card; true when it was handled (a card with a session opens it), else the detail opens. */
+  openCard: (taskId: string) => boolean;
   /** The base types offered in the type selects (settings' `types`). */
   baseTypes: () => string[];
   /** The card start options in the detail sheet. */
@@ -257,13 +259,17 @@ export const createEditor = (deps: EditorDeps) => {
   const detachDrag = attachDrag(deps.board.columns, {
     canDrag: (id) => !moving.has(id),
     onDrop: move,
-    onOpen: showDetail,
+    onOpen: (id) => {
+      if (!deps.openCard(id)) showDetail(id);
+    },
   });
 
   return {
     /** Ids whose write is in flight; the board draws them busy. */
     busy: moving as ReadonlySet<string>,
     showAdd,
+    /** The detail sheet of a task (a card's Details button). */
+    showDetail,
     /** Project switch or the board went away: drop the sheet and the form. */
     reset: () => {
       closeDetail();

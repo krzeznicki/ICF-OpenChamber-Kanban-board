@@ -8,11 +8,18 @@ import { createGithubTracker } from '../core/githubTracker.ts';
 import { openTracker } from '../core/openTracker.ts';
 import type { Exec, NewTask, TaskState, Tracker } from '../core/types.ts';
 import { TrackerError } from '../core/types.ts';
+import { defaultLinksFile, listLinks, startSession, type SessionHost } from './sessions.ts';
 
 export type Deps = {
   exec: Exec;
   /** Absolute path of the built CLI; defaults to `../build/cli/task-board.mjs` next to the service bundle. */
   cliPath?: string;
+  /** OpenChamber's session control (createServiceHost(...).sessions); absent, /sessions/start fails. */
+  sessions?: SessionHost;
+  /** Where task -> session links are kept; defaults to ~/.icf-kanban/links.json. */
+  linksFile?: string;
+  /** The worktree name's unique suffix; tests fix it. */
+  suffix?: () => string;
 };
 export type Reply = { status: number; json: unknown };
 
@@ -30,6 +37,12 @@ const error = (status: number, code: string, message: string): Reply => ({ statu
 type Body = Record<string, unknown>;
 
 const isObject = (v: unknown): v is Body => typeof v === 'object' && v !== null && !Array.isArray(v);
+
+const optional = (body: Body, key: string): string | null => {
+  const v = body[key];
+  if (v === undefined || v === null) return null;
+  return typeof v === 'string' ? (v.trim() === '' ? null : v.trim()) : invalid(`"${key}" must be a string or null`);
+};
 
 const str = (body: Body, key: string): string => {
   const v = body[key];
@@ -161,6 +174,21 @@ const POST: Record<string, Route> = {
     const withChildren = w === undefined ? false : typeof w === 'boolean' ? w : invalid('"withChildren" must be a boolean');
     return { tasks: await (await tracker(dir, deps)).close(id, { withChildren }) };
   },
+  '/sessions/start': async (body, dir, deps) => {
+    const taskId = str(body, 'taskId');
+    const title = str(body, 'title');
+    const prompt = str(body, 'prompt');
+    const model = optional(body, 'model');
+    const agent = optional(body, 'agent');
+    const location = body.location;
+    if (location !== 'worktree' && location !== 'project') return invalid('"location" must be "worktree" or "project"');
+    if (deps.sessions === undefined) throw new TrackerError('FAILED', 'Starting sessions from the service is not available');
+    return startSession(
+      { directory: dir, taskId, title, prompt, model, agent, location },
+      { exec: deps.exec, sessions: deps.sessions, linksFile: deps.linksFile ?? defaultLinksFile(), ...(deps.suffix ? { suffix: deps.suffix } : {}) },
+    );
+  },
+  '/links/list': async (_body, dir, deps) => ({ links: await listLinks(deps.linksFile ?? defaultLinksFile(), dir) }),
 };
 
 const GET: Record<string, (deps: Deps) => unknown> = {

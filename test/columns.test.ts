@@ -150,3 +150,30 @@ test('groupTasks: only listed, open blockers count', () => {
   const board = groupTasks(tasks, [], new Set(), false);
   assert.deepEqual(board.backlog.find((c) => c.task.id === 'a')?.blockers, ['b']);
 });
+
+test('sessionForTask: a session named by the service links counts, though it carries no items', () => {
+  const s = record('svc', [], { activity: 'running' });
+  assert.equal(sessionForTask('t1', [s]), null);
+  assert.equal(sessionForTask('t1', [s], [{ taskId: 't1', sessionId: 'svc' }])?.id, 'svc');
+  assert.equal(sessionForTask('t2', [s], [{ taskId: 't1', sessionId: 'svc' }]), null);
+});
+
+test('sessionForTask: newest wins across items and links; archived linked sessions are ignored', () => {
+  const byItem = record('item', ['t1'], { createdAt: 1 });
+  const byLink = record('link', [], { createdAt: 2, activity: 'waiting-question' });
+  const links = [{ taskId: 't1', sessionId: 'link' }];
+  assert.equal(sessionForTask('t1', [byItem, byLink], links)?.id, 'link');
+  const archived = record('link', [], { createdAt: 2, archivedAt: 3 });
+  assert.equal(sessionForTask('t1', [byItem, archived], links)?.id, 'item');
+});
+
+test('groupTasks: a linked session moves its card; a queued card without a session is marked starting', () => {
+  const tasks = [t('a', 'ready-for-agent'), t('b', 'ready-for-agent')];
+  const board = groupTasks(tasks, [record('svc', [], { activity: 'idle', outcome: 'completed' })], new Set(['b']), false, [
+    { taskId: 'a', sessionId: 'svc' },
+  ]);
+  assert.deepEqual(ids(board.review), ['a']);
+  assert.equal(board.review[0]?.starting, false);
+  assert.deepEqual(ids(board.in_progress), ['b']);
+  assert.equal(board.in_progress[0]?.starting, true);
+});

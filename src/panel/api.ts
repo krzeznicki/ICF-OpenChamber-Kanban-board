@@ -68,6 +68,20 @@ export const createApi = (host: HostClient, directory: string) => {
     close: (id: string, withChildren = false) =>
       call<{ tasks: Task[] }>('POST', '/tasks/close', { id, withChildren }).then((r) => r.tasks),
     cliPath: () => call<{ path: string }>('GET', '/cli').then((r) => r.path),
+    /** Path B: the service makes the worktree (if asked) and starts the session with this model/agent. */
+    startSession: (input: {
+      taskId: string;
+      title: string;
+      prompt: string;
+      model: string | null;
+      agent: string | null;
+      location: 'worktree' | 'project';
+    }) => call<{ sessionId: string; directory: string; worktree: string | null }>('POST', '/sessions/start', input),
+    /** Sessions the service started for this project's tasks. */
+    listLinks: () =>
+      call<{ links: Array<{ taskId: string; sessionId: string; directory: string; createdAt: number }> }>('POST', '/links/list').then(
+        (r) => r.links,
+      ),
   };
 };
 
