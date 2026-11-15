@@ -370,6 +370,8 @@ export const createSettingsStore = (storage: SettingsStorage) => {
       await storage.set(STORAGE_KEYS.card(projectId, to), clean as never);
       await storage.delete(STORAGE_KEYS.card(projectId, from));
     },
+    /** The task was deleted: its start options go. */
+    forgetCard: (projectId: string, taskId: string): Promise<void> => storage.delete(STORAGE_KEYS.card(projectId, taskId)),
     loadDetached: async (projectId: string): Promise<Map<string, number>> => parseDetached(await storage.get(STORAGE_KEYS.detached(projectId))),
     saveDetached: (projectId: string, marks: ReadonlyMap<string, number>): Promise<void> =>
       put(STORAGE_KEYS.detached(projectId), Object.fromEntries(marks), marks.size === 0),

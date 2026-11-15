@@ -25,6 +25,8 @@ export type FakeGhOptions = {
   labels?: string[];
   /** The `origin` URL `git remote -v` prints; null = no remote. Default https://github.com/o/r.git. */
   remote?: string | null;
+  /** The user is not a repo admin: `gh issue delete` fails the way GitHub refuses it. */
+  notAdmin?: boolean;
 };
 
 const URL = 'https://github.com/o/r/issues/';
@@ -165,6 +167,13 @@ export const fakeGh = (seed: FakeIssue[], options: FakeGhOptions = {}) => {
       issue!.closedAt = NOW;
       touch(issue!);
       return ok();
+    }
+    if (a === 'issue' && b === 'delete') {
+      if (!args.includes('--yes')) return fail('--yes required when not running interactively\n');
+      if (options.notAdmin) return fail('GraphQL: me does not have the correct permissions to execute `DeleteIssue` (deleteIssue)\n');
+      issues.splice(issues.indexOf(issue!), 1);
+      for (const i of issues) if (i.parent === issue!.number) i.parent = null;
+      return ok(`✓ Deleted issue o/r#${issue!.number} (${issue!.title}).\n`);
     }
     if (a === 'issue' && b === 'reopen') {
       issue!.state = 'OPEN';

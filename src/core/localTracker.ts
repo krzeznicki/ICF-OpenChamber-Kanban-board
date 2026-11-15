@@ -347,7 +347,48 @@ export const createLocalTracker = (root: string): Tracker => {
     return get(newId);
   };
 
+  const unlinkIfThere = (path: string): Promise<void> =>
+    unlink(path).catch((e: unknown) => {
+      if (!isNotFound(e)) throw e;
+    });
+
+  /**
+   * A ticket: its file goes and its feature's tickets that listed it lose that blocker. A feature:
+   * spec.md, every ticket and the folder go; a folder that holds anything else (notes, a map) is
+   * refused before anything is deleted, since what is left would still list as a feature.
+   */
+  const remove = async (id: string, opts: { withChildren: boolean }): Promise<string[]> => {
+    const task = await get(id);
+    const ref = parseId(task.id);
+    if (ref.kind === 'ticket') {
+      await unlinkIfThere(abs(task.id));
+      await dropBlocker(ref.feature, fileNumber(ref.file!));
+      await removeIfEmpty(issuesDir(ref.feature));
+      return [task.id];
+    }
+    const tickets = await issueFiles(issuesDir(ref.feature));
+    if (tickets.length > 0 && !opts.withChildren) {
+      throw new TrackerError('INVALID', `${id} has ${tickets.length} sub-task${tickets.length === 1 ? '' : 's'}; delete them with it (withChildren) or move them first`);
+    }
+    const ticketEntries = new Set(tickets.map((f) => `issues/${f}`));
+    const extra = (await extraFiles(ref.feature)).filter((f) => !ticketEntries.has(f));
+    if (extra.length > 0) {
+      throw new TrackerError('INVALID', `${id} cannot be deleted: its folder also holds ${extra.join(', ')}; move or remove those first`);
+    }
+    const deleted: string[] = [];
+    for (const file of tickets) {
+      await unlinkIfThere(join(issuesDir(ref.feature), file));
+      deleted.push(ticketId(ref.feature, file));
+    }
+    await unlinkIfThere(abs(task.id));
+    await removeIfEmpty(issuesDir(ref.feature));
+    await removeIfEmpty(featureDir(ref.feature));
+    return [...deleted, task.id];
+  };
+
   return {
+    remove,
+
     async list() {
       const now = Date.now();
       const out: Task[] = [];

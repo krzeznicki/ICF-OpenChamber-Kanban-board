@@ -304,3 +304,23 @@ test('edit with a blank title is INVALID and runs no edit', async () => {
   await rejectsWith(tracker.edit('#4', { title: ' ' }), 'INVALID');
   assert.deepEqual(gh.commands(), []);
 });
+
+test('remove deletes with gh issue delete --yes; withChildren deletes the sub-issues first', async () => {
+  const { tracker, gh } = setup();
+  assert.deepEqual(await tracker.remove('#4', { withChildren: false }), ['#4']);
+  assert.deepEqual(await tracker.remove('#1', { withChildren: true }), ['#2', '#3', '#1']);
+  assert.deepEqual(gh.commands(), ['gh issue delete 4 --yes', 'gh issue delete 2 --yes', 'gh issue delete 3 --yes', 'gh issue delete 1 --yes']);
+  assert.deepEqual((await tracker.list()).map((t) => t.id), ['#5', '#6']);
+});
+
+test('remove without withChildren keeps the sub-issues as top-level issues', async () => {
+  const { tracker } = setup();
+  assert.deepEqual(await tracker.remove('#1', { withChildren: false }), ['#1']);
+  assert.equal((await tracker.get('#2')).parentId, null);
+});
+
+test('remove by a non-admin is FAILED with a clear message; a missing issue is NOT_FOUND', async () => {
+  const { tracker } = setup(ISSUES, { notAdmin: true });
+  await rejectsWith(tracker.remove('#4', { withChildren: false }), 'FAILED', /Only repository admins can delete GitHub issues.*close it instead/);
+  await rejectsWith(tracker.remove('#99', { withChildren: false }), 'NOT_FOUND');
+});

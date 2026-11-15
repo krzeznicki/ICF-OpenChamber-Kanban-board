@@ -78,6 +78,9 @@ export const createApi = (host: HostClient, directory: string) => {
      */
     setParent: (id: string, parentId: string) =>
       call<{ task: Task }>('POST', '/tasks/parent', { id, parentId }).then((r) => r.task),
+    /** Deletes the task for good (with `withChildren` its sub-tasks too); resolves to every deleted id. The service drops their links and queue entries. */
+    remove: (id: string, withChildren = false) =>
+      call<{ deleted: string[] }>('POST', '/tasks/delete', { id, withChildren }).then((r) => r.deleted),
     close: (id: string, withChildren = false) =>
       call<{ tasks: Task[] }>('POST', '/tasks/close', { id, withChildren }).then((r) => r.tasks),
     cliPath: () => call<{ path: string }>('GET', '/cli').then((r) => r.path),

@@ -74,6 +74,13 @@ export interface Tracker {
   setParent(id: string, parentId: string): Promise<Task>;
   /** returns every task it closed */
   close(id: string, opts: { withChildren: boolean }): Promise<Task[]>;
+  /**
+   * Deletes the task for good; returns the ids of every task it deleted (sub-tasks first), so
+   * callers drop what they keep under them. Local: a feature with tickets needs `withChildren`
+   * (the whole folder goes; other files in it refuse). GitHub: `gh issue delete` (repo admins only);
+   * without `withChildren` sub-issues stay as top-level issues.
+   */
+  remove(id: string, opts: { withChildren: boolean }): Promise<string[]>;
 }
 
 export type Exec = (

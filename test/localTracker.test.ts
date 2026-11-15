@@ -399,3 +399,32 @@ test('edit with a blank title is INVALID and writes nothing; a missing task is N
   assert.equal(await readFile(join(root, T2), 'utf8'), before);
   await rejectsWith(createLocalTracker(root).edit('.scratch/example-feature/issues/09-none.md', { title: 'x' }), 'NOT_FOUND');
 });
+
+test('remove deletes a ticket file; tickets that listed it as a blocker lose it', async (t) => {
+  const root = await repo(t);
+  const tracker = createLocalTracker(root);
+  assert.deepEqual(await tracker.remove(T1, { withChildren: false }), [T1]);
+  assert.equal(existsSync(join(root, T1)), false);
+  assert.match(await readFile(join(root, T2), 'utf8'), /\*\*Blocked by:\*\* 07\n/);
+  assert.deepEqual((await tracker.list()).map((x) => x.id), [SPEC, T2]);
+});
+
+test('remove of a feature with tickets needs withChildren; then its whole folder goes', async (t) => {
+  const root = await repo(t);
+  const tracker = createLocalTracker(root);
+  await rejectsWith(tracker.remove(SPEC, { withChildren: false }), 'INVALID', /2 sub-tasks/);
+  assert.equal(existsSync(join(root, T1)), true);
+  assert.deepEqual(await tracker.remove(SPEC, { withChildren: true }), [T1, T2, SPEC]);
+  assert.equal(existsSync(join(root, '.scratch/example-feature')), false);
+  assert.deepEqual(await tracker.list(), []);
+});
+
+test('remove refuses a feature whose folder holds other files, before deleting anything; a missing task is NOT_FOUND', async (t) => {
+  const root = await repo(t);
+  await writeFile(join(root, '.scratch/example-feature/map.md'), '# Map\n');
+  const tracker = createLocalTracker(root);
+  await rejectsWith(tracker.remove(SPEC, { withChildren: true }), 'INVALID', /map\.md/);
+  assert.equal(existsSync(join(root, T1)), true);
+  assert.equal(existsSync(join(root, SPEC)), true);
+  await rejectsWith(tracker.remove('.scratch/example-feature/issues/09-none.md', { withChildren: false }), 'NOT_FOUND');
+});

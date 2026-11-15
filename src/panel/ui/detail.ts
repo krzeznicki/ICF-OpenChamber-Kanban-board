@@ -11,7 +11,8 @@
 // remembered (settings.ts Sections). It draws what it is given and reports choices; the editor
 // (edit.ts) runs them and asks to confirm. The compact row also has a "Parent" picker when the task
 // has a parent or may move under one (link.ts linkChoices). The header's "Edit" turns the Task
-// section into a title and description form (taskEdit.ts) until Save or Cancel.
+// section into a title and description form (taskEdit.ts) until Save or Cancel; "Delete" asks
+// first (edit.ts, taskDelete.ts).
 import { mountBadge, mountBanner, mountButton, mountList, mountSelect, mountSpinner, mountTextField } from '@openchamber/sdk/ui';
 import type { Tone } from '@openchamber/sdk/ui';
 import type { Task, TaskState } from '../../core/types.ts';
@@ -116,6 +117,8 @@ export type DetailCallbacks = {
    * saved): resolves to null on success (the form closes), or the message to show in it.
    */
   onEdit: (from: EditText, draft: EditText) => Promise<string | null>;
+  /** The header's "Delete" (the editor confirms first). */
+  onDelete: () => void;
   /** The user opened or collapsed a section. */
   onSections: (sections: Sections) => void;
   /** "Unarchive" on an archived task: it shows in Done again. */
@@ -242,6 +245,7 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
       disposers.push(
         mountButton(session, { label: 'Edit', variant: 'ghost', size: 'sm', disabled: m.busy, onClick: () => startEdit(m) }).dispose,
       );
+      disposers.push(mountButton(session, { label: 'Delete', variant: 'ghost', size: 'sm', disabled: m.busy, onClick: callbacks.onDelete }).dispose);
     }
     if (m.archived) {
       disposers.push(mountButton(session, { label: 'Unarchive', variant: 'outline', size: 'sm', onClick: callbacks.onUnarchive }).dispose);

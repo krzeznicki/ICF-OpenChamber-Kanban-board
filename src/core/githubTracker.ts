@@ -405,6 +405,27 @@ export const createGithubTracker = (root: string, exec: Exec, labels: ProjectCon
       return get(idOf(n));
     },
 
+    async remove(id, opts) {
+      const { issue, rel } = await load(parseNumber(id));
+      const numbers = [...(opts.withChildren ? rel.children.map((c) => c.number) : []), issue.number];
+      const deleted: string[] = [];
+      for (const n of numbers) {
+        const args = ['issue', 'delete', String(n), '--yes'];
+        const r = await run(args, true);
+        if (r.code !== 0) {
+          const detail = (r.stderr || r.stdout).trim();
+          const done = deleted.length > 0 ? ` (already deleted: ${deleted.join(', ')})` : '';
+          // GitHub lets only repository admins delete issues; anyone who can triage can still close.
+          if (/permission|must have admin|FORBIDDEN/i.test(detail)) {
+            throw new TrackerError('FAILED', `Only repository admins can delete GitHub issues; close it instead${done}. gh: ${detail}`);
+          }
+          throw new TrackerError('FAILED', `${failed(args, r).message}${done}`);
+        }
+        deleted.push(idOf(n));
+      }
+      return deleted;
+    },
+
     async close(id, opts) {
       const { issue, rel } = await load(parseNumber(id));
       const closed: number[] = [];

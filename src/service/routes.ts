@@ -31,6 +31,7 @@ import {
   defaultLinksFile,
   isInside,
   listLinks,
+  removeLinks,
   renameLinks,
   startSession,
   withStatus,
@@ -121,6 +122,11 @@ const newTask = (v: unknown): NewTask => {
         : invalid('"input.blockedBy" must be an array of task ids');
   }
   return task;
+};
+
+const withChildrenOf = (body: Body): boolean => {
+  const w = body.withChildren;
+  return w === undefined ? false : typeof w === 'boolean' ? w : invalid('"withChildren" must be a boolean');
 };
 
 /** The built CLI next to the service bundle (`service/main.js` -> `build/cli/task-board.mjs`). */
@@ -385,6 +391,24 @@ const POST: Record<string, Route> = {
     const w = body.withChildren;
     const withChildren = w === undefined ? false : typeof w === 'boolean' ? w : invalid('"withChildren" must be a boolean');
     return { tasks: await (await tracker(dir, deps)).close(id, { withChildren }) };
+  },
+  /**
+   * Deletes the task (and with `withChildren` its sub-tasks); answers every deleted id. Their session
+   * links and queue entries go too. The delete is done by then, so a failing cleanup is only logged.
+   */
+  '/tasks/delete': async (body, dir, deps) => {
+    const id = str(body, 'id');
+    const deleted = await (await tracker(dir, deps)).remove(id, { withChildren: withChildrenOf(body) });
+    const log = deps.log ?? ((m: string) => console.error(m));
+    for (const taskId of deleted) {
+      try {
+        await removeLinks(linksFile(deps), dir, taskId);
+        await removeFromQueue(queueFile(deps), dir, taskId);
+      } catch (e) {
+        log(`icf-kanban: ${taskId} was deleted, but its session links or queue entry could not be removed: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+    return { deleted };
   },
   '/sessions/start': async (body, dir, deps) => {
     const taskId = str(body, 'taskId');
