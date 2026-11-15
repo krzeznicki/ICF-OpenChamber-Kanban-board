@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.1
 
 - The task modal links existing tasks both ways: a **Parent** picker in the State / Type row moves the task under another open parent (shown read-only when the task has a parent but nowhere else to go), and **Link existing task** in Sub-tasks (next to Add sub-task) makes a chosen task a sub-task of this one. Both offer only what the tracker accepts (`link.ts` `linkChoices`: locally parents are features and a feature with tickets cannot become a sub-task; never the task itself, its current parent or, on GitHub, one of its descendants), search when the list is long, and show the service's error in the modal. A local link gives the task a new id; the open modal follows it and the board reloads.
 - Dropping a card onto another card makes it that card's sub-task (`setParent`). While dragging, a card that accepts it (`link.ts`: locally a feature, not the task itself or its current parent, and a feature with tickets cannot move; on GitHub never one of its own descendants) is highlighted with a dashed outline instead of its column; over any other card the drop is the column move as before. A confirm names both tasks (locally: the task gets a new id and its blockers are dropped); then the board reloads, and a failure shows as a toast. An open task modal showing the dragged task follows it to its new id.
