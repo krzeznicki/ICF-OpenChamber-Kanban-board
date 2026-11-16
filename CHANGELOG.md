@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.4
+
+- The rail panel, opened beside a chat, shows that chat's session's task once the board has loaded: its modal when there is one, a **Tasks in this session** list (column or state per task, a click opens it) when there are several, and a dismissible info banner when no task on the board is worked on in it. A task counts when the session carries it as an item (path A) or `links.json` names it (path B), unless its card was dragged away after the session started (`sessionFocus.ts`). Once per panel opening; the page and panels without a session are unchanged. A chat in a worktree outside every registered project now shows the project its session belongs to (looked up in the projects' session lists) instead of the first project.
+
 ## 0.3.3
 
 - **Search tasks** in the toolbar filters the board as you type: a card stays when every word appears in its title or description (case and accents ignored, so `zadanie` finds `Żądanie`; locally the description without the heading and the `Type` / `Status` / `Blocked by` lines, as the edit form shows it). A matching sub-task brings its parent along, also when **Hide sub-tasks** is on. Progress, blockers and the Review badge still count every task; the search is kept for this panel session only. Escape or the field's clear button empties it; with nothing left the board says **No tasks match**.

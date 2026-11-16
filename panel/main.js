@@ -13761,6 +13761,37 @@ ${body}`);
     return out;
   };
 
+  // src/panel/sessionFocus.ts
+  var tasksForSession = (sessionId, tasks, sessions, links = [], detached2 = /* @__PURE__ */ new Map()) => {
+    const since = /* @__PURE__ */ new Map();
+    const note = (taskId, at) => {
+      if (at > (since.get(taskId) ?? -Infinity)) since.set(taskId, at);
+    };
+    const record4 = sessions.find((s) => s.id === sessionId);
+    if (record4 !== void 0) for (const item of record4.items) note(item.id, record4.createdAt);
+    for (const l of links) if (l.sessionId === sessionId) note(l.taskId, l.createdAt ?? 0);
+    return tasks.filter((t) => {
+      const at = since.get(t.id);
+      return at !== void 0 && at >= (detached2.get(t.id) ?? 0);
+    });
+  };
+  var createSessionFocus = (sessionId) => {
+    let decided = sessionId === null;
+    return {
+      next: (board2) => {
+        if (decided || sessionId === null) return { kind: "skip" };
+        if (!board2.ready) return { kind: "wait" };
+        decided = true;
+        return decide(tasksForSession(sessionId, board2.tasks, board2.sessions, board2.links, board2.detached));
+      }
+    };
+  };
+  var decide = (tasks) => {
+    const first = tasks[0];
+    if (first === void 0) return { kind: "none" };
+    return tasks.length === 1 ? { kind: "open", taskId: first.id } : { kind: "list", tasks: [...tasks] };
+  };
+
   // src/panel/ui/card.ts
   var typeTone = (type) => type === "bug" ? "error" : type === "enhancement" ? "info" : "neutral";
   var sessionBadge = (s) => {
@@ -13879,8 +13910,9 @@ ${body}`);
       toolbar.prepend(badge2);
     }
     const status = div3("kb-status");
+    const sessionNote = div3("kb-session-note");
     const columns = div3("kb-columns");
-    shell.append(toolbar, status, columns);
+    shell.append(toolbar, status, sessionNote, columns);
     root.replaceChildren(shell);
     const project2 = mountSelect(projectSlot, {
       value: null,
@@ -13914,6 +13946,14 @@ ${body}`);
     mountButton(settingsSlot, { label: "Settings", variant: "outline", size: "sm", onClick: callbacks.onSettings });
     const refresh = mountButton(refreshSlot, { label: "Refresh", variant: "outline", size: "sm", onClick: callbacks.onRefresh });
     let statusDispose = null;
+    let sessionNoteDispose = null;
+    const setSessionNote = (text3) => {
+      sessionNoteDispose?.();
+      sessionNoteDispose = null;
+      sessionNote.replaceChildren();
+      if (text3 === null) return;
+      sessionNoteDispose = mountBanner(sessionNote, { tone: "info", title: text3, action: { label: "Dismiss", onClick: () => setSessionNote(null) } }).dispose;
+    };
     let cardDisposers = [];
     const doneTools = (done) => {
       const tools = div3("kb-column-tools");
@@ -13946,6 +13986,8 @@ ${body}`);
           disabled: options.length === 0
         });
       },
+      /** A dismissible info banner above the columns (the rail panel's session note); null removes it. */
+      setSessionNote,
       setBusy: (busy) => refresh.update({ loading: busy, disabled: busy }),
       setStatus: (next) => {
         statusDispose?.();
@@ -14013,6 +14055,52 @@ ${body}`);
     action: { label: model.action, onClick: onAction }
   }).dispose;
 
+  // src/panel/ui/sessionTasks.ts
+  var openSessionTasks = (rows, onOpen) => {
+    const disposers = [];
+    let closed = false;
+    const close = () => {
+      if (closed) return;
+      closed = true;
+      for (const d of disposers) d();
+      shell.dispose();
+    };
+    const shell = openModalShell({ label: "Tasks in this session", onDismiss: close, className: "kb-session-tasks" });
+    const head = document.createElement("header");
+    head.className = "kb-modal-head";
+    const top = document.createElement("div");
+    top.className = "kb-sheet-head";
+    const titles = document.createElement("div");
+    titles.className = "kb-sheet-titles";
+    const title = document.createElement("h2");
+    title.className = "kb-sheet-title";
+    title.textContent = "Tasks in this session";
+    const note = document.createElement("p");
+    note.className = "kb-muted";
+    note.textContent = `This session works on ${rows.length} tasks on the board. Open one:`;
+    titles.append(title, note);
+    const closeSlot = document.createElement("div");
+    closeSlot.className = "kb-sheet-x";
+    top.append(titles, closeSlot);
+    head.append(top);
+    const list2 = document.createElement("div");
+    list2.className = "kb-session-task-list";
+    shell.modal.append(head, list2);
+    disposers.push(
+      mountCloseButton(closeSlot, close),
+      mountList(list2, {
+        items: rows.map((r) => ({ id: r.id, title: r.title, subtitle: r.id, badge: { label: r.status, tone: r.tone } })),
+        onSelect: (id) => {
+          close();
+          onOpen(id);
+        },
+        ariaLabel: "Tasks in this session"
+      }).dispose
+    );
+    shell.modal.focus();
+    return close;
+  };
+
   // src/panel/ui/styles.ts
   var CSS2 = `
 html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg); font-family: var(--oc-font); }
@@ -14025,6 +14113,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
 .kb-test-badge { font-weight: 700; font-size: 0.75em; letter-spacing: 0.06em; padding: 0.125rem 0.5rem; border-radius: var(--oc-radius);
   border: 1px solid var(--oc-warning, #d97706); color: var(--oc-warning-text, var(--oc-fg)); }
 .kb-status:empty { display: none; }
+.kb-session-note:empty { display: none; }
 .kb-columns { display: flex; gap: 0.75rem; align-items: flex-start; overflow-x: auto; padding-bottom: 0.25rem; }
 .kb-column { flex: 1 0 15rem; min-width: 15rem; display: flex; flex-direction: column; gap: 0.5rem;
   background: var(--oc-muted-surface); border: 1px solid var(--oc-border); border-radius: var(--oc-radius); padding: 0.5rem; }
@@ -14095,6 +14184,8 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
 .kb-modal { width: min(900px, 100%); max-height: calc(100vh - 4rem); overflow-y: auto; display: flex; flex-direction: column;
   gap: 0.25rem; padding: 0 1.25rem 1.25rem; background: var(--oc-bg); color: var(--oc-fg); border: 1px solid var(--oc-border);
   border-radius: var(--oc-radius); box-shadow: 0 16px 48px rgb(0 0 0 / 0.3); outline: none; }
+.kb-modal.kb-session-tasks { width: min(560px, 100%); }
+.kb-session-task-list { padding-top: 0.75rem; }
 :root[data-oc-surface="panel"] .kb-modal-backdrop { padding: 0; }
 :root[data-oc-surface="panel"] .kb-modal { width: 100%; height: 100%; max-height: none; border: 0; border-radius: 0; padding: 0 0.75rem 0.75rem; }
 .kb-modal-head { position: sticky; top: 0; z-index: 1; background: var(--oc-bg); display: flex; flex-direction: column; gap: 0.5rem;
@@ -14250,7 +14341,9 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     projectId: null,
     pinned: false,
     hostDirectory: null,
+    sessionProject: null,
     sessions: [],
+    sessionsReady: false,
     config: null,
     tasks: null,
     hideSubtasks: false,
@@ -14466,6 +14559,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
       showArchived: state.showArchived
     });
     auditLinks();
+    focusSession();
     if (state.tasks.length > 0 && state.query.trim() !== "" && Object.values(shown).every((cards) => cards.length === 0)) {
       board.setStatus({ kind: "empty", title: "No tasks match", body: `Nothing has "${state.query.trim()}" in its title or description.` });
     } else if (state.tasks.length === 0) {
@@ -14620,6 +14714,8 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     state.projectSettings = {};
     if (id !== null) void loadProjectSettings(id);
     state.sessions = [];
+    state.sessionsReady = false;
+    board.setSessionNote(null);
     state.detached = /* @__PURE__ */ new Map();
     state.detachedFor = null;
     state.archived = /* @__PURE__ */ new Set();
@@ -14642,19 +14738,25 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
       const unsubscribe = await host.onSessions(id, (snapshot) => {
         if (snapshot.projectId !== state.projectId) return;
         state.sessions = snapshot.sessions;
+        if (snapshot.state !== "loading") state.sessionsReady = true;
         starter.onSnapshot();
         draw();
       });
       if (state.projectId === id) unsubscribeSessions = unsubscribe;
       else unsubscribe();
     } catch {
+      if (state.projectId === id) {
+        state.sessionsReady = true;
+        draw();
+      }
     }
   };
   var projectOptions = () => state.projects.map((p) => ({ id: p.id, label: p.name, hint: p.directory }));
   var followHost = () => {
     const current = project();
     if (state.pinned && current !== null) return;
-    const next = projectFor(state.hostDirectory) ?? current ?? state.projects[0] ?? null;
+    const bySession = state.sessionProject !== null && state.sessionProject.directory === state.hostDirectory ? state.sessionProject.projectId : null;
+    const next = projectFor(state.hostDirectory) ?? state.projects.find((p) => p.id === bySession) ?? current ?? state.projects[0] ?? null;
     void selectProject(next?.id ?? null);
   };
   var summaryRedraw = false;
@@ -14827,6 +14929,50 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     unarchivedAt.set(id, new Map(removedFor(id)).set(taskId, Date.now()));
     setArchivedTasks(id, unarchiveTask(archivedTasks(), taskId));
   };
+  var sessionFocus = createSessionFocus(null);
+  var panelSession = null;
+  var sessionProjectAsked = false;
+  var projectsSettled = false;
+  var sessionProjectPending = false;
+  var findSessionProject = async () => {
+    const sessionId = panelSession;
+    if (sessionId === null || sessionProjectAsked || projectFor(state.hostDirectory) !== null) return;
+    sessionProjectAsked = true;
+    sessionProjectPending = true;
+    const directory = state.hostDirectory;
+    const lists2 = await Promise.allSettled(state.projects.map((p) => host.listSessions(p.id)));
+    sessionProjectPending = false;
+    for (const r of lists2) {
+      const record4 = r.status === "fulfilled" ? r.value.sessions.find((s) => s.id === sessionId) : void 0;
+      if (record4 === void 0) continue;
+      state.sessionProject = { directory, projectId: record4.projectId };
+      if (!state.pinned && state.hostDirectory === directory && projectFor(directory) === null && state.projectId !== record4.projectId) {
+        followHost();
+        return;
+      }
+      break;
+    }
+    draw();
+  };
+  var focusSession = () => {
+    const tasks = state.tasks ?? [];
+    const focus = sessionFocus.next({
+      ready: projectsSettled && !sessionProjectPending && state.view === "board" && state.tasks !== null && state.sessionsReady,
+      tasks,
+      sessions: state.sessions,
+      links: starter.links(),
+      detached: detached()
+    });
+    if (focus.kind === "open") queueMicrotask(() => editor.showDetail(focus.taskId));
+    else if (focus.kind === "none") board.setSessionNote("No task on this board is being worked on in this session.");
+    else if (focus.kind === "list") {
+      const rows = focus.tasks.map((t) => {
+        const column = state.columns.get(t.id);
+        return { id: t.id, title: t.title, status: COLUMNS.find((c) => c.id === column)?.title ?? t.state, tone: stateTone(t.state) };
+      });
+      queueMicrotask(() => openSessionTasks(rows, (id) => editor.showDetail(id)));
+    }
+  };
   var checkSessions = async (sessionIds) => {
     const projectId = state.projectId;
     const lists2 = await Promise.allSettled(state.projects.map((p) => host.listSessions(p.id)));
@@ -14870,6 +15016,10 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     });
     const root = document.getElementById("root") ?? document.body;
     state.hostDirectory = ctx.directory;
+    if (ctx.surface === "panel") {
+      panelSession = ctx.session?.id ?? null;
+      sessionFocus = createSessionFocus(panelSession);
+    }
     board = createBoard(root, {
       onProject: (id) => {
         state.pinned = true;
@@ -14949,6 +15099,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     void loadGlobalSettings();
     board.setStatus({ kind: "loading" });
     host.onDirectory((dir) => {
+      if (dir !== state.hostDirectory) sessionFocus = createSessionFocus(null);
       state.hostDirectory = dir;
       if (state.projects.length > 0) followHost();
     });
@@ -14958,6 +15109,11 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
       if (snapshot.state === "loading" && snapshot.projects.length === 0) return;
       if (state.projectId !== null && project() === null) state.pinned = false;
       followHost();
+      if (snapshot.state !== "loading") {
+        projectsSettled = true;
+        void findSessionProject();
+        draw();
+      }
     }).catch((e) => {
       board.setStatus({
         kind: "banner",

@@ -63,8 +63,11 @@ export const createBoard = (root: HTMLElement, callbacks: BoardCallbacks) => {
     toolbar.prepend(badge);
   }
   const status = div('kb-status');
+  // The rail panel's note for its chat's session (sessionFocus.ts): independent of the status slot,
+  // which every draw resets.
+  const sessionNote = div('kb-session-note');
   const columns = div('kb-columns');
-  shell.append(toolbar, status, columns);
+  shell.append(toolbar, status, sessionNote, columns);
   root.replaceChildren(shell);
 
   const project = mountSelect(projectSlot, {
@@ -101,6 +104,14 @@ export const createBoard = (root: HTMLElement, callbacks: BoardCallbacks) => {
   const refresh = mountButton(refreshSlot, { label: 'Refresh', variant: 'outline', size: 'sm', onClick: callbacks.onRefresh });
 
   let statusDispose: (() => void) | null = null;
+  let sessionNoteDispose: (() => void) | null = null;
+  const setSessionNote = (text: string | null): void => {
+    sessionNoteDispose?.();
+    sessionNoteDispose = null;
+    sessionNote.replaceChildren();
+    if (text === null) return;
+    sessionNoteDispose = mountBanner(sessionNote, { tone: 'info', title: text, action: { label: 'Dismiss', onClick: () => setSessionNote(null) } }).dispose;
+  };
   let cardDisposers: Array<() => void> = [];
 
   /** "Archive done" and "Show archived (N)" under the Done header; disposed with the cards. */
@@ -136,6 +147,8 @@ export const createBoard = (root: HTMLElement, callbacks: BoardCallbacks) => {
         disabled: options.length === 0,
       });
     },
+    /** A dismissible info banner above the columns (the rail panel's session note); null removes it. */
+    setSessionNote,
     setBusy: (busy: boolean) => refresh.update({ loading: busy, disabled: busy }),
     setStatus: (next: BoardStatus) => {
       statusDispose?.();

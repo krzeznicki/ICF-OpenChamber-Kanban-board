@@ -132,6 +132,16 @@ Sections fold open and shut; which ones are open is remembered for every task in
 
 The session behind **Open session** is checked before it opens. A session the board knows only from `~/.icf-kanban/links.json` (path B) is looked up in every project's session list first and opens only when it is there and not archived. (In 0.1 a click on a Review or Done card whose session had been archived opened an unrelated session of another project: the link's live status reads `idle` for an archived session too, and OpenChamber was asked to open an id it no longer listed.) The board also looks up such finished link-only sessions on its own (once per panel session): one found archived no longer places its card, which leaves Review for the column of its tracker state. Those ids are remembered per project in the extension's storage (`archivedSessions:<projectId>`, only while a link still names them).
 
+### The rail panel opens this chat's task
+
+Opened from the **Kanban Board** icon beside a chat, the board shows what that chat's session works on, once it has loaded:
+
+- one task: its modal opens;
+- several tasks: a **Tasks in this session** list with each task's column (or state); a click opens the task;
+- none: an info banner above the board, **No task on this board is being worked on in this session**, with **Dismiss**.
+
+A task counts when the session was started from its card (OpenChamber's start, or the service's in `links.json`), unless the card was dragged away from it to Backlog or Ready afterwards. It happens once per opening of the panel; switching chats while the panel stays open changes nothing. The full-screen page and a panel with no session open the board as before. When the chat runs in a worktree outside every registered project, the board shows the project the session belongs to.
+
 ## Parents and orchestration
 
 A parent (a feature with sub-tasks) is a card too, with its progress (`2/5 sub-tasks done`). Sub-tasks are drawn indented under their parent when both sit in the same column; **Hide sub-tasks** in the toolbar hides them.
@@ -304,6 +314,7 @@ Not done yet; each needs the extension installed in OpenChamber:
 11. Archive done: the confirm counts the done tasks; after it Done is empty in both the rail panel and the full-screen page; **Show archived** and **Unarchive** work; reopening an archived task (CLI or GitHub) brings it back without a click.
 12. Type and state suggested: a task added with both on **Let the model pick** gets a type and state from the Small Model a moment later; one with a type picked keeps it; with no Small Model set, one notice and the form stops offering it.
 13. Search tasks: typing filters the cards in both the rail panel and the page, a sub-task match shows its parent, Escape clears it, and dragging still works while filtered (a card dropped at the end of a filtered column goes after the hidden cards too).
+14. The rail panel in a chat: a chat started from one card opens that card's modal; from an orchestrator and a second card, the list; a chat started by hand, the banner; a chat in an OpenChamber worktree shows its own project.
 
 ## Development
 

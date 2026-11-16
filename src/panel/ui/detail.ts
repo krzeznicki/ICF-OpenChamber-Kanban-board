@@ -129,7 +129,7 @@ export type DetailCallbacks = {
 
 export type DetailOptions = { sections: Sections };
 
-const stateTone = (state: TaskState): Tone =>
+export const stateTone = (state: TaskState): Tone =>
   state === 'done' ? 'success' : state === 'ready-for-agent' ? 'primary' : state === 'wontfix' ? 'neutral' : state === 'ready-for-human' ? 'info' : 'warning';
 
 export type DetailHandle = { update: (model: DetailModel) => void; dispose: () => void };
