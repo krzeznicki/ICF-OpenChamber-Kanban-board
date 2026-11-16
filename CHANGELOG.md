@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.2
 
 - Changed: Break down and orchestrate is the default only for a task that has sub-tasks; any other task starts with its type's preset (`bug` → Diagnose, `research` → Plan, …), even a local top-level task. Locally every top-level task is a parent, so bugs used to get Break down and orchestrate. A research task that adds sub-tasks switches to orchestrate by itself.
 - Changed: **Let the model pick** gives a task that is not described completely enough to implement the `research` type (when the board has it), so it starts with Plan; a type you pick yourself is never changed.
