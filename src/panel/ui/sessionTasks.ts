@@ -7,6 +7,7 @@ import { openModalShell } from './modal.ts';
 
 export type SessionTaskRow = { id: string; title: string; status: string; tone: Tone };
 
+/** Opens the list over the board; a row's click closes it and opens that task. Returns close. */
 export const openSessionTasks = (rows: readonly SessionTaskRow[], onOpen: (taskId: string) => void): (() => void) => {
   const disposers: Array<() => void> = [];
   let closed = false;

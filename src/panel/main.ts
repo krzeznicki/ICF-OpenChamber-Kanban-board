@@ -548,6 +548,8 @@ const selectProject = async (id: string | null): Promise<void> => {
   if (id !== null) void loadProjectSettings(id);
   state.sessions = [];
   state.sessionsReady = false;
+  // The note spoke about the project the panel opened on.
+  board.setSessionNote(null);
   state.detached = new Map();
   state.detachedFor = null;
   state.archived = new Set();
@@ -837,9 +839,11 @@ const unarchive = (taskId: string): void => {
 let sessionFocus = createSessionFocus(null);
 /** The rail panel's session id (set in start()), for finding its project once. */
 let panelSession: string | null = null;
+/** The session's project was looked up already (findSessionProject runs once per frame). */
 let sessionProjectAsked = false;
-/** The panel's project is still being settled: projects loading, or the session's project looked up. */
+/** The host's project list has loaded: until then the shown project may be a fallback. */
 let projectsSettled = false;
+/** The session's project is being looked up: the focus waits, the shown project may still change. */
 let sessionProjectPending = false;
 
 /** The panel's chat lies outside every project (a worktree): its session record names the project. */
@@ -1038,6 +1042,9 @@ const start = (ctx: HostReadyContext): void => {
   board.setStatus({ kind: 'loading' });
 
   host.onDirectory((dir) => {
+    // The user moved to another chat before the board decided: what was decided for the chat the
+    // panel opened in would land on another one, so the panel shows nothing (once per opening).
+    if (dir !== state.hostDirectory) sessionFocus = createSessionFocus(null);
     state.hostDirectory = dir;
     if (state.projects.length > 0) followHost();
   });

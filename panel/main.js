@@ -14715,6 +14715,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     if (id !== null) void loadProjectSettings(id);
     state.sessions = [];
     state.sessionsReady = false;
+    board.setSessionNote(null);
     state.detached = /* @__PURE__ */ new Map();
     state.detachedFor = null;
     state.archived = /* @__PURE__ */ new Set();
@@ -15098,6 +15099,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     void loadGlobalSettings();
     board.setStatus({ kind: "loading" });
     host.onDirectory((dir) => {
+      if (dir !== state.hostDirectory) sessionFocus = createSessionFocus(null);
       state.hostDirectory = dir;
       if (state.projects.length > 0) followHost();
     });
