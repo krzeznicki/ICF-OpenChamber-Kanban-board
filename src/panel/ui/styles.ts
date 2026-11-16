@@ -47,6 +47,12 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
 :root.kb-dragging, :root.kb-dragging * { cursor: grabbing !important; }
 .kb-column.is-drop-target { border-color: var(--oc-primary); box-shadow: inset 0 0 0 1px var(--oc-primary); }
 .kb-card.is-link-target { border-color: var(--oc-primary); border-style: dashed; box-shadow: 0 0 0 2px var(--oc-primary); }
+/* Where a card dragged within its column goes: a line in the gap (no layout shift above it). */
+.kb-card.is-insert-before { position: relative; }
+.kb-card.is-insert-before::before { content: ''; position: absolute; left: -1px; right: -1px; top: calc(-0.25rem - 2.5px); height: 3px;
+  border-radius: 2px; background: var(--oc-primary); pointer-events: none; }
+.kb-cards.is-insert-end::after { content: ''; height: 3px; margin-top: calc(-0.25rem - 1.5px); border-radius: 2px;
+  background: var(--oc-primary); pointer-events: none; }
 .kb-add-error:empty { display: none; }
 .kb-fields { display: flex; flex-wrap: wrap; gap: 0.5rem; }
 .kb-field { flex: 1 1 10rem; min-width: 0; }
@@ -142,6 +148,13 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
 .kb-add-sub-row .kb-add-sub-type { flex: 0 1 11rem; }
 .kb-add-sub-row .kb-add-sub-title { flex: 1 1 14rem; }
 .kb-add-sub { padding-top: 0.25rem; }
+.kb-add-sub-head { display: flex; align-items: center; gap: 0.5rem; }
+.kb-add-sub-modes { flex: 1 1 auto; min-width: 0; }
+.kb-add-sub-cancel { flex: 0 0 auto; }
+.kb-sheet-part.kb-sub-rows { gap: 0.25rem; }
+.kb-sub-row { display: flex; align-items: center; gap: 0.5rem; }
+.kb-sub-row-item { flex: 1 1 auto; min-width: 0; }
+.kb-sub-row-action { flex: 0 0 auto; }
 :root[data-oc-surface="panel"] .kb-columns { flex-direction: column; align-items: stretch; overflow-x: visible; }
 :root[data-oc-surface="panel"] .kb-column { flex: 0 0 auto; min-width: 0; }
 `;

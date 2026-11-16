@@ -2,12 +2,13 @@
 // State is a triage label (strings from triage-labels.md), closed = done. Type is the `bug` /
 // `enhancement` label or a `type:<x>` label. Parents are issues with sub-issues.
 import type { LabelRole, ProjectConfig } from './config.ts';
-import type { Exec, NewTask, Task, TaskState, Tracker } from './types.ts';
+import type { Exec, NewTask, Task, TaskEdit, TaskState, Tracker } from './types.ts';
 import { TrackerError } from './types.ts';
 
 /**
  * gh 2.94.0 (released 2026-06-10) added `gh issue create --parent` and `--blocked-by`, which create() uses (checked against its release notes and `gh issue create --help` of 2.103),
- * and `gh issue edit --parent` (replaces an existing parent), which setParent() uses (checked against pkg/cmd/issue/edit/edit.go at v2.94.0).
+ * and `gh issue edit --parent` (replaces an existing parent), which setParent() uses (checked against pkg/cmd/issue/edit/edit.go at v2.94.0),
+ * and `gh issue edit --remove-parent`, which removeParent() uses (same file, same version).
  */
 const MIN_GH: [number, number] = [2, 94];
 const DONE_WINDOW_MS = 30 * 24 * 3600 * 1000;
@@ -302,6 +303,28 @@ export const createGithubTracker = (root: string, exec: Exec, labels: ProjectCon
     return get(idOf(issue.number));
   };
 
+  /**
+   * `n` and every issue under it, closed ones too (subIssues lists both), deepest first, so a
+   * delete never leaves a sub-issue whose parent is gone. Read before anything is deleted: an issue
+   * with more sub-issues than one page shows is refused rather than half deleted.
+   */
+  const subtree = async (n: number, rel: Relations): Promise<number[]> => {
+    const out: number[] = [];
+    const seen = new Set<number>([n]);
+    const walk = async (at: number, r: Relations): Promise<void> => {
+      if (r.childCount > r.children.length) {
+        throw new TrackerError('INVALID', `${idOf(at)} has ${r.childCount} sub-issues, more than can be deleted at once; delete some of them first`);
+      }
+      const fresh = r.children.map((c) => c.number).filter((c) => !seen.has(c));
+      for (const c of fresh) seen.add(c);
+      const found = fresh.length === 0 ? new Map<number, GraphIssue | null>() : await graph(fresh, false);
+      for (const c of fresh) await walk(c, relationsOf(found.get(c) ?? null));
+      out.push(at);
+    };
+    await walk(n, rel);
+    return out;
+  };
+
   return {
     preflight: ready,
     setupLabels: () => ensureLabels([...stateLabels, ...CATEGORIES]),
@@ -364,6 +387,19 @@ export const createGithubTracker = (root: string, exec: Exec, labels: ProjectCon
       return get(idOf(issue.number));
     },
 
+    async edit(id: string, changes: TaskEdit) {
+      const n = parseNumber(id);
+      if (changes.title !== undefined && (typeof changes.title !== 'string' || changes.title.trim() === '')) {
+        throw new TrackerError('INVALID', 'Title is required');
+      }
+      if (changes.body !== undefined && typeof changes.body !== 'string') throw new TrackerError('INVALID', 'The description must be a string');
+      const args = ['issue', 'edit', String(n)];
+      if (changes.title !== undefined) args.push('--title', changes.title.trim());
+      if (changes.body !== undefined) args.push('--body', changes.body);
+      if (args.length > 3) await run(args);
+      return get(idOf(n));
+    },
+
     async claim(id) {
       const { task, issue } = await load(parseNumber(id));
       if (task.kind === 'parent') throw new TrackerError('INVALID', `Only a sub-task can be claimed, not a parent issue: ${task.id}`);
@@ -389,6 +425,37 @@ export const createGithubTracker = (root: string, exec: Exec, labels: ProjectCon
       }
       // gh replaces an existing parent; the issue keeps its number, so the id does not change.
       await run(['issue', 'edit', String(n), '--parent', String(p)]);
+      return get(idOf(n));
+    },
+
+    async remove(id, opts) {
+      const { issue, rel } = await load(parseNumber(id));
+      const numbers = opts.withChildren ? await subtree(issue.number, rel) : [issue.number];
+      const deleted: string[] = [];
+      for (const n of numbers) {
+        const args = ['issue', 'delete', String(n), '--yes'];
+        const r = await run(args, true);
+        if (r.code !== 0) {
+          const detail = (r.stderr || r.stdout).trim();
+          const done = deleted.length > 0 ? ` (already deleted: ${deleted.join(', ')})` : '';
+          // GitHub lets only repository admins delete issues; anyone who can triage can still close.
+          if (/permission|must have admin|FORBIDDEN/i.test(detail)) {
+            throw new TrackerError('FAILED', `Only repository admins can delete GitHub issues; close it instead${done}. gh: ${detail}`);
+          }
+          throw new TrackerError('FAILED', `${failed(args, r).message}${done}`);
+        }
+        deleted.push(idOf(n));
+      }
+      return deleted;
+    },
+
+    async removeParent(id) {
+      const n = parseNumber(id);
+      // Only the relations are needed (like setParent): graph() without the issue fields, not load().
+      const found = (await graph([n], false)).get(n) ?? null;
+      if (found === null) throw new TrackerError('NOT_FOUND', `Issue not found: ${idOf(n)}`);
+      if (relationsOf(found).parent === null) throw new TrackerError('INVALID', `${idOf(n)} has no parent issue to remove`);
+      await run(['issue', 'edit', String(n), '--remove-parent']);
       return get(idOf(n));
     },
 

@@ -332,7 +332,8 @@ export const createStarter = (deps: StarterDeps) => {
       fail(`Could not read the card's start options: ${errorText(e)}`);
       return;
     }
-    let opts = resolveStart(ctx.settings, task, card, ctx.presets);
+    const subtasks = (deps.tasks() ?? []).some((t) => t.parentId === task.id);
+    let opts = resolveStart(ctx.settings, { type: task.type, subtasks }, card, ctx.presets);
     if (!ctx.settings.autoStart) {
       const picked = await askStart(task.title, opts, ctx.presets, deps.lists);
       if (picked === null) return;

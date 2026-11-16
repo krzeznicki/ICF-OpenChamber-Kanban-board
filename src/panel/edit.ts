@@ -3,7 +3,7 @@
 // drags of it are ignored), reports a failure in a toast and reloads the board afterwards.
 import type { HostClient } from '@openchamber/sdk';
 import type { NewTask, Task, TaskState } from '../core/types.ts';
-import { MODEL_PICK, canAddSubtask, createWithSubtasks, existingToLink, parentChoices, partialMessage, subtasksToCreate, toNewTask, type AddDraft } from './addTask.ts';
+import { MODEL_PICK, type TrackerKind, canAddSubtask, createWithSubtasks, existingToLink, parentChoices, partialMessage, subtasksToCreate, toNewTask, type AddDraft } from './addTask.ts';
 import type { Api } from './api.ts';
 import type { Preset } from './presets.ts';
 import type { StartLists } from './models.ts';
@@ -16,7 +16,9 @@ import type { Board } from './ui/board.ts';
 import { askChoice } from './ui/confirm.ts';
 import { openDetail, type DetailHandle, type DetailModel, type SessionView, type SummaryModel } from './ui/detail.ts';
 import { attachDrag } from './ui/dnd.ts';
-import { canLinkUnder, followingSetParent, linkChoices, linkConfirm } from './link.ts';
+import { canLinkUnder, followingMove, linkChoices, linkConfirm, unlinkConfirm } from './link.ts';
+import { deleteConfirm } from './taskDelete.ts';
+import { editChanges, editConflict, editableText, type EditText } from './taskEdit.ts';
 
 export type EditorDeps = {
   host: HostClient;
@@ -24,7 +26,7 @@ export type EditorDeps = {
   /** Null when no board is shown (no project, wizard, notice). */
   api: () => Api | null;
   tasks: () => Task[];
-  tracker: () => 'local' | 'github';
+  tracker: () => TrackerKind;
   labels: () => Record<string, string>;
   /** Where a listed task is drawn now; null when hidden (e.g. "Hide sub-tasks"). */
   columnOf: (id: string) => Column | null;
@@ -50,6 +52,15 @@ export type EditorDeps = {
     /** Only ever called with an id that is `open` in a host snapshot. */
     open: (sessionId: string) => void;
   };
+  /** The manual card order (order.ts), kept in the panel's storage. */
+  order: {
+    /** A card dropped in its own column before `before` (null: last). */
+    reorder: (taskId: string, column: Column, before: string | null) => void;
+    /** A task got a new id (a local link moved it): it keeps its place. */
+    rename: (from: string, to: string) => void;
+    /** Tasks were deleted: their places go. */
+    forget: (taskIds: readonly string[]) => void;
+  };
   /** "Archive done" (archive.ts): whether a task is archived, and the modal's "Unarchive". */
   archive: { has: (task: Task) => boolean; unarchive: (taskId: string) => void };
   /** Which modal sections are open (device storage). */
@@ -64,6 +75,13 @@ export type EditorDeps = {
     save: (projectId: string, taskId: string, card: CardOptions) => void;
     /** A task got a new id (a local link moved it): its stored options go under that id, the old key is deleted. */
     move: (projectId: string, from: string, to: string) => Promise<void>;
+    /** A task was deleted: its stored options go. */
+    forget: (projectId: string, taskId: string) => Promise<void>;
+    /**
+     * The task was created with "No type" in the Add task modal: the Small Model never picks its
+     * type (suggest.ts createTypeClassifier). `move` and `forget` take this mark along.
+     */
+    markNoType: (projectId: string, taskId: string) => Promise<void>;
   };
   /** The personal summary in the task modal (summaries.ts). */
   summary: {
@@ -81,21 +99,6 @@ export type EditorDeps = {
 };
 
 const errorText = (e: unknown): string => (e instanceof Error ? e.message : String(e));
-
-/** The fields resolveStart reads for a task not created yet (type and kind are filled in). */
-const NEW_TASK: Task = {
-  id: '',
-  kind: 'ticket',
-  title: '',
-  body: '',
-  state: 'needs-triage',
-  type: null,
-  parentId: null,
-  blockedBy: [],
-  url: null,
-  updatedAt: 0,
-  claimed: false,
-};
 
 export const createEditor = (deps: EditorDeps) => {
   const moving = new Set<string>();
@@ -187,7 +190,7 @@ export const createEditor = (deps: EditorDeps) => {
           : {
               presets: ctx.presets,
               card: mine?.options ?? {},
-              inherited: resolveStart(ctx.settings, task, {}, ctx.presets),
+              inherited: resolveStart(ctx.settings, { type: task.type, subtasks: tasks.some((t) => t.parentId === task.id) }, {}, ctx.presets),
               summaryLanguage: ctx.settings.summary.language,
               version: mine?.version ?? -1,
             },
@@ -204,6 +207,7 @@ export const createEditor = (deps: EditorDeps) => {
           ...offered,
         };
       })(),
+      text: editableText(deps.tracker(), task),
     };
   };
 
@@ -238,62 +242,84 @@ export const createEditor = (deps: EditorDeps) => {
     else detail.handle.update(detailModel(task));
   };
 
-  const run = async (id: string, action: (api: Api) => Promise<unknown>): Promise<void> => {
-    const api = deps.api();
-    if (api === null || moving.has(id)) return;
+  /**
+   * Every write of the panel: marks `id` busy (drawn so, further drags ignored) while `action` runs,
+   * then reloads the board; `after` runs once the reload is done. The caller checks `moving` first.
+   */
+  const busyWhile = async <T>(id: string, action: () => Promise<T>, after?: () => void): Promise<T> => {
     moving.add(id);
     deps.redraw();
     refreshDetail();
     try {
-      await action(api);
-    } catch (e) {
-      fail(errorText(e));
+      return await action();
     } finally {
       moving.delete(id);
       await deps.reload();
+      after?.();
       refreshDetail();
     }
   };
 
+  /** A write whose failure is a toast. */
+  const run = async (id: string, action: (api: Api) => Promise<unknown>): Promise<void> => {
+    const api = deps.api();
+    if (api === null || moving.has(id)) return;
+    await busyWhile(id, () => action(api).then(() => undefined, (e: unknown) => fail(errorText(e))));
+  };
+
+  /** A write whose failure comes back as text for the caller to show (null: done). */
+  const attempt = (action: () => Promise<unknown>): Promise<string | null> =>
+    action().then(
+      () => null,
+      (e: unknown) => errorText(e),
+    );
+
   /**
    * The api's setParent as every link of the panel uses it: a task that comes back with a new id
-   * (local: its file moved) is followed by the open modal, and its stored start options move to
-   * that id (the service re-keys its session links and queue entry).
+   * (local: its file moved) is followed by the open modal, its place in the manual order and its
+   * stored start options move to that id (the service re-keys its session links and queue entry).
    */
-  const setParentOf = (api: Api) =>
-    followingSetParent(
-      api.setParent,
+  const following = <A extends unknown[]>(op: (id: string, ...rest: A) => Promise<Task>) =>
+    followingMove(
+      op,
       async (from, to) => {
         follow(from, to);
+        deps.order.rename(from, to);
         const ctx = deps.start.context();
         if (ctx !== null) await deps.start.move(ctx.projectId, from, to);
       },
       (from, to, e) => fail(`${from} is now ${to}, but its start options could not follow: ${errorText(e)}`),
     );
+  const setParentOf = (api: Api) => following(api.setParent);
 
   /**
    * Links `childId` under `parentId`: the modal's Parent picker and "Link existing task", and a
    * card dropped onto a card. Resolves to null, or the service's error for the caller to show.
    */
-  const linkTask = async (childId: string, parentId: string): Promise<string | null> => {
+  const linkTask = (childId: string, parentId: string): Promise<string | null> =>
+    relink(childId, async (api) => {
+      const moved = await setParentOf(api)(childId, parentId);
+      info(moved.id !== childId ? `Linked ${childId} under ${parentId}; it is now ${moved.id}` : `Linked ${childId} under ${parentId}`);
+    });
+
+  /**
+   * Unlinks `childId` from its parent: "No parent" in the Parent picker, and "Unlink" in a parent's
+   * sub-task list (after a confirm). Resolves to null, or the service's error for the caller to show.
+   */
+  const unlinkTask = (childId: string): Promise<string | null> =>
+    relink(childId, async (api) => {
+      const moved = await following(api.removeParent)(childId);
+      info(moved.id !== childId ? `Unlinked ${childId} from its parent; it is now ${moved.id}` : `Unlinked ${childId} from its parent`);
+    });
+
+  /** Marks `childId` busy while `action` changes its parent, then reloads; an error comes back as text. */
+  const relink = async (childId: string, action: (api: Api) => Promise<void>): Promise<string | null> => {
     const api = deps.api();
     if (api === null) return 'No project is open.';
     if (moving.has(childId)) return null;
-    moving.add(childId);
-    deps.redraw();
-    refreshDetail();
-    try {
-      const moved = await setParentOf(api)(childId, parentId);
-      info(moved.id !== childId ? `Linked ${childId} under ${parentId}; it is now ${moved.id}` : `Linked ${childId} under ${parentId}`);
-      return null;
-    } catch (e) {
-      return errorText(e);
-    } finally {
-      moving.delete(childId);
-      await deps.reload();
+    return busyWhile(childId, () => attempt(() => action(api)), () => {
       followed = null;
-      refreshDetail();
-    }
+    });
   };
 
   /** The open modal shows `from`, which now is `to`: it follows (its card options too). */
@@ -365,6 +391,49 @@ export const createEditor = (deps: EditorDeps) => {
     if (error !== null) fail(error);
   };
 
+  /**
+   * The modal's Edit form: saves only what changed, and only when what it changes is still what the
+   * form opened with (taskEdit.ts editConflict), so an agent's edit meanwhile is not overwritten.
+   * Resolves to null (the form closes), or the error for the form to show (it stays open with the draft).
+   */
+  const editTask = async (id: string, from: EditText, draft: EditText): Promise<string | null> => {
+    const api = deps.api();
+    if (api === null) return 'No project is open.';
+    const result = editChanges(from, draft);
+    if ('error' in result) return result.error;
+    if (result.changes === null) return null;
+    if (moving.has(id)) return 'The task is being changed right now; save again in a moment.';
+    const changes = result.changes;
+    return busyWhile(id, () =>
+      attempt(async () => {
+        const conflict = editConflict(deps.tracker(), await api.get(id), from, changes);
+        if (conflict !== null) throw new Error(conflict);
+        await api.edit(id, changes);
+      }),
+    );
+  };
+
+  /** The modal's Delete: confirm, delete, then drop the place in the card order and the stored start options of every deleted task. */
+  const deleteTask = async (id: string): Promise<void> => {
+    const task = find(id);
+    const api = deps.api();
+    if (task === null || api === null || moving.has(id)) return;
+    const { title, body, choices } = deleteConfirm(deps.tracker(), task, deps.tasks());
+    const answer = await askChoice(title, body, choices);
+    if (answer === null) return;
+    let deleted: string[] = [];
+    await run(id, async (a) => {
+      deleted = await a.remove(id, answer === 'all');
+    });
+    if (deleted.length === 0) return; // failed: run showed the error
+    info(deleted.length === 1 ? `Deleted ${deleted[0]}` : `Deleted ${deleted.length} tasks`);
+    deps.order.forget(deleted);
+    const ctx = deps.start.context();
+    if (ctx !== null) {
+      for (const d of deleted) await deps.start.forget(ctx.projectId, d).catch((e: unknown) => fail(`Could not drop the start options of ${d}: ${errorText(e)}`));
+    }
+  };
+
   const closeDetail = (): void => {
     const d = detail;
     detail = null;
@@ -397,7 +466,18 @@ export const createEditor = (deps: EditorDeps) => {
         return null;
       },
       onSetParent: (parentId) => linkTask(id, parentId),
+      onEdit: (from, draft) => editTask(id, from, draft),
+      onDelete: () => void deleteTask(id),
       onLinkChild: (childId) => linkTask(childId, id),
+      onRemoveParent: () => unlinkTask(id),
+      onUnlinkChild: async (childId) => {
+        const child = find(childId);
+        const parent = find(id);
+        if (child === null || parent === null) return null;
+        const { title, body } = unlinkConfirm(deps.tracker(), child, parent.title);
+        if ((await askChoice(title, body, [{ id: 'unlink', label: 'Unlink', variant: 'destructive' }])) !== 'unlink') return null;
+        return unlinkTask(childId);
+      },
       onSections: deps.sections.save,
       onUnarchive: () => {
         deps.archive.unarchive(id);
@@ -467,6 +547,9 @@ export const createEditor = (deps: EditorDeps) => {
           if (first) {
             first = false;
             saveStart(task.id);
+            if (ctx !== null && draft.type === '') {
+              void deps.start.markNoType(ctx.projectId, task.id).catch((e: unknown) => fail(`Could not keep "No type" for ${task.id}: ${errorText(e)}`));
+            }
           }
           return task;
         },
@@ -510,7 +593,7 @@ export const createEditor = (deps: EditorDeps) => {
       : {
           projectId: ctx.projectId,
           presets: ctx.presets,
-          inherited: (type, kind) => resolveStart(ctx.settings, { ...NEW_TASK, type, kind }, {}, ctx.presets),
+          inherited: (type, subtasks) => resolveStart(ctx.settings, { type, subtasks }, {}, ctx.presets),
           summaryLanguage: ctx.settings.summary.language,
         };
   };
@@ -544,6 +627,9 @@ export const createEditor = (deps: EditorDeps) => {
       return child !== null && parent !== null && canLinkUnder(deps.tracker(), child, parent, deps.tasks());
     },
     onLink: (id, parentId) => void link(id, parentId),
+    onReorder: (id, column, before) => {
+      if (!moving.has(id)) deps.order.reorder(id, column, before);
+    },
     onOpen: showDetail,
   });
 

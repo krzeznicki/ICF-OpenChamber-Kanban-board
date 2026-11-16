@@ -1,8 +1,8 @@
 // Layered settings: global defaults (per user) → project override (per user) → choice on the card.
 // All of it lives in the extension's instance storage, never in the repo. The resolvers are pure
 // so they run under node:test; createSettingsStore is the only part that touches storage.
-import type { Task } from '../core/types.ts';
 import { parseArchivedTasks, serializeArchived, type ArchivedTasks } from './archive.ts';
+import { ORDER_MAX, parseOrder } from './order.ts';
 import { BUILTIN_PRESETS, defaultSetId, effectiveSetId, EMPTY_SETS, isPristineSets, migrateStoredPresets, parseStoredSets, type Preset, type StoredSets } from './presets.ts';
 import { DEFAULT_SUMMARY_PROMPT } from './summaries.ts';
 
@@ -54,7 +54,7 @@ export { DEFAULT_SUMMARY_PROMPT };
 export const MAX_PARALLEL_MIN = 1;
 export const MAX_PARALLEL_MAX = 10;
 export const FALLBACK_PRESET_ID = 'implement';
-/** A parent (feature) starts one orchestrator session with this preset unless its card says otherwise. */
+/** A task with sub-tasks starts one orchestrator session with this preset unless its card says otherwise. */
 export const ORCHESTRATE_PRESET_ID = 'orchestrate';
 /** A bug defaults to this preset (unless the user set the bug type); a set without it falls back to Implement (resolveStart). */
 export const DIAGNOSE_PRESET_ID = 'diagnose';
@@ -65,7 +65,9 @@ export const DEFAULT_SETTINGS: Settings = {
   maxParallel: 3,
   defaults: { presetId: 'implement', model: null, agent: null, variant: null, location: 'worktree' },
   presetByType: { enhancement: 'implement', bug: DIAGNOSE_PRESET_ID, research: 'plan' },
-  summary: { auto: true, language: 'Polish', prompt: DEFAULT_SUMMARY_PROMPT },
+  // Defaults are never stored (only what the user types is), so changing one (Polish until 0.3.1)
+  // moves users who never set the field and keeps every explicit choice.
+  summary: { auto: true, language: 'English', prompt: DEFAULT_SUMMARY_PROMPT },
   hideChildren: false,
   types: ['enhancement', 'bug', 'chore', 'research'],
   presetSet: defaultSetId([]),
@@ -202,22 +204,29 @@ export const resolveSettings = (global: SettingsLayer, project: SettingsLayer, f
 export const suggestEnabled = (globalLoaded: boolean, global: SettingsLayer): boolean =>
   globalLoaded && resolveSettings(global, {}).suggestFields;
 
+/** What the start preset depends on: the task's type, and whether it has sub-tasks on the board. */
+export type StartSubject = { type: string | null; subtasks: boolean };
+
 /**
  * The options a session starts with: the card's choice, else the settings. The preset is the
- * card's, else 'orchestrate' for a parent (a feature), else the default for the task's type, else defaults.presetId; whichever id is chosen,
- * one that is not among `presets` (a deleted preset, or one the project's set does not have) becomes
- * 'implement'. `presets` defaults to the Plain set; pass the project's set (listPresets) so its own count.
+ * card's, else 'orchestrate' for a task with sub-tasks, else the default for the task's type, else
+ * defaults.presetId; whichever id is chosen, one that is not among `presets` (a deleted preset, or
+ * one the project's set does not have) becomes 'implement'. `presets` defaults to the Plain set;
+ * pass the project's set (listPresets) so its own count.
  */
 export const resolveStart = (
   s: Settings,
-  task: Task,
+  task: StartSubject,
   card: Partial<StartOptions>,
   presets: readonly Preset[] = BUILTIN_PRESETS,
 ): StartOptions => {
   const c = parseCardOptions(card);
-  const byKind = task.kind === 'parent' ? ORCHESTRATE_PRESET_ID : undefined;
+  // Sub-tasks, not the kind: locally every top-level task is a spec.md parent, and one without
+  // sub-tasks (a bug, a research task) should start with its type's preset. Once research adds
+  // sub-tasks, the default turns to orchestrate by itself.
+  const bySubtasks = task.subtasks ? ORCHESTRATE_PRESET_ID : undefined;
   const byType = task.type !== null ? s.presetByType[task.type] : undefined;
-  const wanted = c.presetId ?? byKind ?? byType ?? s.defaults.presetId;
+  const wanted = c.presetId ?? bySubtasks ?? byType ?? s.defaults.presetId;
   const model = c.model ?? s.defaults.model;
   return {
     presetId: presets.some((p) => p.id === wanted) ? wanted : FALLBACK_PRESET_ID,
@@ -264,12 +273,16 @@ export const STORAGE_KEYS = {
   /** The preset sets: edits of the built-in sets and the user's own sets (presets.ts StoredSets). */
   presetSets: 'presetSets',
   card: (projectId: string, taskId: string): string => fit(`card:${projectId}:${taskId}`),
+  /** `true`: the user created the task with "No type" in the Add task modal (suggest.ts createTypeClassifier). */
+  noType: (projectId: string, taskId: string): string => fit(`noType:${projectId}:${taskId}`),
   /** Per project: task id -> when the user dragged the card away from its session (columns.ts Detached). */
   detached: (projectId: string): string => fit(`detached:${projectId}`),
   /** Per project: session ids a host lookup found archived (columns.ts markArchived). */
   archivedSessions: (projectId: string): string => fit(`archivedSessions:${projectId}`),
   /** Per project: done tasks the user archived ("Archive done", archive.ts), `{ id, archivedAt }[]`. */
   archivedTasks: (projectId: string): string => fit(`archivedTasks:${projectId}`),
+  /** Per project: the manual card order, task ids (order.ts). */
+  taskOrder: (projectId: string): string => fit(`taskOrder:${projectId}`),
   /** Which sections of the task modal are open (one entry for every task and project). */
   detailSections: 'detail-sections',
 } as const;
@@ -370,6 +383,20 @@ export const createSettingsStore = (storage: SettingsStorage) => {
       await storage.set(STORAGE_KEYS.card(projectId, to), clean as never);
       await storage.delete(STORAGE_KEYS.card(projectId, from));
     },
+    /** The task was deleted: its start options go. */
+    forgetCard: (projectId: string, taskId: string): Promise<void> => storage.delete(STORAGE_KEYS.card(projectId, taskId)),
+    /** The user created the task with "No type" in the Add task modal: the Small Model never picks its type. */
+    markNoType: (projectId: string, taskId: string): Promise<void> => storage.set(STORAGE_KEYS.noType(projectId, taskId), true as never),
+    hasNoType: async (projectId: string, taskId: string): Promise<boolean> =>
+      (await storage.get(STORAGE_KEYS.noType(projectId, taskId))) === true,
+    /** The task got a new id: its "No type" mark follows it. */
+    moveNoType: async (projectId: string, from: string, to: string): Promise<void> => {
+      if ((await storage.get(STORAGE_KEYS.noType(projectId, from))) !== true) return;
+      await storage.set(STORAGE_KEYS.noType(projectId, to), true as never);
+      await storage.delete(STORAGE_KEYS.noType(projectId, from));
+    },
+    /** The task was deleted: its "No type" mark goes. */
+    forgetNoType: (projectId: string, taskId: string): Promise<void> => storage.delete(STORAGE_KEYS.noType(projectId, taskId)),
     loadDetached: async (projectId: string): Promise<Map<string, number>> => parseDetached(await storage.get(STORAGE_KEYS.detached(projectId))),
     saveDetached: (projectId: string, marks: ReadonlyMap<string, number>): Promise<void> =>
       put(STORAGE_KEYS.detached(projectId), Object.fromEntries(marks), marks.size === 0),
@@ -380,6 +407,9 @@ export const createSettingsStore = (storage: SettingsStorage) => {
       parseArchivedTasks(await storage.get(STORAGE_KEYS.archivedTasks(projectId))),
     saveArchivedTasks: (projectId: string, marks: ArchivedTasks): Promise<void> =>
       put(STORAGE_KEYS.archivedTasks(projectId), serializeArchived(marks), marks.size === 0),
+    loadOrder: async (projectId: string): Promise<string[]> => parseOrder(await storage.get(STORAGE_KEYS.taskOrder(projectId))),
+    saveOrder: (projectId: string, order: readonly string[]): Promise<void> =>
+      put(STORAGE_KEYS.taskOrder(projectId), order.slice(0, ORDER_MAX), order.length === 0),
     loadSections: async (): Promise<Sections> => parseSections(await storage.get(STORAGE_KEYS.detailSections)),
     saveSections: (sections: Sections): Promise<void> => {
       const clean = parseSections(sections);

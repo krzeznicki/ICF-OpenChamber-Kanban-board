@@ -3,8 +3,8 @@
 import type { Dirent } from 'node:fs';
 import { mkdir, readdir, readFile, rmdir, stat, unlink, writeFile } from 'node:fs/promises';
 import { join, posix } from 'node:path';
-import { blockersValue, issueFileName, parseIssue, parseSpec, patchLine, renderIssue, renumberIssue } from './localFormat.ts';
-import type { NewTask, Task, TaskState, Tracker } from './types.ts';
+import { blockersValue, issueFileName, parseIssue, parseSpec, patchLine, renderIssue, renumberIssue, setTitle, specFromIssue, withDescription } from './localFormat.ts';
+import type { NewTask, Task, TaskEdit, TaskState, Tracker } from './types.ts';
 import { TrackerError } from './types.ts';
 
 const SCRATCH = '.scratch';
@@ -176,29 +176,52 @@ export const createLocalTracker = (root: string): Tracker => {
 
   const setState = (id: string, state: TaskState): Promise<Task> => patch(id, 'Status', statusWord(state));
 
+  /** Rewrites the file in place: the id (path) stays even when the title changes, so links and queue entries keep pointing at it. */
+  const edit = async (id: string, changes: TaskEdit): Promise<Task> => {
+    if (changes.title !== undefined && (typeof changes.title !== 'string' || changes.title.trim() === '')) {
+      throw new TrackerError('INVALID', 'Title is required');
+    }
+    const task = await get(id);
+    const ref = parseId(task.id);
+    let text = task.body === '' && ref.kind === 'parent' ? `# ${task.title}\n` : task.body;
+    if (changes.title !== undefined) text = setTitle(text, changes.title, ref.kind === 'ticket');
+    if (changes.body !== undefined) {
+      if (typeof changes.body !== 'string') throw new TrackerError('INVALID', 'The description must be a string');
+      text = withDescription(text, changes.body);
+    }
+    if (text !== task.body) await writeFile(abs(task.id), text);
+    return get(task.id);
+  };
+
   const slugOf = (title: string): string => issueFileName(0, title).slice(3, -3);
 
-  const createParent = async (input: NewTask): Promise<Task> => {
-    const slug = slugOf(input.title);
+  /** Makes a new, empty feature folder named after `title` (`-2`, `-3`... when taken); returns its name. */
+  const newFeature = async (title: string): Promise<string> => {
+    const slug = slugOf(title);
     await mkdir(join(root, SCRATCH), { recursive: true });
     for (let i = 1; ; i++) {
       const feature = i === 1 ? slug : `${slug}-${i}`;
       try {
         await mkdir(featureDir(feature));
+        return feature;
       } catch (e) {
         if ((e as { code?: unknown }).code === 'EEXIST') continue;
         throw e;
       }
-      const parts = [`# ${input.title.trim()}`];
-      const fields: string[] = [];
-      if (input.type !== undefined && input.type.trim() !== '') fields.push(`**Type:** ${input.type.trim()}`);
-      if (input.state !== undefined) fields.push(`**Status:** ${statusWord(input.state)}`);
-      if (fields.length > 0) parts.push(fields.join('\n'));
-      const body = (input.body ?? '').replace(/\r\n/g, '\n').trim();
-      if (body !== '') parts.push(body);
-      await writeFile(abs(specId(feature)), parts.join('\n\n') + '\n', { flag: 'wx' });
-      return get(specId(feature));
     }
+  };
+
+  const createParent = async (input: NewTask): Promise<Task> => {
+    const feature = await newFeature(input.title);
+    const parts = [`# ${input.title.trim()}`];
+    const fields: string[] = [];
+    if (input.type !== undefined && input.type.trim() !== '') fields.push(`**Type:** ${input.type.trim()}`);
+    if (input.state !== undefined) fields.push(`**Status:** ${statusWord(input.state)}`);
+    if (fields.length > 0) parts.push(fields.join('\n'));
+    const body = (input.body ?? '').replace(/\r\n/g, '\n').trim();
+    if (body !== '') parts.push(body);
+    await writeFile(abs(specId(feature)), parts.join('\n\n') + '\n', { flag: 'wx' });
+    return get(specId(feature));
   };
 
   const createTicket = async (input: NewTask, parentId: string): Promise<Task> => {
@@ -293,6 +316,11 @@ export const createLocalTracker = (root: string): Tracker => {
     }
   };
 
+  const unlinkIfThere = (path: string): Promise<void> =>
+    unlink(path).catch((e: unknown) => {
+      if (!isNotFound(e)) throw e;
+    });
+
   /**
    * Moves a ticket of another feature, or a feature with no tickets, into `parentId`'s feature as its
    * next ticket. Its blocker numbers pointed at its old feature's tickets, so they are dropped.
@@ -318,9 +346,7 @@ export const createLocalTracker = (root: string): Tracker => {
     // A synthesized parent (no spec.md) has no text yet.
     const text = task.body === '' ? `# ${task.title}\n` : task.body;
     const newId = await writeNextTicket(to.feature, task.title, patchLine(text, 'Blocked by', blockersValue([])));
-    await unlink(abs(task.id)).catch((e: unknown) => {
-      if (!isNotFound(e)) throw e;
-    });
+    await unlinkIfThere(abs(task.id));
     if (ref.kind === 'ticket') {
       await dropBlocker(ref.feature, fileNumber(ref.file!));
     } else {
@@ -330,7 +356,64 @@ export const createLocalTracker = (root: string): Tracker => {
     return get(newId);
   };
 
+  /**
+   * A ticket: its file goes and its feature's tickets that listed it lose that blocker. A feature:
+   * spec.md, every ticket and the folder go; a folder that holds anything else (notes, a map) is
+   * refused before anything is deleted, since what is left would still list as a feature.
+   */
+  const remove = async (id: string, opts: { withChildren: boolean }): Promise<string[]> => {
+    const task = await get(id);
+    const ref = parseId(task.id);
+    if (ref.kind === 'ticket') {
+      await unlinkIfThere(abs(task.id));
+      await dropBlocker(ref.feature, fileNumber(ref.file!));
+      await removeIfEmpty(issuesDir(ref.feature));
+      return [task.id];
+    }
+    const tickets = await issueFiles(issuesDir(ref.feature));
+    if (tickets.length > 0 && !opts.withChildren) {
+      throw new TrackerError('INVALID', `${id} has ${tickets.length} sub-task${tickets.length === 1 ? '' : 's'}; delete them with it (withChildren) or move them first`);
+    }
+    const ticketEntries = new Set(tickets.map((f) => `issues/${f}`));
+    const extra = (await extraFiles(ref.feature)).filter((f) => !ticketEntries.has(f));
+    if (extra.length > 0) {
+      throw new TrackerError('INVALID', `${id} cannot be deleted: its folder also holds ${extra.join(', ')}; move or remove those first`);
+    }
+    const deleted: string[] = [];
+    for (const file of tickets) {
+      await unlinkIfThere(join(issuesDir(ref.feature), file));
+      deleted.push(ticketId(ref.feature, file));
+    }
+    await unlinkIfThere(abs(task.id));
+    await removeIfEmpty(issuesDir(ref.feature));
+    await removeIfEmpty(featureDir(ref.feature));
+    return [...deleted, task.id];
+  };
+
+  /**
+   * Moves a ticket out of its feature into a new feature of its own (`.scratch/<slug>/spec.md`).
+   * Its blocker numbers pointed at its old feature's tickets, so they are dropped, and a feature
+   * cannot be claimed, so `claimed` becomes ready-for-agent.
+   */
+  const removeParent = async (id: string): Promise<Task> => {
+    const ref = parseId(id);
+    if (ref.kind === 'parent') throw new TrackerError('INVALID', `${id} is a feature; it has no parent to remove`);
+    const task = await get(id);
+    let text = specFromIssue(task.body, task.title);
+    if (task.claimed) text = patchLine(text, 'Status', 'ready-for-agent');
+    const feature = await newFeature(task.title);
+    // The new spec.md is written before the ticket goes: a failure in between leaves the task twice
+    // (one copy to delete), never lost. setParent moves files in the same order.
+    await writeFile(abs(specId(feature)), text, { flag: 'wx' });
+    await unlinkIfThere(abs(task.id));
+    await dropBlocker(ref.feature, fileNumber(ref.file!));
+    await removeIfEmpty(issuesDir(ref.feature));
+    return get(specId(feature));
+  };
+
   return {
+    remove,
+
     async list() {
       const now = Date.now();
       const out: Task[] = [];
@@ -357,7 +440,11 @@ export const createLocalTracker = (root: string): Tracker => {
 
     setState,
 
+    edit,
+
     setParent,
+
+    removeParent,
 
     setType(id, type) {
       return patch(id, 'Type', type.trim());

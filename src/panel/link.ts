@@ -71,18 +71,19 @@ export const linkChoices = (
 });
 
 /**
- * Every link from the panel goes through this: `setParent` (api), then, when the task came back
- * with a new id (local: its file moved), `onMoved(from, to)` so whatever the panel keeps under the
- * old id follows it. The link stands even when that follow-up fails: `onError` reports it.
+ * Every link or unlink from the panel goes through this: the api call (`setParent`, `removeParent`),
+ * then, when the task came back with a new id (local: its file moved), `onMoved(from, to)` so
+ * whatever the panel keeps under the old id follows it. The change stands even when that follow-up
+ * fails: `onError` reports it.
  */
-export const followingSetParent =
-  (
-    setParent: (id: string, parentId: string) => Promise<Task>,
+export const followingMove =
+  <A extends unknown[]>(
+    op: (id: string, ...rest: A) => Promise<Task>,
     onMoved: (from: string, to: string) => Promise<void>,
     onError: (from: string, to: string, error: unknown) => void,
   ) =>
-  async (id: string, parentId: string): Promise<Task> => {
-    const task = await setParent(id, parentId);
+  async (id: string, ...rest: A): Promise<Task> => {
+    const task = await op(id, ...rest);
     if (task.id !== id) {
       try {
         await onMoved(id, task.id);
@@ -92,6 +93,15 @@ export const followingSetParent =
     }
     return task;
   };
+
+/** The confirm before unlinking a sub-task from its parent (the parent's sub-task list); locally the task becomes a feature. */
+export const unlinkConfirm = (tracker: TrackerKind, child: Task, parentTitle: string): { title: string; body: string } => ({
+  title: `Remove “${child.title}” from “${parentTitle}”?`,
+  body:
+    tracker === 'local'
+      ? `${child.id} moves out into its own feature (spec.md): it gets a new id and its blockers (both ways) are dropped.`
+      : `${child.id} stops being a sub-task; the issue keeps its number.`,
+});
 
 /** The confirm before linking (dropping a card onto a card): names both tasks; locally the move changes the id and drops blockers. */
 export const linkConfirm = (tracker: TrackerKind, child: Task, parent: Task): { title: string; body: string } => ({

@@ -333,6 +333,22 @@ var createGithubTracker = (root, exec, labels) => {
     await swapLabels(issue.number, issue.labels.includes(label) ? null : label, remove);
     return get(idOf(issue.number));
   };
+  const subtree = async (n, rel) => {
+    const out = [];
+    const seen = /* @__PURE__ */ new Set([n]);
+    const walk = async (at, r) => {
+      if (r.childCount > r.children.length) {
+        throw new TrackerError("INVALID", `${idOf(at)} has ${r.childCount} sub-issues, more than can be deleted at once; delete some of them first`);
+      }
+      const fresh = r.children.map((c) => c.number).filter((c) => !seen.has(c));
+      for (const c of fresh) seen.add(c);
+      const found = fresh.length === 0 ? /* @__PURE__ */ new Map() : await graph(fresh, false);
+      for (const c of fresh) await walk(c, relationsOf(found.get(c) ?? null));
+      out.push(at);
+    };
+    await walk(n, rel);
+    return out;
+  };
   return {
     preflight: ready,
     setupLabels: () => ensureLabels([...stateLabels, ...CATEGORIES]),
@@ -386,6 +402,18 @@ var createGithubTracker = (root, exec, labels) => {
       await swapLabels(issue.number, issue.labels.includes(label) ? null : label, remove);
       return get(idOf(issue.number));
     },
+    async edit(id, changes) {
+      const n = parseNumber(id);
+      if (changes.title !== void 0 && (typeof changes.title !== "string" || changes.title.trim() === "")) {
+        throw new TrackerError("INVALID", "Title is required");
+      }
+      if (changes.body !== void 0 && typeof changes.body !== "string") throw new TrackerError("INVALID", "The description must be a string");
+      const args = ["issue", "edit", String(n)];
+      if (changes.title !== void 0) args.push("--title", changes.title.trim());
+      if (changes.body !== void 0) args.push("--body", changes.body);
+      if (args.length > 3) await run(args);
+      return get(idOf(n));
+    },
     async claim(id) {
       const { task, issue } = await load(parseNumber(id));
       if (task.kind === "parent") throw new TrackerError("INVALID", `Only a sub-task can be claimed, not a parent issue: ${task.id}`);
@@ -407,6 +435,33 @@ var createGithubTracker = (root, exec, labels) => {
         up = relationsOf((await graph([up], false)).get(up) ?? null).parent;
       }
       await run(["issue", "edit", String(n), "--parent", String(p)]);
+      return get(idOf(n));
+    },
+    async remove(id, opts) {
+      const { issue, rel } = await load(parseNumber(id));
+      const numbers = opts.withChildren ? await subtree(issue.number, rel) : [issue.number];
+      const deleted = [];
+      for (const n of numbers) {
+        const args = ["issue", "delete", String(n), "--yes"];
+        const r = await run(args, true);
+        if (r.code !== 0) {
+          const detail = (r.stderr || r.stdout).trim();
+          const done = deleted.length > 0 ? ` (already deleted: ${deleted.join(", ")})` : "";
+          if (/permission|must have admin|FORBIDDEN/i.test(detail)) {
+            throw new TrackerError("FAILED", `Only repository admins can delete GitHub issues; close it instead${done}. gh: ${detail}`);
+          }
+          throw new TrackerError("FAILED", `${failed(args, r).message}${done}`);
+        }
+        deleted.push(idOf(n));
+      }
+      return deleted;
+    },
+    async removeParent(id) {
+      const n = parseNumber(id);
+      const found = (await graph([n], false)).get(n) ?? null;
+      if (found === null) throw new TrackerError("NOT_FOUND", `Issue not found: ${idOf(n)}`);
+      if (relationsOf(found).parent === null) throw new TrackerError("INVALID", `${idOf(n)} has no parent issue to remove`);
+      await run(["issue", "edit", String(n), "--remove-parent"]);
       return get(idOf(n));
     },
     async close(id, opts) {
@@ -586,17 +641,41 @@ var renumberIssue = (text, n, title) => {
   lines[i] = heading + (lines[i].endsWith("\r") ? "\r" : "");
   return lines.join("\n");
 };
+var setTitle = (text, title, keepNumber) => {
+  const lines = splitLines(text);
+  const i = headingIndex(lines);
+  if (i < 0) return text.trim() === "" ? `# ${title.trim()}
+` : `# ${title.trim()}${text.includes("\r\n") ? "\r\n\r\n" : "\n\n"}${text}`;
+  const prefix = keepNumber ? /^# (\d+:\s*)/.exec(content(lines[i]))?.[1] ?? "" : "";
+  lines[i] = `# ${prefix}${title.trim()}` + (lines[i].endsWith("\r") ? "\r" : "");
+  return lines.join("\n");
+};
+var specFromIssue = (text, title) => {
+  const lines = splitLines(text);
+  const i = headingIndex(lines);
+  const heading = `# ${title.trim()}`;
+  if (i < 0) lines.unshift(heading, "");
+  else lines[i] = heading + (lines[i].endsWith("\r") ? "\r" : "");
+  const blocked = headerFields(lines).find((f) => f.field === "Blocked by");
+  if (blocked !== void 0) {
+    const blank = (k) => k >= 0 && k < lines.length && content(lines[k]).trim() === "";
+    const from = blocked.index;
+    lines.splice(from, blank(from + 1) && blank(from - 1) ? 2 : 1);
+  }
+  return lines.join("\n");
+};
 var NOT_PARAGRAPH = /^\s*(?:[-+]\s|\*\s|\d+[.)]\s|#|```|~~~|>|\|)/;
+var splitLead = (body) => {
+  if (body === "" || NOT_PARAGRAPH.test(body)) return { lead: "", rest: body };
+  const cut = body.search(/\n[ \t]*\n/);
+  const lead = cut < 0 ? body : body.slice(0, cut);
+  if (lead.split("\n").some((l) => matchField(l) !== null || /^\s{0,3}(#|```|~~~)/.test(l))) return { lead: "", rest: body };
+  return { lead, rest: cut < 0 ? "" : body.slice(cut).replace(/^\s*\n/, "") };
+};
+var normalizeBody = (body) => body.replace(/\r\n/g, "\n").replace(/^\s*\n/, "").replace(/\s+$/, "");
 var renderIssue = (n, input) => {
   const blockers = (input.blockedBy ?? []).map(blockerRef);
-  const body = (input.body ?? "").replace(/\r\n/g, "\n").replace(/^\s*\n/, "").replace(/\s+$/, "");
-  let lead = "";
-  let rest = body;
-  if (body !== "" && !NOT_PARAGRAPH.test(body)) {
-    const cut = body.search(/\n[ \t]*\n/);
-    lead = cut < 0 ? body : body.slice(0, cut);
-    rest = cut < 0 ? "" : body.slice(cut).replace(/^\s*\n/, "");
-  }
+  const { lead, rest } = splitLead(normalizeBody(input.body ?? ""));
   const parts = [`# ${pad(n)}: ${input.title.trim()}`];
   if (lead !== "") parts.push(lead);
   parts.push(`**Blocked by:** ${blockers.length > 0 ? blockers.join(", ") : NONE_BLOCKERS}`);
@@ -604,6 +683,47 @@ var renderIssue = (n, input) => {
   parts.push(`**Status:** ${fromState(input.state ?? "needs-triage")}`);
   if (rest !== "") parts.push(rest);
   return parts.join("\n\n") + "\n";
+};
+var TAIL = /^## (?:Comments|Answer)\s*$/i;
+var splitParts = (text) => {
+  const lines = splitLines(text).map(content);
+  const tailAt = plainLines(lines, false).find(([, c]) => TAIL.test(c))?.[0] ?? lines.length;
+  const head = headingIndex(lines);
+  const fieldAt = new Set(headerFields(lines).filter((f) => f.index < tailAt).map((f) => f.index));
+  const kept = [];
+  let removed = false;
+  for (let i = 0; i < tailAt; i++) {
+    if (i === head || fieldAt.has(i)) {
+      removed = true;
+      continue;
+    }
+    const blank = lines[i].trim() === "";
+    if (blank && (kept.length === 0 || removed && kept[kept.length - 1].trim() === "")) continue;
+    kept.push(lines[i]);
+    if (!blank) removed = false;
+  }
+  return {
+    heading: head >= 0 && head < tailAt ? lines[head] : null,
+    fields: [...fieldAt].sort((a, b) => a - b).map((i) => lines[i]),
+    description: kept.join("\n").replace(/\s+$/, ""),
+    tail: tailAt < lines.length ? lines.slice(tailAt).join("\n").replace(/\s+$/, "") : null
+  };
+};
+var withDescription = (text, description) => {
+  const p = splitParts(text);
+  const { lead, rest } = splitLead(normalizeBody(description));
+  const parts = [];
+  if (p.heading !== null) parts.push(p.heading);
+  if (lead !== "") parts.push(lead);
+  if (p.fields.length > 0) parts.push(p.fields.join(fieldsTight(text) ? "\n" : "\n\n"));
+  if (rest !== "") parts.push(rest);
+  if (p.tail !== null) parts.push(p.tail);
+  const out = parts.join("\n\n") + "\n";
+  return text.includes("\r\n") ? out.replace(/\n/g, "\r\n") : out;
+};
+var fieldsTight = (text) => {
+  const f = headerFields(splitLines(text));
+  return f.length > 1 && f.every((x, i) => i === 0 || x.index === f[i - 1].index + 1);
 };
 var slugify = (title) => {
   const slug = title.replace(/[łŁ]/g, "l").normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60).replace(/-+$/, "");
@@ -755,28 +875,48 @@ var createLocalTracker = (root) => {
     return get(task.id);
   };
   const setState = (id, state) => patch(id, "Status", statusWord(state));
+  const edit = async (id, changes) => {
+    if (changes.title !== void 0 && (typeof changes.title !== "string" || changes.title.trim() === "")) {
+      throw new TrackerError("INVALID", "Title is required");
+    }
+    const task = await get(id);
+    const ref = parseId(task.id);
+    let text = task.body === "" && ref.kind === "parent" ? `# ${task.title}
+` : task.body;
+    if (changes.title !== void 0) text = setTitle(text, changes.title, ref.kind === "ticket");
+    if (changes.body !== void 0) {
+      if (typeof changes.body !== "string") throw new TrackerError("INVALID", "The description must be a string");
+      text = withDescription(text, changes.body);
+    }
+    if (text !== task.body) await writeFile2(abs(task.id), text);
+    return get(task.id);
+  };
   const slugOf = (title) => issueFileName(0, title).slice(3, -3);
-  const createParent = async (input) => {
-    const slug = slugOf(input.title);
+  const newFeature = async (title) => {
+    const slug = slugOf(title);
     await mkdir2(join2(root, SCRATCH), { recursive: true });
     for (let i = 1; ; i++) {
       const feature = i === 1 ? slug : `${slug}-${i}`;
       try {
         await mkdir2(featureDir(feature));
+        return feature;
       } catch (e) {
         if (e.code === "EEXIST") continue;
         throw e;
       }
-      const parts = [`# ${input.title.trim()}`];
-      const fields = [];
-      if (input.type !== void 0 && input.type.trim() !== "") fields.push(`**Type:** ${input.type.trim()}`);
-      if (input.state !== void 0) fields.push(`**Status:** ${statusWord(input.state)}`);
-      if (fields.length > 0) parts.push(fields.join("\n"));
-      const body = (input.body ?? "").replace(/\r\n/g, "\n").trim();
-      if (body !== "") parts.push(body);
-      await writeFile2(abs(specId(feature)), parts.join("\n\n") + "\n", { flag: "wx" });
-      return get(specId(feature));
     }
+  };
+  const createParent = async (input) => {
+    const feature = await newFeature(input.title);
+    const parts = [`# ${input.title.trim()}`];
+    const fields = [];
+    if (input.type !== void 0 && input.type.trim() !== "") fields.push(`**Type:** ${input.type.trim()}`);
+    if (input.state !== void 0) fields.push(`**Status:** ${statusWord(input.state)}`);
+    if (fields.length > 0) parts.push(fields.join("\n"));
+    const body = (input.body ?? "").replace(/\r\n/g, "\n").trim();
+    if (body !== "") parts.push(body);
+    await writeFile2(abs(specId(feature)), parts.join("\n\n") + "\n", { flag: "wx" });
+    return get(specId(feature));
   };
   const createTicket = async (input, parentId) => {
     const ref = parseId(parentId);
@@ -859,6 +999,9 @@ var createLocalTracker = (root) => {
       if (c !== "ENOENT" && c !== "ENOTEMPTY" && c !== "EEXIST") throw e;
     }
   };
+  const unlinkIfThere = (path) => unlink(path).catch((e) => {
+    if (!isNotFound2(e)) throw e;
+  });
   const setParent = async (id, parentId) => {
     const ref = parseId(id);
     const to = parseId(parentId);
@@ -879,9 +1022,7 @@ var createLocalTracker = (root) => {
     const text = task.body === "" ? `# ${task.title}
 ` : task.body;
     const newId = await writeNextTicket(to.feature, task.title, patchLine(text, "Blocked by", blockersValue([])));
-    await unlink(abs(task.id)).catch((e) => {
-      if (!isNotFound2(e)) throw e;
-    });
+    await unlinkIfThere(abs(task.id));
     if (ref.kind === "ticket") {
       await dropBlocker(ref.feature, fileNumber(ref.file));
     } else {
@@ -890,7 +1031,49 @@ var createLocalTracker = (root) => {
     }
     return get(newId);
   };
+  const remove = async (id, opts) => {
+    const task = await get(id);
+    const ref = parseId(task.id);
+    if (ref.kind === "ticket") {
+      await unlinkIfThere(abs(task.id));
+      await dropBlocker(ref.feature, fileNumber(ref.file));
+      await removeIfEmpty(issuesDir(ref.feature));
+      return [task.id];
+    }
+    const tickets = await issueFiles(issuesDir(ref.feature));
+    if (tickets.length > 0 && !opts.withChildren) {
+      throw new TrackerError("INVALID", `${id} has ${tickets.length} sub-task${tickets.length === 1 ? "" : "s"}; delete them with it (withChildren) or move them first`);
+    }
+    const ticketEntries = new Set(tickets.map((f) => `issues/${f}`));
+    const extra = (await extraFiles(ref.feature)).filter((f) => !ticketEntries.has(f));
+    if (extra.length > 0) {
+      throw new TrackerError("INVALID", `${id} cannot be deleted: its folder also holds ${extra.join(", ")}; move or remove those first`);
+    }
+    const deleted = [];
+    for (const file of tickets) {
+      await unlinkIfThere(join2(issuesDir(ref.feature), file));
+      deleted.push(ticketId(ref.feature, file));
+    }
+    await unlinkIfThere(abs(task.id));
+    await removeIfEmpty(issuesDir(ref.feature));
+    await removeIfEmpty(featureDir(ref.feature));
+    return [...deleted, task.id];
+  };
+  const removeParent = async (id) => {
+    const ref = parseId(id);
+    if (ref.kind === "parent") throw new TrackerError("INVALID", `${id} is a feature; it has no parent to remove`);
+    const task = await get(id);
+    let text = specFromIssue(task.body, task.title);
+    if (task.claimed) text = patchLine(text, "Status", "ready-for-agent");
+    const feature = await newFeature(task.title);
+    await writeFile2(abs(specId(feature)), text, { flag: "wx" });
+    await unlinkIfThere(abs(task.id));
+    await dropBlocker(ref.feature, fileNumber(ref.file));
+    await removeIfEmpty(issuesDir(ref.feature));
+    return get(specId(feature));
+  };
   return {
+    remove,
     async list() {
       const now = Date.now();
       const out = [];
@@ -913,7 +1096,9 @@ var createLocalTracker = (root) => {
       return input.parentId === void 0 ? createParent(input) : createTicket(input, input.parentId);
     },
     setState,
+    edit,
     setParent,
+    removeParent,
     setType(id, type) {
       return patch(id, "Type", type.trim());
     },
@@ -953,6 +1138,9 @@ Commands:
   create --title <t> [--type <x>] [--body-file <f>|-] [--parent <id>] [--state <state>]
          [--blocked-by <id>[,<id>...]]...   blockers: repeat the option or separate ids with commas
   state <id> <state>                    set the state ('done' closes)
+  edit <id> [--title <t>] [--body-file <f>|-]
+                                        change the title and/or the description (local: the
+                                        heading number, Status/Type/Blocked by and ## Comments stay)
   claim <id>                            take a sub-task before working on it (orchestrator)
   parent <id> <parentId>                make an existing task a sub-task of another (prints its id,
                                         which changes in a local tracker: the file moves)
@@ -988,6 +1176,7 @@ var COMMANDS = {
   show: { positionals: 1, options: [] },
   create: { positionals: 0, options: ["title", "type", "body-file", "parent", "state", "blocked-by"] },
   state: { positionals: 2, options: [] },
+  edit: { positionals: 1, options: ["title", "body-file"] },
   claim: { positionals: 1, options: [] },
   parent: { positionals: 2, options: [] },
   next: { positionals: 0, options: [] },
@@ -1060,6 +1249,15 @@ ${USAGE}`);
   const exec = io.exec ?? realExec;
   const print = (value, human) => io.stdout(json ? `${JSON.stringify(value, null, 2)}
 ` : human);
+  const bodyOf = async (file) => {
+    if (file === "-") return readStdin(io.stdin);
+    if (file === void 0) return void 0;
+    try {
+      return await readFile3(resolve(io.cwd, file), "utf8");
+    } catch (e) {
+      throw new TrackerError("INVALID", `Cannot read body file ${file}: ${e.message}`);
+    }
+  };
   try {
     switch (command) {
       case "list": {
@@ -1083,16 +1281,7 @@ ${task.body.replace(/\s*$/, "\n")}`);
         const state = values.state === void 0 ? void 0 : toState2(values.state, "state");
         const blockedBy = (values["blocked-by"] ?? []).flatMap((v) => v.split(",")).map((v) => v.trim());
         if (blockedBy.some((id) => id === "")) usage("--blocked-by needs non-empty ids");
-        let body;
-        const file = values["body-file"];
-        if (file === "-") body = await readStdin(io.stdin);
-        else if (file !== void 0) {
-          try {
-            body = await readFile3(resolve(io.cwd, file), "utf8");
-          } catch (e) {
-            throw new TrackerError("INVALID", `Cannot read body file ${file}: ${e.message}`);
-          }
-        }
+        const body = await bodyOf(values["body-file"]);
         const task = await (await openTracker(root, exec)).create({
           title: values.title,
           ...body === void 0 ? {} : { body },
@@ -1107,6 +1296,16 @@ ${task.body.replace(/\s*$/, "\n")}`);
       case "state": {
         const state = toState2(args[1], "state");
         const task = await (await openTracker(root, exec)).setState(args[0], state);
+        print(task, line(task));
+        return 0;
+      }
+      case "edit": {
+        if (values.title === void 0 && values["body-file"] === void 0) usage("edit needs --title, --body-file or both");
+        const body = await bodyOf(values["body-file"]);
+        const task = await (await openTracker(root, exec)).edit(args[0], {
+          ...values.title === void 0 ? {} : { title: values.title },
+          ...body === void 0 ? {} : { body }
+        });
         print(task, line(task));
         return 0;
       }

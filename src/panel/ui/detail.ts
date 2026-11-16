@@ -1,31 +1,31 @@
-// The task modal, opened by a click on any card: reading first. A header (title, id, state and type
-// badges, ×, and "Open session" when the task has a session that may be opened, or "Session
-// archived"; "Unarchive" for a task archived by "Archive done"), then a compact row (always shown,
-// under the header, not sticky): state and type selects and "Move to" buttons (the keyboard path
-// for drag and drop; Done asks about open sub-tasks). Then collapsible sections: Summary (the
-// personal summary or a Summarise button), Task (the body as formatted markdown,
-// ui/markdownView.ts), Sub-tasks (a parent's children, a click opens that task, "Add sub-task"
-// where addTask.ts allows it and "Link existing task" where link.ts offers one) and Settings, collapsed by default: Open on GitHub and the card's
-// start options (ui/startOptions.ts).
-// It sits on the shell it shares with Add task (ui/modal.ts). Which sections are open is
-// remembered (settings.ts Sections). It draws what it is given and reports choices; the editor
-// (edit.ts) runs them and asks to confirm. The compact row also has a "Parent" picker when the task
-// has a parent or may move under one (link.ts linkChoices).
-import { mountBadge, mountBanner, mountButton, mountList, mountSelect, mountSpinner, mountTextField } from '@openchamber/sdk/ui';
+// The task modal, opened by a click on any card. A header (title, id, badges, Edit, Delete, ×, and
+// the task's session: "Open session" or why not; "Unarchive" for an archived task), a compact row
+// (State, Type, Parent with "No parent", Move to), then collapsible sections whose open state is
+// remembered: Summary, Task (the body as markdown, or the Edit form, ui/editForm.ts), Sub-tasks
+// (rows with Unlink; "Add sub-task" opens New task / Existing tasks) and Settings (Open on GitHub,
+// start options, ui/startOptions.ts). It sits on the modal shell (ui/modal.ts), draws what it is
+// given and reports choices; the editor (edit.ts) runs them and asks to confirm.
+import { mountBadge, mountBanner, mountButton, mountList, mountSelect, mountSpinner, mountTabs, mountTextField } from '@openchamber/sdk/ui';
 import type { Tone } from '@openchamber/sdk/ui';
 import type { Task, TaskState } from '../../core/types.ts';
 import type { Column } from '../columns.ts';
+import { subtaskModes, type SubtaskMode } from '../addTask.ts';
 import type { LinkChoice } from '../link.ts';
 import type { Preset } from '../presets.ts';
 import type { StartLists } from '../models.ts';
 import type { CardOptions, Sections, StartOptions } from '../settings.ts';
 import type { SummaryStatus } from '../summaries.ts';
+import type { EditText } from '../taskEdit.ts';
 import { mountCloseButton } from './closeButton.ts';
+import { askChoice } from './confirm.ts';
 import { renderMarkdown } from './markdownView.ts';
 import { FILTER_OVER, openModalShell } from './modal.ts';
+import { mountEditForm } from './editForm.ts';
 import { mountStartOptions } from './startOptions.ts';
 
 const NO_TYPE = '';
+/** The Parent picker's "No parent" option, offered while the task has a parent: picking it unlinks. */
+const NO_PARENT = '';
 
 export const STATES: readonly TaskState[] = ['needs-triage', 'needs-info', 'ready-for-agent', 'ready-for-human', 'wontfix', 'done'];
 
@@ -54,9 +54,11 @@ export type DetailModel = {
   /**
    * Linking existing tasks (link.ts linkChoices): `parent` is the task's current parent (shown as the
    * Parent picker's value), `parents` the ones it may move under (empty hides the picker unless a
-   * parent is set), `children` the tasks "Link existing task" may make its sub-tasks (empty hides it).
+   * parent is set), `children` the tasks "Existing tasks" may make its sub-tasks (empty hides it).
    */
   links: { parent: LinkChoice | null; parents: LinkChoice[]; children: LinkChoice[] };
+  /** What the Edit form starts with (taskEdit.ts editableText). */
+  text: EditText;
 };
 
 /**
@@ -105,8 +107,19 @@ export type DetailCallbacks = {
   onAddSubtask: (input: { title: string; type: string | null }) => Promise<string | null>;
   /** The Parent picker: resolves to null on success, or the message to show under it. */
   onSetParent: (parentId: string) => Promise<string | null>;
-  /** "Link existing task": resolves to null on success, or the message to show under it. */
+  /** A pick in "Existing tasks": resolves to null on success, or the message to show under it. */
   onLinkChild: (childId: string) => Promise<string | null>;
+  /**
+   * The Edit form's Save, with the values the form opened with (only what differs from them is
+   * saved): resolves to null on success (the form closes), or the message to show in it.
+   */
+  onEdit: (from: EditText, draft: EditText) => Promise<string | null>;
+  /** The header's "Delete" (the editor confirms first). */
+  onDelete: () => void;
+  /** "No parent" in the Parent picker: resolves to null on success, or the message to show under it. */
+  onRemoveParent: () => Promise<string | null>;
+  /** "Unlink" on a sub-task row (the caller confirms): resolves to null on success or cancel, or the message to show. */
+  onUnlinkChild: (childId: string) => Promise<string | null>;
   /** The user opened or collapsed a section. */
   onSections: (sections: Sections) => void;
   /** "Unarchive" on an archived task: it shows in Done again. */
@@ -129,7 +142,21 @@ const el = <K extends keyof HTMLElementTagNameMap>(tag: K, className: string, te
 };
 
 export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, options: DetailOptions): DetailHandle => {
-  const shell = openModalShell({ label: initial.task.title, onDismiss: () => callbacks.onDismiss() });
+  // Escape, a backdrop click and the close button: an Edit form with typed text asks first, so a
+  // stray key does not throw the draft away.
+  let asking = false;
+  const dismiss = (): void => {
+    if (asking) return;
+    if (editing === null || !editing.dirty()) return callbacks.onDismiss();
+    asking = true;
+    void askChoice('Discard changes?', 'The title or description you edited has not been saved.', [
+      { id: 'discard', label: 'Discard', variant: 'destructive' },
+    ]).then((answer) => {
+      asking = false;
+      if (answer === 'discard') callbacks.onDismiss();
+    });
+  };
+  const shell = openModalShell({ label: initial.task.title, onDismiss: dismiss });
   const { modal } = shell;
   const head = el('header', 'kb-modal-head');
   // State, Type and Move to: above the task text, outside the collapsible sections.
@@ -159,10 +186,15 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
   const settingsTop = el('div', 'kb-sheet-part');
   const startBox = el('section', 'kb-sheet-part kb-start');
   settingsSec.content.append(settingsTop, startBox);
-  const subList = el('div', 'kb-sheet-part');
-  const addBox = el('div', 'kb-sheet-part kb-add-sub');
-  const linkBox = el('div', 'kb-sheet-part kb-add-sub');
-  subSec.content.append(subList, addBox, linkBox);
+  const subList = el('div', 'kb-sheet-part kb-sub-rows');
+  // "Add sub-task": a button until clicked, then a head (tabs "New task" / "Existing tasks" and
+  // Cancel) over one of the two boxes, so the section stays compact when nothing is being added.
+  const adderBox = el('div', 'kb-sheet-part kb-add-sub');
+  const adderHead = el('div', 'kb-add-sub-head');
+  const addBox = el('div', 'kb-sheet-part');
+  const linkBox = el('div', 'kb-sheet-part');
+  adderBox.append(adderHead, addBox, linkBox);
+  subSec.content.append(subList, adderBox);
   modal.append(head, quick, summarySec.box, taskSec.box, subSec.box, settingsSec.box);
 
   let disposers: Array<() => void> = [];
@@ -212,7 +244,7 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
     titles.append(el('h2', 'kb-sheet-title', task.title), el('div', 'kb-card-id', task.id));
     const closeSlot = el('div', 'kb-sheet-x');
     top.append(titles, closeSlot);
-    disposers.push(mountCloseButton(closeSlot, callbacks.onDismiss));
+    disposers.push(mountCloseButton(closeSlot, dismiss));
     head.append(top);
 
     const row = el('div', 'kb-modal-bar');
@@ -229,6 +261,12 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
     }
     row.append(badges);
     const session = el('div', 'kb-modal-session');
+    if (editing === null) {
+      disposers.push(
+        mountButton(session, { label: 'Edit', variant: 'ghost', size: 'sm', disabled: m.busy, onClick: () => startEdit(m) }).dispose,
+      );
+      disposers.push(mountButton(session, { label: 'Delete', variant: 'ghost', size: 'sm', disabled: m.busy, onClick: callbacks.onDelete }).dispose);
+    }
     if (m.archived) {
       disposers.push(mountButton(session, { label: 'Unarchive', variant: 'outline', size: 'sm', onClick: callbacks.onUnarchive }).dispose);
     }
@@ -278,8 +316,31 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
 
   /** The Task section redraws only when what it shows changes, so a reload keeps a text selection. */
   let taskKey: string | null = null;
+  /** The open Edit form: it stays in place across updates (what is typed survives a poll). */
+  let editing: { taskId: string; dispose: () => void; dirty: () => boolean } | null = null;
+  const stopEdit = (): void => {
+    editing?.dispose();
+    editing = null;
+    taskKey = null;
+  };
+  const startEdit = (m: DetailModel): void => {
+    if (editing !== null) return;
+    const box = taskSec.content;
+    box.replaceChildren();
+    taskKey = null;
+    const form = mountEditForm(box, m.text, (draft) => callbacks.onEdit(m.text, draft), () => {
+      stopEdit();
+      if (current !== null) draw(current);
+    });
+    editing = { taskId: m.task.id, ...form };
+    taskSec.box.open = true;
+    if (current !== null) draw(current); // the header drops its Edit button
+    box.querySelector('input')?.focus();
+  };
   const drawTask = (m: DetailModel): void => {
     const { task } = m;
+    if (editing !== null && editing.taskId !== task.id) stopEdit(); // another task now (a link moved it)
+    if (editing !== null) return;
     const key = JSON.stringify([task.id, task.body, task.parentId, task.blockedBy, m.openChildren]);
     if (key === taskKey) return;
     taskKey = key;
@@ -297,23 +358,54 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
     else box.append(renderMarkdown(task.body, callbacks.onOpenUrl));
   };
 
+  /** The last failed "Unlink", shown under the sub-task list until the task changes or another unlink. */
+  let unlinkError: { taskId: string; message: string } | null = null;
   const drawChildren = (m: DetailModel): void => {
     subSec.box.hidden = m.children.length === 0 && !m.addSubtask && m.links.children.length === 0;
-    drawAddSubtask(m);
-    drawLinkChild(m);
+    drawAdder(m);
     if (m.children.length === 0) {
       subSec.label.textContent = 'Sub-tasks';
       return;
     }
     const done = m.children.filter((c) => c.state === 'done').length;
     subSec.label.textContent = `Sub-tasks (${done}/${m.children.length} done)`;
-    disposers.push(
-      mountList(subList, {
-        items: m.children.map((c) => ({ id: c.id, title: c.title, subtitle: c.id, badge: { label: c.state, tone: stateTone(c.state) } })),
-        onSelect: callbacks.onOpenTask,
-        ariaLabel: 'Sub-tasks',
-      }).dispose,
-    );
+    if (unlinkError !== null && unlinkError.taskId !== m.task.id) unlinkError = null;
+    // One row per sub-task: the list item opens it, "Unlink" next to it removes it from this parent.
+    // The SDK list has no row actions, so each row is a one-item list beside its own button.
+    for (const c of m.children) {
+      const row = el('div', 'kb-sub-row');
+      const item = el('div', 'kb-sub-row-item');
+      const action = el('div', 'kb-sub-row-action');
+      row.append(item, action);
+      subList.append(row);
+      disposers.push(
+        mountList(item, {
+          items: [{ id: c.id, title: c.title, subtitle: c.id, badge: { label: c.state, tone: stateTone(c.state) } }],
+          onSelect: callbacks.onOpenTask,
+          ariaLabel: `Sub-task ${c.title}`,
+        }).dispose,
+        mountButton(action, {
+          label: 'Unlink',
+          variant: 'ghost',
+          size: 'xs',
+          disabled: m.busy,
+          onClick: () => {
+            const taskId = m.task.id;
+            unlinkError = null;
+            void callbacks.onUnlinkChild(c.id).then((error) => {
+              if (disposed || error === null) return;
+              unlinkError = { taskId, message: error };
+              if (current !== null) draw(current);
+            });
+          },
+        }).dispose,
+      );
+    }
+    if (unlinkError !== null) {
+      const errorSlot = el('div', 'kb-add-error');
+      subList.append(errorSlot);
+      disposers.push(mountBanner(errorSlot, { tone: 'error', title: 'Could not unlink the sub-task', body: unlinkError.message }).dispose);
+    }
   };
 
   /**
@@ -348,7 +440,9 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
     if (parents.length > 0 || parent !== null) {
       const parentSlot = el('div', 'kb-field');
       fields.append(parentSlot);
-      const options = parent !== null && !parents.some((p) => p.id === parent.id) ? [parent, ...parents] : parents;
+      const listed = parent !== null && !parents.some((p) => p.id === parent.id) ? [parent, ...parents] : parents;
+      // With a parent set, "No parent" unlinks it.
+      const options = parent !== null ? [{ id: NO_PARENT, label: 'No parent', hint: 'Unlink from the parent' }, ...listed] : listed;
       disposers.push(
         mountSelect(parentSlot, {
           label: 'Parent',
@@ -356,13 +450,14 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
           placeholder: 'No parent',
           options,
           searchable: options.length > FILTER_OVER,
-          disabled: m.busy || parents.length === 0, // only the current parent: shown, nothing to pick
+          disabled: m.busy,
           onChange: (id) => {
             if (id === task.parentId) return;
             const taskId = task.id;
             quickKey = null; // snaps back until the reload shows the new parent
             parentError = null;
-            void callbacks.onSetParent(id).then((error) => {
+            const change = id === NO_PARENT ? callbacks.onRemoveParent() : callbacks.onSetParent(id);
+            void change.then((error) => {
               if (disposed || error === null) return;
               parentError = { taskId: current?.task.id ?? taskId, message: error };
               quickKey = null;
@@ -459,12 +554,11 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
     addHandle?.dispose();
     addHandle = null;
     addBox.replaceChildren();
-    addBox.hidden = key === null;
     if (key === null) return;
     addHandle = mountAddSubtask(addBox, m.types, callbacks.onAddSubtask);
   };
 
-  // "Link existing task": a select that links the picked task as a sub-task at once. Redrawn only
+  // "Existing tasks": a select that links the picked task as a sub-task at once. Redrawn only
   // when what it offers changes, so an open popup survives a poll.
   let linkKey: string | null = null;
   let linkError: { taskId: string; message: string } | null = null;
@@ -482,9 +576,7 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
     if (key === linkKey) return;
     linkKey = key;
     clearLink();
-    linkBox.hidden = offered.length === 0;
     if (offered.length === 0) return;
-    linkBox.append(el('h3', 'kb-settings-heading', 'Link existing task'));
     const slot = el('div', 'kb-field');
     const errorSlot = el('div', 'kb-add-error');
     linkBox.append(slot, errorSlot);
@@ -514,6 +606,85 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
     }
   };
 
+  /** The open "Add sub-task" and its tab; null while only the button shows. Closes when the task changes. */
+  let adder: { taskId: string; mode: SubtaskMode } | null = null;
+  let adderKey: string | null = null;
+  let adderDisposers: Array<() => void> = [];
+  const clearAdderHead = (): void => {
+    for (const d of adderDisposers) d();
+    adderDisposers = [];
+    adderHead.replaceChildren();
+  };
+  const drawAdder = (m: DetailModel): void => {
+    const existing = m.links.children.length;
+    const modes = subtaskModes(m.addSubtask, existing);
+    if (adder !== null && (adder.taskId !== m.task.id || modes.length === 0)) adder = null;
+    if (adder !== null && !modes.includes(adder.mode)) adder = { taskId: adder.taskId, mode: modes[0]! };
+    adderBox.hidden = modes.length === 0;
+    // The head redraws only when it changes, like the other parts, so a focused tab survives a poll;
+    // the boxes keep their own keys (what is being typed survives too).
+    const key = JSON.stringify([m.task.id, modes, existing, adder]);
+    if (key !== adderKey) {
+      adderKey = key;
+      clearAdderHead();
+      const redraw = (): void => {
+        if (current !== null) drawAdder(current);
+      };
+      if (adder === null) {
+        const actions = el('div', 'kb-actions kb-actions-start');
+        adderHead.append(actions);
+        adderDisposers.push(
+          mountButton(actions, {
+            label: 'Add sub-task',
+            variant: 'outline',
+            size: 'xs',
+            onClick: () => {
+              adder = { taskId: m.task.id, mode: modes[0]! };
+              redraw();
+              if (adder.mode === 'new') addBox.querySelector('input')?.focus();
+            },
+          }).dispose,
+        );
+      } else {
+        const open = adder;
+        const pick = el('div', 'kb-add-sub-modes');
+        const cancel = el('div', 'kb-add-sub-cancel');
+        adderHead.append(pick, cancel);
+        if (modes.length > 1) {
+          const tabs = mountTabs(pick, {
+            items: [
+              { id: 'new', label: 'New task' },
+              { id: 'existing', label: 'Existing tasks', count: existing },
+            ],
+            activeId: open.mode,
+            onChange: (id) => {
+              adder = { taskId: open.taskId, mode: id as SubtaskMode };
+              redraw();
+            },
+          });
+          adderDisposers.push(tabs.dispose);
+        } else {
+          pick.append(el('h3', 'kb-settings-heading', open.mode === 'new' ? 'New sub-task' : 'Existing tasks'));
+        }
+        adderDisposers.push(
+          mountButton(cancel, {
+            label: 'Cancel',
+            variant: 'ghost',
+            size: 'xs',
+            onClick: () => {
+              adder = null;
+              redraw();
+            },
+          }).dispose,
+        );
+      }
+    }
+    drawAddSubtask(m);
+    drawLinkChild(m);
+    addBox.hidden = adder?.mode !== 'new';
+    linkBox.hidden = adder?.mode !== 'existing';
+  };
+
   let current: DetailModel | null = null;
   let disposed = false;
   const draw = (m: DetailModel): void => {
@@ -540,6 +711,8 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
       clearStart();
       clearQuick();
       clearLink();
+      editing?.dispose();
+      clearAdderHead();
       addHandle?.dispose();
       shell.dispose();
     },
@@ -555,7 +728,6 @@ const mountAddSubtask = (
   types: string[],
   onAdd: (input: { title: string; type: string | null }) => Promise<string | null>,
 ): { setTypes: (types: string[]) => void; dispose: () => void } => {
-  box.append(el('h3', 'kb-settings-heading', 'Add sub-task'));
   const row = el('div', 'kb-fields kb-add-sub-row');
   const titleSlot = el('div', 'kb-field kb-add-sub-title');
   const typeSlot = el('div', 'kb-field kb-add-sub-type');

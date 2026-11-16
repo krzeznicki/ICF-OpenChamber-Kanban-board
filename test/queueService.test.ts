@@ -489,3 +489,32 @@ test('/tasks/parent: once the task moved, a failing re-key of its links is logge
   // The queue is re-keyed on its own, not skipped because the links failed.
   assert.deepEqual(ids((await post(deps, '/queue/list', { directory })).queue), [task.id]);
 });
+
+test('/tasks/unparent unlinks a sub-task; its new id carries its session links and queue entry along', async (t) => {
+  const { directory, deps, running } = await setup(t);
+  await writeConfig(directory, 'local');
+  const tracker = createLocalTracker(directory);
+  const a = (await tracker.create({ title: 'A' })).id;
+  const ticket = (await tracker.create({ title: 'Free me', parentId: a })).id;
+  await running(ticket, 'ses_freed', 'idle');
+  await post(deps, '/queue/add', { directory, entry: entry(ticket) });
+
+  const r = await handle('POST', '/tasks/unparent', { directory, id: ticket }, deps);
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  const task = (r.json as { task: Task }).task;
+  assert.equal(task.id, '.scratch/free-me/spec.md');
+  assert.equal(task.parentId, null);
+  const links = (await handle('POST', '/links/list', { directory }, deps)).json as { links: Array<{ taskId: string; sessionId: string }> };
+  assert.deepEqual(links.links.map((l) => [l.taskId, l.sessionId]), [[task.id, 'ses_freed']]);
+  assert.deepEqual(ids((await post(deps, '/queue/list', { directory })).queue), [task.id]);
+});
+
+test('/tasks/unparent: a missing id is 400; a task without a parent is 422', async (t) => {
+  const { directory, deps } = await setup(t);
+  await writeConfig(directory, 'local');
+  const a = (await createLocalTracker(directory).create({ title: 'A' })).id;
+  assert.equal((await handle('POST', '/tasks/unparent', { directory }, deps)).status, 400);
+  const top = await handle('POST', '/tasks/unparent', { directory, id: a }, deps);
+  assert.equal(top.status, 422);
+  assert.equal((top.json as { error: { code: string } }).error.code, 'INVALID');
+});

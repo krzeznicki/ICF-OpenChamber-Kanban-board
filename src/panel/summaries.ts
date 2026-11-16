@@ -108,6 +108,12 @@ export type SummariesDeps = {
   loadLanguage?: (projectId: string, taskId: string) => Promise<string | undefined>;
   /** A task's summary or status changed: redraw it. */
   onChange?: (taskId: string) => void;
+  /**
+   * A summary was generated now (not read back from storage, not a late answer): once per body,
+   * language and prompt. The panel asks the Small Model for the type of a task without one then
+   * (suggest.ts createTypeClassifier). `task` is the task as it was sent to the model.
+   */
+  onGenerated?: (projectId: string, task: Task) => void;
   /** Called once per session when the model is missing (NO_MODEL) or not granted; only without `availability`. */
   onUnavailable?: (code: string) => void;
   /** The panel's "Small Model available" flag (shared with suggest.ts, which owns the notice then); a private one otherwise. */
@@ -226,6 +232,11 @@ export const createSummaries = (deps: SummariesDeps) => {
         model.answered(); // a model answered after all
         texts.set(key, text);
         await store(key, taskPrefix(projectId, task.id), text);
+        try {
+          deps.onGenerated?.(projectId, task);
+        } catch {
+          // Its trouble, not the summary's.
+        }
         return text;
       } catch (e) {
         const code = codeOf(e);

@@ -10,6 +10,7 @@ import {
   askedOf,
   buildSuggestPrompt,
   createSuggester,
+  createTypeClassifier,
   parseSuggestion,
   planSuggestion,
   type SuggestJob,
@@ -65,6 +66,14 @@ test('buildSuggestPrompt: lists the types and the four states, the task as data,
   const json = p.lastIndexOf('Answer with only');
   assert.ok(json > body);
   assert.match(p.slice(json), /\{"type": .*"state": .*\}/);
+});
+
+test('buildSuggestPrompt: a task not described well enough to implement is research, when the board has that type', () => {
+  const p = buildSuggestPrompt({ title: 'Better search', body: 'Make search better.' }, TYPES);
+  assert.ok(TYPES.includes('research'));
+  assert.match(p, /not described completely enough to implement[^\n]*pick research/);
+  const without = buildSuggestPrompt({ title: 'Better search', body: '' }, ['bug', 'enhancement']);
+  assert.doesNotMatch(without, /pick research/);
 });
 
 test('buildSuggestPrompt: a huge body is cut so the prompt stays under the limit, the instruction kept', () => {
@@ -371,4 +380,94 @@ test('summaries.acceptLate ignores a late suggestion answer (dropped: the task m
   });
   const late = { request: { prompt: 'x', system: `${SUGGEST_SYSTEM}` }, ok: true as const, result: { text: '{"type":"bug","state":"needs-info"}' } };
   assert.equal(summaries.acceptLate(late), false);
+});
+
+// --- the type of a task without one, asked when its summary is generated ---
+
+const classifierSetup = (opts: { enabled?: boolean; types?: string[]; noType?: Set<string> } = {}) => {
+  const s = setup();
+  const state = { enabled: opts.enabled ?? true, types: opts.types ?? TYPES };
+  const classifier = createTypeClassifier({
+    suggester: s.suggester,
+    enabled: () => state.enabled,
+    types: () => state.types,
+    explicitNoType: async (_projectId, taskId) => opts.noType?.has(taskId) ?? false,
+    target: () => s.job().target,
+  });
+  return { ...s, state, classifier };
+};
+
+test('classifier: a fresh summary of an open task without a type asks for the type only and writes it', async () => {
+  const c = classifierSetup();
+  const done = c.classifier.onSummary('p1', task({ body: 'Look into why exports are slow.' }));
+  await settle();
+  assert.equal(c.calls.length, 1);
+  assert.ok(c.calls[0]!.req.system?.startsWith(SUGGEST_SYSTEM), 'the same request as Add task makes');
+  assert.ok(c.calls[0]!.req.prompt.includes('Look into why exports are slow.'));
+  assert.ok(c.calls[0]!.req.prompt.includes('pick research'));
+  c.calls[0]!.resolve('{"type":"research","state":"ready-for-agent"}');
+  assert.deepEqual(await done, { kind: 'applied', type: 'research' });
+  assert.deepEqual(c.writes, ['type #7 research'], 'the state stays as it is');
+});
+
+test('classifier: never asks for a task with a type, a closed one, one created with "No type", without types or with the setting off', async () => {
+  const cases: Array<[string, ReturnType<typeof classifierSetup>, Task]> = [
+    ['has a type', classifierSetup(), task({ type: 'bug' })],
+    ['done', classifierSetup(), task({ state: 'done' })],
+    ['wontfix', classifierSetup(), task({ state: 'wontfix' })],
+    ['"No type" in Add task', classifierSetup({ noType: new Set(['#7']) }), task()],
+    ['the board has no types', classifierSetup({ types: [] }), task()],
+    ['the setting is off', classifierSetup({ enabled: false }), task()],
+  ];
+  for (const [why, c, t] of cases) {
+    assert.deepEqual(await c.classifier.onSummary('p1', t), { kind: 'kept' }, why);
+    await settle();
+    assert.equal(c.calls.length, 0, why);
+  }
+});
+
+test('classifier: once per body; a changed body may ask again', async () => {
+  const c = classifierSetup();
+  const first = c.classifier.onSummary('p1', task());
+  await settle();
+  c.calls[0]!.resolve('{"type":"oops","state":"needs-triage"}');
+  assert.deepEqual(await first, { kind: 'failed' });
+  // The same body again (the prompt or language changed, a new summary for it): not asked again.
+  assert.deepEqual(await c.classifier.onSummary('p1', task()), { kind: 'kept' });
+  assert.equal(c.calls.length, 1);
+  const edited = c.classifier.onSummary('p1', task({ body: 'Users want a CSV export of orders.' }));
+  await settle();
+  assert.equal(c.calls.length, 2);
+  c.calls[1]!.resolve('{"type":"enhancement","state":"needs-triage"}');
+  assert.deepEqual(await edited, { kind: 'applied', type: 'enhancement' });
+});
+
+test('classifier: quiet — an unusable answer gives no notice', async () => {
+  const c = classifierSetup();
+  const done = c.classifier.onSummary('p1', task());
+  await settle();
+  c.calls[0]!.resolve('I think this is a bug.');
+  assert.deepEqual(await done, { kind: 'failed' });
+  assert.deepEqual(c.notices, []);
+  assert.deepEqual(c.writes, []);
+});
+
+test('classifier: a type set meanwhile (by the user or Add task\'s suggestion) is never overwritten', async () => {
+  const c = classifierSetup();
+  const done = c.classifier.onSummary('p1', task());
+  await settle();
+  c.current.set('#7', task({ type: 'chore' }));
+  c.calls[0]!.resolve('{"type":"research","state":"needs-triage"}');
+  assert.deepEqual(await done, { kind: 'kept' });
+  assert.deepEqual(c.writes, []);
+});
+
+test('classifier: not while Add task\'s own suggestion for the task is still running', async () => {
+  const c = classifierSetup();
+  const own = c.suggester.suggest(c.job());
+  await settle();
+  assert.deepEqual(await c.classifier.onSummary('p1', task()), { kind: 'kept' });
+  assert.equal(c.calls.length, 1, 'one request for the task');
+  c.calls[0]!.resolve('{"type":"bug","state":"needs-info"}');
+  assert.deepEqual(await own, { kind: 'applied', type: 'bug', state: 'needs-info' });
 });

@@ -2,7 +2,7 @@
 // through host.serviceRequest, and every POST body carries the project's absolute `directory`.
 import type { HostClient } from '@openchamber/sdk';
 import type { LinkStatus, QueueEntry } from '../core/queue.ts';
-import type { NewTask, Task, TaskState } from '../core/types.ts';
+import type { NewTask, Task, TaskEdit, TaskState } from '../core/types.ts';
 import type { AgentsAnswer, ModelsAnswer } from './models.ts';
 
 /** `/links/list` reports a failed status lookup as `unknown`. */
@@ -70,12 +70,19 @@ export const createApi = (host: HostClient, directory: string) => {
     setState: (id: string, state: TaskState) =>
       call<{ task: Task }>('POST', '/tasks/state', { id, state }).then((r) => r.task),
     setType: (id: string, type: string) => call<{ task: Task }>('POST', '/tasks/type', { id, type }).then((r) => r.task),
+    /** Title and/or description; the id stays. */
+    edit: (id: string, changes: TaskEdit) => call<{ task: Task }>('POST', '/tasks/edit', { id, ...changes }).then((r) => r.task),
     /**
      * Makes an existing task a sub-task of `parentId`. The returned task can have a new id (local:
      * the file moves into the parent's feature); the service has re-keyed its session links and queue entry.
      */
     setParent: (id: string, parentId: string) =>
       call<{ task: Task }>('POST', '/tasks/parent', { id, parentId }).then((r) => r.task),
+    /** Deletes the task for good (with `withChildren` its sub-tasks too); resolves to every deleted id. The service drops their links and queue entries. */
+    remove: (id: string, withChildren = false) =>
+      call<{ deleted: string[] }>('POST', '/tasks/delete', { id, withChildren }).then((r) => r.deleted),
+    /** Unlinks a sub-task from its parent; like setParent the returned task can have a new id (local: it became a feature). */
+    removeParent: (id: string) => call<{ task: Task }>('POST', '/tasks/unparent', { id }).then((r) => r.task),
     close: (id: string, withChildren = false) =>
       call<{ tasks: Task[] }>('POST', '/tasks/close', { id, withChildren }).then((r) => r.tasks),
     cliPath: () => call<{ path: string }>('GET', '/cli').then((r) => r.path),

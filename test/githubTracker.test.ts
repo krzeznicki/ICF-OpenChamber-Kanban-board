@@ -287,3 +287,69 @@ test('setParent refuses a parent that is the task itself’s descendant (walking
   assert.deepEqual(gh.commands(), []);
   assert.equal((await tracker.setParent('#4', '#3')).parentId, '#3');
 });
+
+test('edit changes the title and body with gh issue edit; only what is given is sent', async () => {
+  const { tracker, gh } = setup();
+  const both = await tracker.edit('#4', { title: ' New title ', body: 'New body' });
+  assert.equal(both.id, '#4');
+  assert.equal(both.title, 'New title');
+  assert.equal(both.body, 'New body');
+  await tracker.edit('#5', { body: '' });
+  assert.equal((await tracker.get('#5')).title, 'Line blocker');
+  assert.deepEqual(gh.commands(), ['gh issue edit 4 --title New title --body New body', 'gh issue edit 5 --body ']);
+});
+
+test('edit with a blank title is INVALID and runs no edit', async () => {
+  const { tracker, gh } = setup();
+  await rejectsWith(tracker.edit('#4', { title: ' ' }), 'INVALID');
+  assert.deepEqual(gh.commands(), []);
+});
+
+test('remove deletes with gh issue delete --yes; withChildren deletes the sub-issues first', async () => {
+  const { tracker, gh } = setup();
+  assert.deepEqual(await tracker.remove('#4', { withChildren: false }), ['#4']);
+  assert.deepEqual(await tracker.remove('#1', { withChildren: true }), ['#2', '#3', '#1']);
+  assert.deepEqual(gh.commands(), ['gh issue delete 4 --yes', 'gh issue delete 2 --yes', 'gh issue delete 3 --yes', 'gh issue delete 1 --yes']);
+  assert.deepEqual((await tracker.list()).map((t) => t.id), ['#5', '#6']);
+});
+
+test('remove withChildren deletes the whole subtree, closed sub-issues too, deepest first', async () => {
+  const { tracker, gh } = setup([
+    { number: 1, title: 'Epic' },
+    { number: 2, title: 'Feature', parent: 1 },
+    { number: 3, title: 'Grandchild', parent: 2 },
+    { number: 4, title: 'Closed grandchild', parent: 2, state: 'CLOSED', closedAt: ago(1) },
+    { number: 5, title: 'Closed child', parent: 1, state: 'CLOSED', closedAt: ago(1) },
+    { number: 6, title: 'Other' },
+  ]);
+  assert.deepEqual(await tracker.remove('#1', { withChildren: true }), ['#3', '#4', '#2', '#5', '#1']);
+  assert.deepEqual(gh.commands(), [3, 4, 2, 5, 1].map((n) => `gh issue delete ${n} --yes`));
+  assert.deepEqual((await tracker.list()).map((t) => t.id), ['#6']);
+});
+
+test('remove without withChildren keeps the sub-issues as top-level issues', async () => {
+  const { tracker } = setup();
+  assert.deepEqual(await tracker.remove('#1', { withChildren: false }), ['#1']);
+  assert.equal((await tracker.get('#2')).parentId, null);
+});
+
+test('remove by a non-admin is FAILED with a clear message; a missing issue is NOT_FOUND', async () => {
+  const { tracker } = setup(ISSUES, { notAdmin: true });
+  await rejectsWith(tracker.remove('#4', { withChildren: false }), 'FAILED', /Only repository admins can delete GitHub issues.*close it instead/);
+  await rejectsWith(tracker.remove('#99', { withChildren: false }), 'NOT_FOUND');
+});
+
+test('removeParent unlinks the native parent with gh issue edit --remove-parent; the number stays', async () => {
+  const { tracker, gh } = setup();
+  const alone = await tracker.removeParent('#2');
+  assert.equal(alone.id, '#2');
+  assert.equal(alone.parentId, null);
+  assert.deepEqual(gh.commands(), ['gh issue edit 2 --remove-parent']);
+});
+
+test('removeParent refuses an issue without a parent; a missing issue is NOT_FOUND', async () => {
+  const { tracker, gh } = setup();
+  await rejectsWith(tracker.removeParent('#1'), 'INVALID', /no parent/);
+  await rejectsWith(tracker.removeParent('#99'), 'NOT_FOUND');
+  assert.deepEqual(gh.commands(), []);
+});

@@ -27,6 +27,9 @@ Commands:
   create --title <t> [--type <x>] [--body-file <f>|-] [--parent <id>] [--state <state>]
          [--blocked-by <id>[,<id>...]]...   blockers: repeat the option or separate ids with commas
   state <id> <state>                    set the state ('done' closes)
+  edit <id> [--title <t>] [--body-file <f>|-]
+                                        change the title and/or the description (local: the
+                                        heading number, Status/Type/Blocked by and ## Comments stay)
   claim <id>                            take a sub-task before working on it (orchestrator)
   parent <id> <parentId>                make an existing task a sub-task of another (prints its id,
                                         which changes in a local tracker: the file moves)
@@ -75,6 +78,7 @@ const COMMANDS: Record<string, { positionals: number; options: Option[] }> = {
   show: { positionals: 1, options: [] },
   create: { positionals: 0, options: ['title', 'type', 'body-file', 'parent', 'state', 'blocked-by'] },
   state: { positionals: 2, options: [] },
+  edit: { positionals: 1, options: ['title', 'body-file'] },
   claim: { positionals: 1, options: [] },
   parent: { positionals: 2, options: [] },
   next: { positionals: 0, options: [] },
@@ -158,6 +162,16 @@ export const main = async (argv: string[], io: CliIO): Promise<number> => {
   const exec = io.exec ?? realExec;
   const print = (value: unknown, human: string): void => io.stdout(json ? `${JSON.stringify(value, null, 2)}\n` : human);
 
+  const bodyOf = async (file: string | undefined): Promise<string | undefined> => {
+    if (file === '-') return readStdin(io.stdin);
+    if (file === undefined) return undefined;
+    try {
+      return await readFile(resolve(io.cwd, file), 'utf8');
+    } catch (e) {
+      throw new TrackerError('INVALID', `Cannot read body file ${file}: ${(e as Error).message}`);
+    }
+  };
+
   try {
     switch (command) {
       case 'list': {
@@ -180,16 +194,7 @@ export const main = async (argv: string[], io: CliIO): Promise<number> => {
         const state = values.state === undefined ? undefined : toState(values.state, 'state');
         const blockedBy = (values['blocked-by'] ?? []).flatMap((v) => v.split(',')).map((v) => v.trim());
         if (blockedBy.some((id) => id === '')) usage('--blocked-by needs non-empty ids');
-        let body: string | undefined;
-        const file = values['body-file'];
-        if (file === '-') body = await readStdin(io.stdin);
-        else if (file !== undefined) {
-          try {
-            body = await readFile(resolve(io.cwd, file), 'utf8');
-          } catch (e) {
-            throw new TrackerError('INVALID', `Cannot read body file ${file}: ${(e as Error).message}`);
-          }
-        }
+        const body = await bodyOf(values['body-file']);
         const task = await (await openTracker(root, exec)).create({
           title: values.title!,
           ...(body === undefined ? {} : { body }),
@@ -204,6 +209,16 @@ export const main = async (argv: string[], io: CliIO): Promise<number> => {
       case 'state': {
         const state = toState(args[1]!, 'state');
         const task = await (await openTracker(root, exec)).setState(args[0]!, state);
+        print(task, line(task));
+        return 0;
+      }
+      case 'edit': {
+        if (values.title === undefined && values['body-file'] === undefined) usage('edit needs --title, --body-file or both');
+        const body = await bodyOf(values['body-file']);
+        const task = await (await openTracker(root, exec)).edit(args[0]!, {
+          ...(values.title === undefined ? {} : { title: values.title }),
+          ...(body === undefined ? {} : { body }),
+        });
         print(task, line(task));
         return 0;
       }

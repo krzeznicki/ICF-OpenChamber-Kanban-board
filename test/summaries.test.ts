@@ -338,3 +338,45 @@ test('a late answer with our reference is stored under its key; others are ignor
   void storage;
   void changes;
 });
+
+// --- a fresh summary is reported (suggest.ts asks for the type of a task without one then) ---
+
+test('onGenerated: once for a summary generated now; never for one read back from storage', async () => {
+  const storage = fakeStorage();
+  const gen = fakeGenerate();
+  const generated: string[] = [];
+  const make = () =>
+    createSummaries({
+      generate: gen.generate,
+      storage,
+      context: () => ({ projectId: 'p1', summary: S }),
+      onGenerated: (projectId, t) => generated.push(`${projectId} ${t.id}`),
+    });
+  const s = make();
+  const done = s.ensure(task('body'));
+  await settle();
+  gen.calls[0]!.resolve('A summary.');
+  assert.equal(await done, 'A summary.');
+  assert.deepEqual(generated, ['p1 #42']);
+  // The next panel session reads it back: nothing generated, nothing reported.
+  assert.equal(await make().ensure(task('body')), 'A summary.');
+  assert.deepEqual(generated, ['p1 #42']);
+});
+
+test('onGenerated: not for a failed or empty answer', async () => {
+  const gen = fakeGenerate();
+  const generated: string[] = [];
+  const s = createSummaries({
+    generate: gen.generate,
+    storage: fakeStorage(),
+    context: () => ({ projectId: 'p1', summary: S }),
+    onGenerated: (_p, t) => generated.push(t.id),
+  });
+  const a = s.ensure(task('one', '#1'));
+  const b = s.ensure(task('two', '#2'));
+  await settle();
+  gen.calls[0]!.resolve('  ');
+  gen.calls[1]!.reject(new Error('boom'));
+  await Promise.all([a, b]);
+  assert.deepEqual(generated, []);
+});

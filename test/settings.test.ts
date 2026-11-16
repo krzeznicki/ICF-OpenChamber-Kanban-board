@@ -1,6 +1,5 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import type { Task } from '../src/core/types.ts';
 import {
   DEFAULT_SETTINGS,
   DEFAULT_SUMMARY_PROMPT,
@@ -17,19 +16,8 @@ import {
 } from '../src/panel/settings.ts';
 import { BUILTIN_PRESETS } from '../src/panel/presets.ts';
 
-const task = (type: string | null, kind: Task['kind'] = 'ticket'): Task => ({
-  id: '.scratch/f/issues/01-a.md',
-  kind,
-  title: 'A',
-  body: '',
-  state: 'ready-for-agent',
-  type,
-  parentId: null,
-  blockedBy: [],
-  url: null,
-  updatedAt: 0,
-  claimed: false,
-});
+/** What resolveStart reads: the type, and whether the task has sub-tasks on the board. */
+const task = (type: string | null, subtasks = false) => ({ type, subtasks });
 
 // --- resolveSettings ---
 
@@ -40,7 +28,7 @@ test('defaults when nothing is stored', () => {
   assert.equal(s.maxParallel, 3);
   assert.deepEqual(s.defaults, { presetId: 'implement', model: null, agent: null, variant: null, location: 'worktree' });
   assert.deepEqual(s.presetByType, { enhancement: 'implement', bug: 'diagnose', research: 'plan' });
-  assert.deepEqual(s.summary, { auto: true, language: 'Polish', prompt: DEFAULT_SUMMARY_PROMPT });
+  assert.deepEqual(s.summary, { auto: true, language: 'English', prompt: DEFAULT_SUMMARY_PROMPT });
   assert.equal(s.hideChildren, false);
   assert.deepEqual(s.types, ['enhancement', 'bug', 'chore', 'research']);
   assert.equal(s.presetSet, 'plain');
@@ -203,12 +191,23 @@ test('preset order: card, then the type default, then defaults.presetId', () => 
   assert.equal(resolveStart(s, task('research'), { presetId: 'orchestrate' }).presetId, 'orchestrate');
 });
 
-test('a parent defaults to orchestrate; the card choice still wins', () => {
+test('a task with sub-tasks defaults to orchestrate; the card choice still wins', () => {
   const s = resolveSettings({ defaults: { presetId: 'prototype' }, presetByType: { enhancement: 'plan' } }, {});
-  assert.equal(resolveStart(s, task('enhancement', 'parent'), {}).presetId, 'orchestrate');
-  assert.equal(resolveStart(s, task(null, 'parent'), {}).presetId, 'orchestrate');
-  assert.equal(resolveStart(s, task('enhancement', 'parent'), { presetId: 'implement' }).presetId, 'implement');
-  assert.equal(resolveStart(s, task('enhancement'), {}).presetId, 'plan');
+  assert.equal(resolveStart(s, task('enhancement', true), {}).presetId, 'orchestrate');
+  assert.equal(resolveStart(s, task('bug', true), {}).presetId, 'orchestrate');
+  assert.equal(resolveStart(s, task(null, true), {}).presetId, 'orchestrate');
+  assert.equal(resolveStart(s, task('enhancement', true), { presetId: 'implement' }).presetId, 'implement');
+});
+
+test('a task without sub-tasks (a local spec.md too) takes its type preset; research that adds sub-tasks then orchestrates', () => {
+  const s = resolveSettings({}, {});
+  assert.equal(resolveStart(s, task('bug'), {}).presetId, 'diagnose');
+  assert.equal(resolveStart(s, task('enhancement'), {}).presetId, 'implement');
+  assert.equal(resolveStart(s, task('research'), {}).presetId, 'plan');
+  assert.equal(resolveStart(s, task('research', true), {}).presetId, 'orchestrate');
+  const mine = resolveSettings({ presetByType: { bug: 'triage' } }, {});
+  assert.equal(resolveStart(mine, task('bug'), {}).presetId, 'triage');
+  assert.equal(resolveStart(s, task('bug'), { presetId: 'orchestrate' }).presetId, 'orchestrate');
 });
 
 test('an unknown preset id falls back to implement', () => {
@@ -296,6 +295,26 @@ test('moveCard: a task that got a new id keeps its start options under it; the o
   assert.equal(data.has('card:p1:#2'), false);
 });
 
+test('"No type" marks: kept per project and task, follow a new id, go with the task', async () => {
+  const { data, storage } = fakeStorage();
+  const store = createSettingsStore(storage);
+  assert.equal(STORAGE_KEYS.noType('p1', '#1'), 'noType:p1:#1');
+  assert.equal(await store.hasNoType('p1', '#1'), false);
+  await store.markNoType('p1', '#1');
+  assert.equal(await store.hasNoType('p1', '#1'), true);
+  assert.equal(await store.hasNoType('p2', '#1'), false, 'per project');
+  await store.moveNoType('p1', '#1', '#9');
+  assert.equal(await store.hasNoType('p1', '#1'), false);
+  assert.equal(await store.hasNoType('p1', '#9'), true);
+  await store.moveNoType('p1', '#2', '#3'); // nothing marked: nothing written
+  assert.equal(data.has('noType:p1:#3'), false);
+  await store.forgetNoType('p1', '#9');
+  assert.equal(await store.hasNoType('p1', '#9'), false);
+  assert.equal(data.size, 0);
+  data.set('noType:p1:#5', 'garbage');
+  assert.equal(await store.hasNoType('p1', '#5'), false, 'only a stored true counts');
+});
+
 test('latest saver: one save per key at a time, the newest waiting value next', async () => {
   const saved: string[] = [];
   const errors: unknown[] = [];
@@ -373,4 +392,35 @@ test('archived sessions: parsed defensively, stored per project under archivedSe
   assert.deepEqual([...(await store.loadArchived('p1'))], ['s1']);
   await store.saveArchived('p1', new Set());
   assert.equal(data.has('archivedSessions:p1'), false);
+});
+
+test('manual card order: stored under taskOrder:<projectId> as an id list, at most ORDER_MAX; empty deletes', async () => {
+  const { ORDER_MAX } = await import('../src/panel/order.ts');
+  const { data, storage } = fakeStorage();
+  const store = createSettingsStore(storage);
+  assert.equal(STORAGE_KEYS.taskOrder('p1'), 'taskOrder:p1');
+  await store.saveOrder('p1', ['b', 'a']);
+  assert.deepEqual(data.get('taskOrder:p1'), ['b', 'a']);
+  assert.deepEqual(await store.loadOrder('p1'), ['b', 'a']);
+  await store.saveOrder('p1', Array.from({ length: ORDER_MAX + 1 }, (_, i) => `t${i}`));
+  assert.equal((data.get('taskOrder:p1') as string[]).length, ORDER_MAX);
+  await store.saveOrder('p1', []);
+  assert.equal(data.has('taskOrder:p1'), false);
+  assert.deepEqual(await store.loadOrder('p2'), []);
+});
+
+test('summary language: a fresh install summarises in English; a language the user set survives an update', async () => {
+  const data = new Map<string, unknown>();
+  const storage = {
+    get: async (k: string) => data.get(k),
+    set: async (k: string, v: never) => void data.set(k, v),
+    delete: async (k: string) => void data.delete(k),
+  };
+  const store = createSettingsStore(storage);
+  // First run: nothing stored, and nothing gets written just by reading the settings.
+  assert.equal(resolveSettings(await store.loadGlobal(), {}).summary.language, 'English');
+  assert.equal(data.has(STORAGE_KEYS.global), false);
+  // Only what the user typed is stored, so a new default never replaces it (Polish was 0.3's default).
+  await store.saveGlobal({ summary: { language: 'Polish' } });
+  assert.equal(resolveSettings(await createSettingsStore(storage).loadGlobal(), {}).summary.language, 'Polish');
 });

@@ -4,7 +4,7 @@
 // it; a ticket takes no sub-tasks, and blockers must be open tickets of the same feature (the
 // local tracker rejects any other). GitHub: any open issue may be a blocker, and any open issue can
 // take sub-tasks (it becomes a parent).
-import type { NewTask, Task, TaskKind, TaskState } from '../core/types.ts';
+import type { NewTask, Task, TaskState } from '../core/types.ts';
 import { newChildCandidates } from './link.ts';
 import type { CardOptions } from './settings.ts';
 
@@ -93,6 +93,17 @@ export const canHaveSubtasks = (tracker: TrackerKind, parentId: string): boolean
 export const canAddSubtask = (task: Task, tracker: TrackerKind): boolean =>
   task.state !== 'done' && (tracker === 'github' || task.kind === 'parent');
 
+export type SubtaskMode = 'new' | 'existing';
+
+/**
+ * What the task modal's "Add sub-task" offers: typing a new one (`canAdd`, canAddSubtask) and/or
+ * picking one of the `existing` tasks that may be linked (link.ts childCandidates). Empty: no button.
+ */
+export const subtaskModes = (canAdd: boolean, existing: number): SubtaskMode[] => [
+  ...(canAdd ? (['new'] as const) : []),
+  ...(existing > 0 ? (['existing'] as const) : []),
+];
+
 export const subtaskTitles = (rows: readonly string[]): string[] => rows.map((r) => r.trim()).filter((r) => r !== '');
 
 /** The sub-task titles to create under the new task: none when it may not have any (rows hidden, not cleared). */
@@ -110,11 +121,12 @@ export const existingSubtaskChoices = (tasks: readonly Task[], tracker: TrackerK
 export const existingToLink = (d: AddDraft, tracker: TrackerKind, tasks: readonly Task[]): string[] =>
   keepOffered(d.existing, existingSubtaskChoices(tasks, tracker, d.parentId));
 
-/** What the new task will be, so its inherited start options (preset by kind) can be shown. */
-export const draftKind = (d: AddDraft, tracker: TrackerKind): TaskKind => {
-  if (tracker === 'local') return d.parentId === '' ? 'parent' : 'ticket';
-  return subtaskTitles(d.subtasks).length > 0 || d.existing.length > 0 ? 'parent' : 'ticket';
-};
+/**
+ * Whether the new task will have sub-tasks, so its inherited start preset can be shown
+ * (orchestrate with sub-tasks, else its type's). A local sub-task cannot have sub-tasks.
+ */
+export const draftSubtasks = (d: AddDraft, tracker: TrackerKind): boolean =>
+  !(tracker === 'local' && d.parentId !== '') && (subtaskTitles(d.subtasks).length > 0 || d.existing.length > 0);
 
 /** The type the task is created with: none for "No type" and for "Let the model pick". */
 export const draftType = (d: Pick<AddDraft, 'type'>): string | null => (d.type === '' || d.type === MODEL_PICK ? null : d.type);

@@ -97,6 +97,16 @@ export const renameLinks = (file: string, project: string, from: string, to: str
     await writeJson(file, data);
   });
 
+/** A task was deleted: its links go (a later local task may get the same path). The sessions keep running. */
+export const removeLinks = (file: string, project: string, taskId: string): Promise<void> =>
+  serial(file, async () => {
+    const data = await readLinksFile(file);
+    const list = data.projects[project] ?? [];
+    if (!list.some((l) => l.taskId === taskId)) return;
+    data.projects[project] = list.filter((l) => l.taskId !== taskId);
+    await writeJson(file, data);
+  });
+
 /** How many tasks' newest sessions get their live status asked; older links answer `unknown`. */
 export const STATUS_CHECK_MAX = 50;
 const STATUS_CONCURRENCY = 8;

@@ -341,3 +341,145 @@ test('setParent refuses a feature without tickets whose folder holds other files
   assert.deepEqual((await tracker.list()).map((x) => x.id), [SPEC, T1, T2, lone.id]);
   assert.equal(existsSync(join(root, '.scratch/example-feature/issues/03-lone-idea.md')), false);
 });
+
+test('edit title rewrites only the heading (keeping its NN: prefix); the id and file name stay', async (t) => {
+  const root = await repo(t);
+  const before = await readFile(join(root, T2), 'utf8');
+  const task = await createLocalTracker(root).edit(T2, { title: '  Renamed  ' });
+  assert.equal(task.id, T2);
+  assert.equal(task.title, 'Renamed');
+  assert.equal(await readFile(join(root, T2), 'utf8'), before.replace('# 02: Second', '# 02: Renamed'));
+});
+
+test('edit body replaces only the description: heading, field lines and ## Comments stay', async (t) => {
+  const root = await repo(t);
+  const T3 = '.scratch/example-feature/issues/03-third.md';
+  await writeFile(
+    join(root, T3),
+    '# 03: Third\n\nOld lead.\n\n**Blocked by:** 02\n\n**Type:** chore\n\n**Status:** ready-for-agent\n\n- [ ] old criterion\n\n## Comments\n\nagent: on it\n',
+  );
+  const tracker = createLocalTracker(root);
+  const task = await tracker.edit(T3, { body: 'New lead.\n\n- [ ] new criterion\n' });
+  assert.equal(
+    await readFile(join(root, T3), 'utf8'),
+    '# 03: Third\n\nNew lead.\n\n**Blocked by:** 02\n\n**Type:** chore\n\n**Status:** ready-for-agent\n\n- [ ] new criterion\n\n## Comments\n\nagent: on it\n',
+  );
+  assert.equal(task.state, 'ready-for-agent');
+  assert.equal(task.type, 'chore');
+  assert.deepEqual(task.blockedBy, [T2]);
+});
+
+test('edit body that starts with a list or heading puts the field lines right under the title', async (t) => {
+  const root = await repo(t);
+  await createLocalTracker(root).edit(T2, { body: '## What\n\nStatus: not a field here' });
+  assert.equal(
+    await readFile(join(root, T2), 'utf8'),
+    '# 02: Second\n\n**Blocked by:** 01, 07\n\n**Type:** bug\n\n**Status:** needs-info\n\n## What\n\nStatus: not a field here\n',
+  );
+  assert.equal((await createLocalTracker(root).get(T2)).state, 'needs-info');
+});
+
+test('edit a feature: its spec.md gets a heading (no number); a feature without spec.md gets one written', async (t) => {
+  const root = await repo(t);
+  const tracker = createLocalTracker(root);
+  const spec = await tracker.edit(SPEC, { title: 'Example' });
+  assert.equal(spec.id, SPEC);
+  assert.equal(spec.title, 'Example');
+  assert.match(await readFile(join(root, SPEC), 'utf8'), /^# Example\n\n## Problem Statement\n/);
+  await mkdir(join(root, '.scratch/bare'));
+  const bare = await tracker.edit('.scratch/bare/spec.md', { body: 'What it is.' });
+  assert.equal(await readFile(join(root, '.scratch/bare/spec.md'), 'utf8'), '# bare\n\nWhat it is.\n');
+  assert.equal(bare.title, 'bare');
+});
+
+test('edit with a blank title is INVALID and writes nothing; a missing task is NOT_FOUND', async (t) => {
+  const root = await repo(t);
+  const before = await readFile(join(root, T2), 'utf8');
+  await rejectsWith(createLocalTracker(root).edit(T2, { title: '  ', body: 'x' }), 'INVALID');
+  assert.equal(await readFile(join(root, T2), 'utf8'), before);
+  await rejectsWith(createLocalTracker(root).edit('.scratch/example-feature/issues/09-none.md', { title: 'x' }), 'NOT_FOUND');
+});
+
+test('remove deletes a ticket file; tickets that listed it as a blocker lose it', async (t) => {
+  const root = await repo(t);
+  const tracker = createLocalTracker(root);
+  assert.deepEqual(await tracker.remove(T1, { withChildren: false }), [T1]);
+  assert.equal(existsSync(join(root, T1)), false);
+  assert.match(await readFile(join(root, T2), 'utf8'), /\*\*Blocked by:\*\* 07\n/);
+  assert.deepEqual((await tracker.list()).map((x) => x.id), [SPEC, T2]);
+});
+
+test('remove of a feature with tickets needs withChildren; then its whole folder goes', async (t) => {
+  const root = await repo(t);
+  const tracker = createLocalTracker(root);
+  await rejectsWith(tracker.remove(SPEC, { withChildren: false }), 'INVALID', /2 sub-tasks/);
+  assert.equal(existsSync(join(root, T1)), true);
+  assert.deepEqual(await tracker.remove(SPEC, { withChildren: true }), [T1, T2, SPEC]);
+  assert.equal(existsSync(join(root, '.scratch/example-feature')), false);
+  assert.deepEqual(await tracker.list(), []);
+});
+
+test('remove refuses a feature whose folder holds other files, before deleting anything; a missing task is NOT_FOUND', async (t) => {
+  const root = await repo(t);
+  await writeFile(join(root, '.scratch/example-feature/map.md'), '# Map\n');
+  const tracker = createLocalTracker(root);
+  await rejectsWith(tracker.remove(SPEC, { withChildren: true }), 'INVALID', /map\.md/);
+  assert.equal(existsSync(join(root, T1)), true);
+  assert.equal(existsSync(join(root, SPEC)), true);
+  await rejectsWith(tracker.remove('.scratch/example-feature/issues/09-none.md', { withChildren: false }), 'NOT_FOUND');
+});
+
+test('removeParent moves a ticket out into its own feature (spec.md), without its number and blockers', async (t) => {
+  const root = await repo(t);
+  const tracker = createLocalTracker(root);
+  const alone = await tracker.removeParent(T2);
+  assert.equal(alone.id, '.scratch/second/spec.md');
+  assert.equal(alone.kind, 'parent');
+  assert.equal(alone.parentId, null);
+  assert.equal(alone.title, 'Second');
+  assert.equal(alone.state, 'needs-info');
+  assert.equal(alone.type, 'bug');
+  assert.equal(
+    await readFile(join(root, alone.id), 'utf8'),
+    '# Second\n\nDo it.\n\n**Type:** bug\n\n**Status:** needs-info\n',
+  );
+  assert.equal(existsSync(join(root, T2)), false);
+  assert.deepEqual((await tracker.list()).map((x) => x.id), [SPEC, T1, alone.id]);
+});
+
+test('removeParent: a taken feature name gets a suffix; tickets left behind lose the moved one as blocker', async (t) => {
+  const root = await repo(t);
+  const o = await other(root);
+  const tracker = createLocalTracker(root);
+  await tracker.create({ title: 'Alpha' }); // .scratch/alpha exists
+  const alone = await tracker.removeParent(o.a);
+  assert.equal(alone.id, '.scratch/alpha-2/spec.md');
+  assert.deepEqual((await tracker.get(o.b)).blockedBy, []);
+});
+
+test('removeParent: a claimed ticket becomes a ready-for-agent feature (a feature cannot be claimed)', async (t) => {
+  const root = await repo(t);
+  const tracker = createLocalTracker(root);
+  await tracker.claim(T1);
+  const alone = await tracker.removeParent(T1);
+  assert.equal(alone.state, 'ready-for-agent');
+  assert.equal(alone.claimed, false);
+  assert.match(alone.body, /\*\*Status:\*\* ready-for-agent/);
+});
+
+test('removeParent refuses a feature (it has no parent) and a missing ticket', async (t) => {
+  const root = await repo(t);
+  const tracker = createLocalTracker(root);
+  await rejectsWith(tracker.removeParent(SPEC), 'INVALID', /no parent/);
+  await rejectsWith(tracker.removeParent('.scratch/example-feature/issues/09-x.md'), 'NOT_FOUND');
+  assert.deepEqual((await tracker.list()).map((x) => x.id), [SPEC, T1, T2]);
+});
+
+test('removeParent of a feature\'s last ticket removes the emptied issues/ folder; the feature stays', async (t) => {
+  const root = await repo(t);
+  const tracker = createLocalTracker(root);
+  await tracker.removeParent(T1);
+  await tracker.removeParent(T2);
+  assert.equal(existsSync(join(root, '.scratch/example-feature/issues')), false);
+  assert.equal(existsSync(join(root, SPEC)), true);
+});
