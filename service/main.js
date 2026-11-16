@@ -1921,18 +1921,18 @@ var worktreesRoot = (directory) => join6(dirname2(directory), `${basename(direct
 var message2 = (e) => e instanceof Error ? e.message : String(e);
 var START_RETRY_MS = [1e3, 3e3, 6e3];
 var notReadyYet = (e) => e?.status === 503;
-var wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-var startWhenReady = async (deps2, input) => {
-  const sleep = deps2.sleep ?? wait;
-  for (const ms of START_RETRY_MS) {
+var realSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+var startRetrying = async (deps2, input) => {
+  const sleep = deps2.sleep ?? realSleep;
+  for (let attempt2 = 0; ; attempt2++) {
     try {
       return await deps2.sessions.start(input);
     } catch (e) {
-      if (!notReadyYet(e)) throw e;
+      const ms = START_RETRY_MS[attempt2];
+      if (ms === void 0 || !notReadyYet(e)) throw e;
+      await sleep(ms);
     }
-    await sleep(ms);
   }
-  return deps2.sessions.start(input);
 };
 var removeWorktree = async (deps2, directory, path, branch) => {
   const log = deps2.log ?? ((m) => console.error(m));
@@ -1966,7 +1966,7 @@ var startSession = async (input, deps2) => {
   const cwd = worktree ?? input.directory;
   let started;
   try {
-    started = await startWhenReady(deps2, {
+    started = await startRetrying(deps2, {
       prompt: input.prompt,
       directory: cwd,
       title: input.title,

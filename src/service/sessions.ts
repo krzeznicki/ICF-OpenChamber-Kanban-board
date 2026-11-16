@@ -227,20 +227,20 @@ export const START_RETRY_MS: readonly number[] = [1_000, 3_000, 6_000];
  */
 export const notReadyYet = (e: unknown): boolean => (e as { status?: unknown } | null)?.status === 503;
 
-const wait = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+const realSleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** sessions.start, tried again after each START_RETRY_MS wait while the host says it is not ready. */
-const startWhenReady = async (deps: StartDeps, input: Parameters<SessionHost['start']>[0]): Promise<{ sessionId: string; directory: string | null }> => {
-  const sleep = deps.sleep ?? wait;
-  for (const ms of START_RETRY_MS) {
+/** sessions.start, tried again after each START_RETRY_MS wait while the host answers that it is not ready. */
+const startRetrying = async (deps: StartDeps, input: Parameters<SessionHost['start']>[0]): Promise<{ sessionId: string; directory: string | null }> => {
+  const sleep = deps.sleep ?? realSleep;
+  for (let attempt = 0; ; attempt++) {
     try {
       return await deps.sessions.start(input);
     } catch (e) {
-      if (!notReadyYet(e)) throw e;
+      const ms = START_RETRY_MS[attempt];
+      if (ms === undefined || !notReadyYet(e)) throw e;
+      await sleep(ms);
     }
-    await sleep(ms);
   }
-  return deps.sessions.start(input);
 };
 
 /**
@@ -283,7 +283,7 @@ export const startSession = async (
   const cwd = worktree ?? input.directory;
   let started: { sessionId: string; directory: string | null };
   try {
-    started = await startWhenReady(deps, {
+    started = await startRetrying(deps, {
       prompt: input.prompt,
       directory: cwd,
       title: input.title,

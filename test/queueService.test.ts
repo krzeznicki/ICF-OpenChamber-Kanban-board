@@ -10,7 +10,7 @@ import { createLocalTracker } from '../src/core/localTracker.ts';
 import type { Exec, Task } from '../src/core/types.ts';
 import { RESERVE_MS, takeFromQueue } from '../src/service/queue.ts';
 import { handle, type Deps } from '../src/service/routes.ts';
-import { addLink, linkStatuses, STALE_LINK_MS, unknownSession, type SessionHost } from '../src/service/sessions.ts';
+import { addLink, linkStatuses, STALE_LINK_MS, START_RETRY_MS, unknownSession, type SessionHost } from '../src/service/sessions.ts';
 
 type T = { after: (fn: () => Promise<void>) => void };
 type Status = 'idle' | 'busy' | 'waiting';
@@ -279,12 +279,16 @@ test('a queued worktree start the host refuses with 503 (a new folder is not rea
   // The host as it behaves: the first sessions.start in a folder it has not seen answers 503.
   const seen = new Set<string>();
   const git: string[][] = [];
+  const waits: number[] = [];
   let n = 0;
   const cold: Deps = {
     ...deps,
-    exec: async (_cmd, args) => (git.push([...args]), { code: 0, stdout: '', stderr: '' }),
+    exec: async (_cmd, args) => {
+      git.push([...args]);
+      return { code: 0, stdout: '', stderr: '' };
+    },
     suffix: () => `s${++n}`,
-    sleep: async () => {},
+    sleep: async (ms) => void waits.push(ms),
     sessions: {
       ...deps.sessions!,
       start: async (input) => {
@@ -304,6 +308,24 @@ test('a queued worktree start the host refuses with 503 (a new folder is not rea
   // One worktree, kept: not removed and made again for the retry.
   assert.equal(git.filter((a) => a.includes('add')).length, 1);
   assert.equal(git.filter((a) => a.includes('remove')).length, 0);
+  assert.deepEqual(waits, [1000]);
+});
+
+test('a start the host keeps refusing with 503 fails after the waits of START_RETRY_MS; any other failure is not tried again', async (t) => {
+  const { directory, deps } = await setup(t);
+  for (const [status, tries, slept] of [[503, 4, [...START_RETRY_MS]], [500, 1, []], [0, 1, []]] as const) {
+    const waits: number[] = [];
+    let calls = 0;
+    const refusing: Deps = {
+      ...deps,
+      sleep: async (ms) => void waits.push(ms),
+      sessions: { ...deps.sessions!, start: async () => (calls++, Promise.reject(Object.assign(new Error('refused'), { status }))) },
+    };
+    const r = await handle('POST', '/sessions/start', { directory, taskId: 'a', title: 'A', prompt: 'Do a', location: 'project' }, refusing);
+    assert.equal(r.status, 422, String(status));
+    assert.equal(calls, tries, String(status));
+    assert.deepEqual(waits, slept, String(status));
+  }
 });
 
 test('after 3 failed starts an entry stays queued with lastError and is not taken again automatically', async (t) => {
