@@ -2821,37 +2821,40 @@ ${GUEST_UI_LOOK_CSS}`;
   };
 
   // src/panel/clearArchive.ts
+  var plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
   var clearArchivePlan = (tracker, tasks, marks) => {
     const archived2 = tasks.filter((t) => isArchived(t, marks));
     const ids = new Set(archived2.map((t) => t.id));
-    const childrenOf = (id) => tasks.filter((t) => t.parentId === id);
-    const deletes = [];
-    const skipped = [];
+    const children = /* @__PURE__ */ new Map();
+    for (const t of tasks) if (t.parentId !== null) children.set(t.parentId, [...children.get(t.parentId) ?? [], t]);
+    const hasChildren = (id) => (children.get(id)?.length ?? 0) > 0;
     if (tracker === "local") {
-      const gone = /* @__PURE__ */ new Set();
+      const skipped = archived2.filter((t) => t.kind === "parent" && !(children.get(t.id) ?? []).every((c) => ids.has(c.id))).map((t) => t.id);
+      const gone = new Set(archived2.filter((t) => t.kind === "parent" && !skipped.includes(t.id)).map((t) => t.id));
+      const deletes = [];
       for (const t of archived2) {
-        if (t.kind !== "parent") continue;
-        if (childrenOf(t.id).every((c) => ids.has(c.id))) gone.add(t.id);
-        else skipped.push(t.id);
+        if (gone.has(t.id)) deletes.push({ id: t.id, withChildren: true });
+        else if (t.kind !== "parent" && (t.parentId === null || !gone.has(t.parentId))) deletes.push({ id: t.id, withChildren: false });
       }
-      for (const t of archived2) {
-        if (t.kind === "parent") {
-          if (gone.has(t.id)) deletes.push({ id: t.id, withChildren: true });
-        } else if (t.parentId === null || !gone.has(t.parentId)) deletes.push({ id: t.id, withChildren: false });
-      }
-      return { deletes, skipped };
+      return { deletes, skipped, count: archived2.length - skipped.length };
     }
-    const parents = archived2.filter((t) => childrenOf(t.id).length > 0);
-    const rest = archived2.filter((t) => childrenOf(t.id).length === 0);
-    return { deletes: [...rest, ...parents].map((t) => ({ id: t.id, withChildren: false })), skipped };
+    const ordered = [...archived2.filter((t) => !hasChildren(t.id)), ...archived2.filter((t) => hasChildren(t.id))];
+    return { deletes: ordered.map((t) => ({ id: t.id, withChildren: false })), skipped: [], count: archived2.length };
+  };
+  var clearConfirm = (tracker, plan) => {
+    if (plan.deletes.length === 0) return null;
+    const where = tracker === "local" ? "Their files in .scratch/ are deleted; a feature goes with its whole folder, including done sub-tasks older than 30 days the board no longer lists." : "Their issues are deleted on GitHub (only repository admins can delete issues); sub-issues not archived stay as top-level issues.";
+    const k = plan.skipped.length;
+    const kept = k > 0 ? ` ${plural(k, "archived feature")} with sub-tasks still on the board stay${k === 1 ? "s" : ""}.` : "";
+    return { title: `Delete ${plural(plan.count, "archived task")} for good?`, body: `${where}${kept} This cannot be undone from the board.` };
   };
   var runClearArchive = async (deletes, remove) => {
     const out = { deleted: [], failed: [] };
     for (const d of deletes) {
       try {
         out.deleted.push(...await remove(d.id, d.withChildren));
-      } catch (e) {
-        out.failed.push({ id: d.id, error: e instanceof Error ? e.message : String(e) });
+      } catch (error2) {
+        out.failed.push({ id: d.id, error: error2 });
       }
     }
     return out;
@@ -12776,7 +12779,7 @@ ${ref}`,
   };
 
   // src/panel/taskDelete.ts
-  var plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+  var plural2 = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
   var deleteConfirm = (tracker, task, tasks) => {
     const n = tasks.filter((t) => t.parentId === task.id).length;
     const title = `Delete \u201C${task.title}\u201D?`;
@@ -12785,7 +12788,7 @@ ${ref}`,
         return { title, body: `The file ${task.id} is deleted. This cannot be undone from the board.`, choices: [{ id: "one", label: "Delete", variant: "destructive" }] };
       }
       const folder = task.id.replace(/spec\.md$/, "");
-      const subs = n > 0 ? `, including ${plural(n, "sub-task")} on the board and any older done ones` : "";
+      const subs = n > 0 ? `, including ${plural2(n, "sub-task")} on the board and any older done ones` : "";
       return {
         title,
         body: `The folder ${folder} is deleted with spec.md and all its sub-tasks${subs}. This cannot be undone from the board.`,
@@ -12796,7 +12799,7 @@ ${ref}`,
     if (n === 0) return { title, body: base2, choices: [{ id: "one", label: "Delete", variant: "destructive" }] };
     return {
       title,
-      body: `${base2} It has ${plural(n, "sub-issue")}; kept, they become top-level issues.`,
+      body: `${base2} It has ${plural2(n, "sub-issue")}; kept, they become top-level issues.`,
       choices: [
         { id: "all", label: "Delete with sub-issues", variant: "destructive" },
         { id: "one", label: "Delete only this issue", variant: "secondary" }
@@ -15279,45 +15282,49 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
   };
   var clearing = false;
   var clearArchive = async () => {
+    if (clearing) return;
+    clearing = true;
+    try {
+      await clearArchiveNow();
+    } finally {
+      clearing = false;
+    }
+  };
+  var clearArchiveNow = async () => {
     const id = state.projectId;
     const p = project();
-    if (clearing || id === null || p === null || state.view !== "board" || state.config === null || state.tasks === null) return;
+    if (id === null || p === null || state.view !== "board" || state.config === null || state.tasks === null) return;
     const tracker = state.config.tracker;
     const plan = clearArchivePlan(tracker, state.tasks, archivedTasks());
-    const n = archivedShown(state.tasks, archivedTasks()) - plan.skipped.length;
-    if (n <= 0) {
+    const ask = clearConfirm(tracker, plan);
+    if (ask === null) {
       info("The archived features still have sub-tasks on the board; nothing to delete.");
       return;
     }
-    const where = tracker === "local" ? "Their files in .scratch/ are deleted (a feature with its whole folder)." : "Their issues are deleted on GitHub (only repository admins can delete issues); sub-issues not archived stay as top-level issues.";
-    const kept = plan.skipped.length > 0 ? ` ${plan.skipped.length} archived feature${plan.skipped.length === 1 ? "" : "s"} with sub-tasks still on the board stay${plan.skipped.length === 1 ? "s" : ""}.` : "";
-    const answer = await askChoice(
-      `Delete ${n} archived task${n === 1 ? "" : "s"} for good?`,
-      `${where}${kept} This cannot be undone from the board.`,
-      [{ id: "clear", label: "Delete all", variant: "destructive" }]
-    );
-    if (answer === null || state.projectId !== id || state.tasks === null || state.config === null) return;
-    const fresh = clearArchivePlan(state.config.tracker, state.tasks, archivedTasks());
-    if (fresh.deletes.length === 0) return;
-    clearing = true;
+    const answer = await askChoice(ask.title, ask.body, [{ id: "clear", label: "Delete all", variant: "destructive" }]);
+    if (answer === null || state.projectId !== id || state.tasks === null) return;
+    const fresh = clearArchivePlan(tracker, state.tasks, archivedTasks());
+    if (JSON.stringify(fresh) !== JSON.stringify(plan)) {
+      info("The archive changed while you were asked; nothing was deleted. Try again.");
+      return;
+    }
     const api = createApi(host, p.directory);
     try {
-      const result = await runClearArchive(fresh.deletes, (taskId, withChildren) => api.remove(taskId, withChildren));
+      const result = await runClearArchive(plan.deletes, (taskId, withChildren) => api.remove(taskId, withChildren));
       if (result.deleted.length > 0) {
         info(`Deleted ${result.deleted.length} archived task${result.deleted.length === 1 ? "" : "s"}`);
-        forgetOrdered(result.deleted);
-        await saver.idle();
-        for (const d of result.deleted) {
-          await Promise.all([store.forgetCard(id, d), store.forgetNoType(id, d)]).catch(
-            (e) => fail(`Could not drop the start options of ${d}: ${errorText4(e)}`)
-          );
-        }
+        if (state.projectId === id) forgetOrdered(result.deleted);
+        for (const d of result.deleted) await forgetStartOptions(id, d).catch((e) => fail(`Could not drop the start options of ${d}: ${errorText4(e)}`));
       }
-      for (const f of result.failed) fail(`Could not delete ${f.id}: ${f.error}`);
+      for (const f of result.failed) fail(`Could not delete ${f.id}: ${errorText4(f.error)}`);
     } finally {
-      clearing = false;
       await load();
     }
+  };
+  var forgetStartOptions = async (projectId, taskId) => {
+    await saver.idle();
+    await store.forgetCard(projectId, taskId);
+    await store.forgetNoType(projectId, taskId);
   };
   var sessionFocus = createSessionFocus(null);
   var panelSession = null;
@@ -15469,11 +15476,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
           await store.moveCard(projectId, from, to);
           await store.moveNoType(projectId, from, to);
         },
-        forget: async (projectId, taskId) => {
-          await saver.idle();
-          await store.forgetCard(projectId, taskId);
-          await store.forgetNoType(projectId, taskId);
-        },
+        forget: forgetStartOptions,
         markNoType: (projectId, taskId) => store.markNoType(projectId, taskId)
       },
       summary: {

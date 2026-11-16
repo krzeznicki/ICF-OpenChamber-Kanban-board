@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Task, TaskState } from '../src/core/types.ts';
-import { clearArchivePlan, runClearArchive } from '../src/panel/clearArchive.ts';
+import { clearArchivePlan, clearConfirm, runClearArchive } from '../src/panel/clearArchive.ts';
 
 const task = (id: string, state: TaskState, extra: Partial<Task> = {}): Task => ({
   id,
@@ -78,5 +78,17 @@ test('runClearArchive: deletes in plan order, a failure is recorded and the rest
   );
   assert.deepEqual(calls, ['#2:false', `${SPEC}:true`, '#4:false']);
   assert.deepEqual(out.deleted, [T1, SPEC, '#4']);
-  assert.deepEqual(out.failed, [{ id: '#2', error: 'Only repository admins can delete GitHub issues' }]);
+  assert.deepEqual(out.failed.map((f) => [f.id, (f.error as Error).message]), [['#2', 'Only repository admins can delete GitHub issues']]);
+});
+
+test('clearConfirm: counts what goes (a kept feature does not), says how it is deleted, and nothing to ask when nothing goes', () => {
+  const tasks = [task(SPEC, 'done', { kind: 'parent' }), task(T1, 'done', { parentId: SPEC }), task(T2, 'ready-for-agent', { parentId: SPEC }), task('.scratch/g/spec.md', 'done', { kind: 'parent' })];
+  const local = clearConfirm('local', clearArchivePlan('local', tasks, marks(SPEC, T1, '.scratch/g/spec.md')));
+  assert.equal(local?.title, 'Delete 2 archived tasks for good?');
+  assert.match(local?.body ?? '', /older than 30 days/);
+  assert.match(local?.body ?? '', /1 archived feature with sub-tasks still on the board stays/);
+  assert.equal(clearConfirm('local', clearArchivePlan('local', tasks, marks(SPEC))), null);
+  const gh = clearConfirm('github', clearArchivePlan('github', [task('#4', 'done')], marks('#4')));
+  assert.equal(gh?.title, 'Delete 1 archived task for good?');
+  assert.match(gh?.body ?? '', /repository admins/);
 });
