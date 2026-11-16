@@ -3101,6 +3101,15 @@ ${GUEST_UI_LOOK_CSS}`;
     parents: parentTargets(tracker, task, tasks).map(linkChoice),
     children: childCandidates(tracker, task, tasks).map(linkChoice)
   });
+  var linkChildren = async (picked, link2) => {
+    const failed = [];
+    for (const c of picked) {
+      const error2 = await link2(c.id);
+      if (error2 !== null) failed.push(`\u201C${c.label}\u201D (${error2})`);
+    }
+    const n = failed.length;
+    return n === 0 ? null : `${n} task${n === 1 ? " was" : "s were"} not linked: ${failed.join("; ")}`;
+  };
   var followingMove = (op, onMoved, onError) => async (id, ...rest) => {
     const task = await op(id, ...rest);
     if (task.id !== id) {
@@ -4511,6 +4520,94 @@ ${ref}`,
     return handle.dispose;
   };
 
+  // src/panel/ui/modal.ts
+  var FILTER_OVER = 8;
+  var openModalShell = (options) => {
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const backdrop = document.createElement("div");
+    backdrop.className = "kb-backdrop kb-modal-backdrop";
+    const modal = document.createElement("div");
+    modal.className = options.className === void 0 ? "kb-modal" : `kb-modal ${options.className}`;
+    modal.setAttribute("role", "dialog");
+    modal.setAttribute("aria-modal", "true");
+    modal.setAttribute("aria-label", options.label);
+    modal.tabIndex = -1;
+    backdrop.append(modal);
+    const inerted = [...document.body.children].filter((n) => n instanceof HTMLElement && !n.inert);
+    for (const n of inerted) n.inert = true;
+    document.body.append(backdrop);
+    const onKey = (e) => {
+      if (e.key === "Escape" && !e.defaultPrevented) options.onDismiss();
+    };
+    backdrop.addEventListener("click", (e) => {
+      if (e.target === backdrop) options.onDismiss();
+    });
+    document.addEventListener("keydown", onKey);
+    return {
+      backdrop,
+      modal,
+      dispose: () => {
+        document.removeEventListener("keydown", onKey);
+        backdrop.remove();
+        for (const n of inerted) n.inert = false;
+        if (previous?.isConnected) previous.focus();
+      }
+    };
+  };
+
+  // src/panel/ui/checkList.ts
+  var mountCheckList = (box, o) => {
+    const out = [];
+    let filter = o.filter;
+    const list2 = document.createElement("div");
+    list2.className = "kb-add-checks";
+    const drawList = () => {
+      const shown = new Set(filterSelectOptions(o.offered, filter).map((c) => c.id));
+      for (const node of list2.children) {
+        const id = node.dataset.id ?? "";
+        node.hidden = !shown.has(id) && !o.selected().includes(id);
+      }
+    };
+    if (o.offered.length > FILTER_OVER) {
+      const filterSlot = document.createElement("div");
+      filterSlot.className = "kb-add-filter";
+      box.append(filterSlot);
+      const search = mountSearchField(filterSlot, {
+        value: filter,
+        label: o.filterLabel,
+        placeholder: "Filter",
+        onChange: (v2) => {
+          filter = v2;
+          o.onFilter(v2);
+          search.update({ value: v2 });
+          drawList();
+        }
+      });
+      out.push(search.dispose);
+    }
+    for (const c of o.offered) {
+      const cell = document.createElement("div");
+      cell.className = "kb-add-check";
+      cell.dataset.id = c.id;
+      list2.append(cell);
+      const check = mountCheckbox(cell, {
+        label: c.label,
+        description: c.hint ?? c.id,
+        checked: o.selected().includes(c.id),
+        disabled: o.disabled ?? false,
+        onChange: (checked) => {
+          const rest = o.selected().filter((b) => b !== c.id);
+          o.onSelected(checked ? [...rest, c.id] : rest);
+          check.update({ checked });
+        }
+      });
+      out.push(check.dispose);
+    }
+    box.append(list2);
+    drawList();
+    return out;
+  };
+
   // src/panel/ui/confirm.ts
   var askChoice = (title, body, choices) => new Promise((resolve) => {
     const backdrop = document.createElement("div");
@@ -4553,41 +4650,6 @@ ${ref}`,
     document.body.append(backdrop);
     actions.querySelector("button")?.focus();
   });
-
-  // src/panel/ui/modal.ts
-  var FILTER_OVER = 8;
-  var openModalShell = (options) => {
-    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const backdrop = document.createElement("div");
-    backdrop.className = "kb-backdrop kb-modal-backdrop";
-    const modal = document.createElement("div");
-    modal.className = options.className === void 0 ? "kb-modal" : `kb-modal ${options.className}`;
-    modal.setAttribute("role", "dialog");
-    modal.setAttribute("aria-modal", "true");
-    modal.setAttribute("aria-label", options.label);
-    modal.tabIndex = -1;
-    backdrop.append(modal);
-    const inerted = [...document.body.children].filter((n) => n instanceof HTMLElement && !n.inert);
-    for (const n of inerted) n.inert = true;
-    document.body.append(backdrop);
-    const onKey = (e) => {
-      if (e.key === "Escape" && !e.defaultPrevented) options.onDismiss();
-    };
-    backdrop.addEventListener("click", (e) => {
-      if (e.target === backdrop) options.onDismiss();
-    });
-    document.addEventListener("keydown", onKey);
-    return {
-      backdrop,
-      modal,
-      dispose: () => {
-        document.removeEventListener("keydown", onKey);
-        backdrop.remove();
-        for (const n of inerted) n.inert = false;
-        if (previous?.isConnected) previous.focus();
-      }
-    };
-  };
 
   // src/panel/models.ts
   var DEFAULT_ID = "";
@@ -5575,54 +5637,18 @@ ${ref}`,
       }
     });
     const fixed = [titleField, typeSelect, stateSelect, parentSelect, bodyField];
-    const mountChecks = (box, offered, filterLabel, filter, setFilter, selected, setSelected, onPick) => {
-      const out = [];
-      const list2 = el3("div", "kb-add-checks");
-      const drawList = () => {
-        const shown = new Set(filterSelectOptions(offered, filter).map((c) => c.id));
-        for (const node of list2.children) {
-          const id = node.dataset.id ?? "";
-          node.hidden = !shown.has(id) && !selected().includes(id);
-        }
-      };
-      if (offered.length > FILTER_OVER) {
-        const filterSlot = el3("div", "kb-add-filter");
-        box.append(filterSlot);
-        const search = mountSearchField(filterSlot, {
-          value: filter,
-          label: filterLabel,
-          placeholder: "Filter",
-          onChange: (v2) => {
-            filter = v2;
-            setFilter(v2);
-            search.update({ value: v2 });
-            drawList();
-          }
-        });
-        out.push(search.dispose);
-      }
-      for (const c of offered) {
-        const cell = el3("div", "kb-add-check");
-        cell.dataset.id = c.id;
-        list2.append(cell);
-        const check = mountCheckbox(cell, {
-          label: c.label,
-          description: c.hint ?? c.id,
-          checked: selected().includes(c.id),
-          disabled: locked(),
-          onChange: (checked) => {
-            const rest = selected().filter((b) => b !== c.id);
-            setSelected(checked ? [...rest, c.id] : rest);
-            check.update({ checked });
-            onPick?.();
-          }
-        });
-        out.push(check.dispose);
-      }
-      box.append(list2);
-      drawList();
-      return out;
-    };
+    const mountChecks = (box, offered, filterLabel, filter, setFilter, selected, setSelected, onPick) => mountCheckList(box, {
+      offered,
+      filterLabel,
+      filter,
+      onFilter: setFilter,
+      selected,
+      onSelected: (ids) => {
+        setSelected(ids);
+        onPick?.();
+      },
+      disabled: locked()
+    });
     let blockerDisposers = [];
     let blockerFilter = "";
     const drawBlockers = () => {
@@ -12222,6 +12248,9 @@ ${ref}`,
     };
     let linkKey = null;
     let linkError = null;
+    let linkPicked = null;
+    let linkFilter = "";
+    let linking = false;
     let linkDisposers = [];
     const clearLink = () => {
       for (const d of linkDisposers) d();
@@ -12231,38 +12260,68 @@ ${ref}`,
     const drawLinkChild = (m) => {
       const { task } = m;
       if (linkError !== null && linkError.taskId !== task.id) linkError = null;
+      if (linkPicked !== null && linkPicked.taskId !== task.id) {
+        linkPicked = null;
+        linkFilter = "";
+      }
       const offered = m.links.children;
-      const key = JSON.stringify([task.id, offered, m.busy, linkError]);
+      const ids = new Set(offered.map((c) => c.id));
+      const picked = () => (linkPicked?.ids ?? []).filter((id) => ids.has(id));
+      const key = JSON.stringify([task.id, offered, m.busy, linking, linkError]);
       if (key === linkKey) return;
       linkKey = key;
       clearLink();
       if (offered.length === 0) return;
-      const slot = el5("div", "kb-field");
+      const locked = m.busy || linking;
+      linkBox.append(el5("p", "kb-muted", "Pick the tasks to make sub-tasks of this one."));
+      const actions = el5("div", "kb-actions kb-actions-start");
       const errorSlot = el5("div", "kb-add-error");
-      linkBox.append(slot, errorSlot);
+      const label = () => {
+        const n = picked().length;
+        return n === 0 ? "Link selected" : `Link ${n} task${n === 1 ? "" : "s"}`;
+      };
       linkDisposers.push(
-        mountSelect(slot, {
-          label: "Make a sub-task of this one",
-          value: null,
-          placeholder: "Choose a task",
-          options: offered,
-          searchable: offered.length > FILTER_OVER,
-          disabled: m.busy,
-          onChange: (id) => {
-            const taskId = task.id;
-            linkKey = null;
-            linkError = null;
-            void callbacks.onLinkChild(id).then((error2) => {
-              if (disposed || error2 === null) return;
-              linkError = { taskId, message: error2 };
-              linkKey = null;
-              if (current !== null) drawLinkChild(current);
-            });
-          }
-        }).dispose
+        ...mountCheckList(linkBox, {
+          offered,
+          filterLabel: "Filter existing tasks",
+          filter: linkFilter,
+          onFilter: (v2) => {
+            linkFilter = v2;
+          },
+          selected: picked,
+          onSelected: (next) => {
+            linkPicked = { taskId: task.id, ids: next };
+            button2.update({ label: label(), disabled: next.length === 0 });
+          },
+          disabled: locked
+        })
       );
+      linkBox.append(actions, errorSlot);
+      const button2 = mountButton(actions, {
+        label: label(),
+        size: "xs",
+        loading: linking,
+        disabled: locked || picked().length === 0,
+        onClick: () => {
+          const taskId = task.id;
+          const chosen = offered.filter((c) => picked().includes(c.id));
+          if (linking || chosen.length === 0) return;
+          linking = true;
+          linkError = null;
+          linkKey = null;
+          if (current !== null) drawLinkChild(current);
+          void linkChildren(chosen, callbacks.onLinkChild).then((error2) => {
+            linking = false;
+            if (disposed) return;
+            if (error2 !== null) linkError = { taskId, message: error2 };
+            linkKey = null;
+            if (current !== null) drawLinkChild(current);
+          });
+        }
+      });
+      linkDisposers.push(button2.dispose);
       if (linkError !== null) {
-        linkDisposers.push(mountBanner(errorSlot, { tone: "error", title: "Could not link the task", body: linkError.message }).dispose);
+        linkDisposers.push(mountBanner(errorSlot, { tone: "error", title: "Could not link every task", body: linkError.message }).dispose);
       }
     };
     let adder = null;

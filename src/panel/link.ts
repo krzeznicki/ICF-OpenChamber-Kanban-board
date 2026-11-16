@@ -71,6 +71,24 @@ export const linkChoices = (
 });
 
 /**
+ * The task detail's "Link selected": links each picked task under this one, one after another
+ * (a local move renumbers tickets, so never at once). `link` resolves to null or the error. Null
+ * when every link went through, else a message naming the tasks that did not.
+ */
+export const linkChildren = async (
+  picked: readonly { id: string; label: string }[],
+  link: (id: string) => Promise<string | null>,
+): Promise<string | null> => {
+  const failed: string[] = [];
+  for (const c of picked) {
+    const error = await link(c.id);
+    if (error !== null) failed.push(`“${c.label}” (${error})`);
+  }
+  const n = failed.length;
+  return n === 0 ? null : `${n} task${n === 1 ? ' was' : 's were'} not linked: ${failed.join('; ')}`;
+};
+
+/**
  * Every link or unlink from the panel goes through this: the api call (`setParent`, `removeParent`),
  * then, when the task came back with a new id (local: its file moved), `onMoved(from, to)` so
  * whatever the panel keeps under the old id follows it. The change stands even when that follow-up

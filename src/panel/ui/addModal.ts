@@ -6,7 +6,7 @@
 // but some sub-tasks were not created or linked, the modal says which and offers only Close. With
 // suggestions on, Type and State start on "Let the model pick" (suggest.ts fills those in after
 // the create).
-import { filterSelectOptions, mountBanner, mountButton, mountCheckbox, mountSearchField, mountSelect, mountTextField } from '@openchamber/sdk/ui';
+import { mountBanner, mountButton, mountSelect, mountTextField } from '@openchamber/sdk/ui';
 import type { Task, TaskState } from '../../core/types.ts';
 import {
   CREATE_STATES,
@@ -28,6 +28,7 @@ import type { Preset } from '../presets.ts';
 import type { StartLists } from '../models.ts';
 import type { StartOptions } from '../settings.ts';
 import { mountCloseButton } from './closeButton.ts';
+import { mountCheckList } from './checkList.ts';
 import { askChoice } from './confirm.ts';
 import { FILTER_OVER, openModalShell } from './modal.ts';
 import { mountStartOptions } from './startOptions.ts';
@@ -208,10 +209,7 @@ export const openAddModal = (
   });
   const fixed = [titleField, typeSelect, stateSelect, parentSelect, bodyField];
 
-  /**
-   * A checkbox per offered choice, with a filter field over FILTER_OVER of them. Checked ones stay
-   * visible whatever the filter says; picks keep their order. Returns the disposers.
-   */
+  /** The shared checkbox list (ui/checkList.ts), locked while the form is. */
   const mountChecks = (
     box: HTMLElement,
     offered: readonly Choice[],
@@ -221,54 +219,19 @@ export const openAddModal = (
     selected: () => string[],
     setSelected: (ids: string[]) => void,
     onPick?: () => void,
-  ): Array<() => void> => {
-    const out: Array<() => void> = [];
-    const list = el('div', 'kb-add-checks');
-    const drawList = (): void => {
-      const shown = new Set(filterSelectOptions(offered, filter).map((c) => c.id));
-      for (const node of list.children) {
-        const id = (node as HTMLElement).dataset.id ?? '';
-        (node as HTMLElement).hidden = !shown.has(id) && !selected().includes(id);
-      }
-    };
-    if (offered.length > FILTER_OVER) {
-      const filterSlot = el('div', 'kb-add-filter');
-      box.append(filterSlot);
-      const search = mountSearchField(filterSlot, {
-        value: filter,
-        label: filterLabel,
-        placeholder: 'Filter',
-        onChange: (v) => {
-          filter = v;
-          setFilter(v);
-          search.update({ value: v });
-          drawList();
-        },
-      });
-      out.push(search.dispose);
-    }
-    for (const c of offered) {
-      const cell = el('div', 'kb-add-check');
-      cell.dataset.id = c.id;
-      list.append(cell);
-      const check = mountCheckbox(cell, {
-        label: c.label,
-        description: c.hint ?? c.id,
-        checked: selected().includes(c.id),
-        disabled: locked(),
-        onChange: (checked) => {
-          const rest = selected().filter((b) => b !== c.id);
-          setSelected(checked ? [...rest, c.id] : rest);
-          check.update({ checked });
-          onPick?.();
-        },
-      });
-      out.push(check.dispose);
-    }
-    box.append(list);
-    drawList();
-    return out;
-  };
+  ): Array<() => void> =>
+    mountCheckList(box, {
+      offered,
+      filterLabel,
+      filter,
+      onFilter: setFilter,
+      selected,
+      onSelected: (ids) => {
+        setSelected(ids);
+        onPick?.();
+      },
+      disabled: locked(),
+    });
 
   // --- blocked by: checkboxes of what addTask.ts offers for this parent ---
   let blockerDisposers: Array<() => void> = [];

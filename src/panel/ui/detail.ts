@@ -10,12 +10,13 @@ import type { Tone } from '@openchamber/sdk/ui';
 import type { Task, TaskState } from '../../core/types.ts';
 import type { Column } from '../columns.ts';
 import { subtaskModes, type SubtaskMode } from '../addTask.ts';
-import type { LinkChoice } from '../link.ts';
+import { linkChildren, type LinkChoice } from '../link.ts';
 import type { Preset } from '../presets.ts';
 import type { StartLists } from '../models.ts';
 import type { CardOptions, Sections, StartOptions } from '../settings.ts';
 import type { SummaryStatus } from '../summaries.ts';
 import type { EditText } from '../taskEdit.ts';
+import { mountCheckList } from './checkList.ts';
 import { mountCloseButton } from './closeButton.ts';
 import { askChoice } from './confirm.ts';
 import { renderMarkdown } from './markdownView.ts';
@@ -107,7 +108,7 @@ export type DetailCallbacks = {
   onAddSubtask: (input: { title: string; type: string | null }) => Promise<string | null>;
   /** The Parent picker: resolves to null on success, or the message to show under it. */
   onSetParent: (parentId: string) => Promise<string | null>;
-  /** A pick in "Existing tasks": resolves to null on success, or the message to show under it. */
+  /** Links one task picked in "Existing tasks" ("Link selected" calls it per task): null on success, or the error. */
   onLinkChild: (childId: string) => Promise<string | null>;
   /**
    * The Edit form's Save, with the values the form opened with (only what differs from them is
@@ -558,10 +559,14 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
     addHandle = mountAddSubtask(addBox, m.types, callbacks.onAddSubtask);
   };
 
-  // "Existing tasks": a select that links the picked task as a sub-task at once. Redrawn only
-  // when what it offers changes, so an open popup survives a poll.
+  // "Existing tasks": a checkbox list (a Filter field over FILTER_OVER of them, ui/checkList.ts)
+  // and "Link selected", which links the picked tasks one after another (link.ts linkChildren).
+  // Redrawn only when what it offers changes, so the picks and the filter survive a poll.
   let linkKey: string | null = null;
   let linkError: { taskId: string; message: string } | null = null;
+  let linkPicked: { taskId: string; ids: string[] } | null = null;
+  let linkFilter = '';
+  let linking = false;
   let linkDisposers: Array<() => void> = [];
   const clearLink = (): void => {
     for (const d of linkDisposers) d();
@@ -571,38 +576,69 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
   const drawLinkChild = (m: DetailModel): void => {
     const { task } = m;
     if (linkError !== null && linkError.taskId !== task.id) linkError = null;
+    if (linkPicked !== null && linkPicked.taskId !== task.id) {
+      linkPicked = null;
+      linkFilter = '';
+    }
     const offered = m.links.children;
-    const key = JSON.stringify([task.id, offered, m.busy, linkError]);
+    // A pick no longer offered (linked meanwhile, done, gone) is dropped.
+    const ids = new Set(offered.map((c) => c.id));
+    const picked = (): string[] => (linkPicked?.ids ?? []).filter((id) => ids.has(id));
+    const key = JSON.stringify([task.id, offered, m.busy, linking, linkError]);
     if (key === linkKey) return;
     linkKey = key;
     clearLink();
     if (offered.length === 0) return;
-    const slot = el('div', 'kb-field');
+    const locked = m.busy || linking;
+    linkBox.append(el('p', 'kb-muted', 'Pick the tasks to make sub-tasks of this one.'));
+    const actions = el('div', 'kb-actions kb-actions-start');
     const errorSlot = el('div', 'kb-add-error');
-    linkBox.append(slot, errorSlot);
+    const label = (): string => {
+      const n = picked().length;
+      return n === 0 ? 'Link selected' : `Link ${n} task${n === 1 ? '' : 's'}`;
+    };
     linkDisposers.push(
-      mountSelect(slot, {
-        label: 'Make a sub-task of this one',
-        value: null,
-        placeholder: 'Choose a task',
-        options: offered,
-        searchable: offered.length > FILTER_OVER,
-        disabled: m.busy,
-        onChange: (id) => {
-          const taskId = task.id;
-          linkKey = null; // back to "Choose a task" on the next update
-          linkError = null;
-          void callbacks.onLinkChild(id).then((error) => {
-            if (disposed || error === null) return;
-            linkError = { taskId, message: error };
-            linkKey = null;
-            if (current !== null) drawLinkChild(current);
-          });
+      ...mountCheckList(linkBox, {
+        offered,
+        filterLabel: 'Filter existing tasks',
+        filter: linkFilter,
+        onFilter: (v) => {
+          linkFilter = v;
         },
-      }).dispose,
+        selected: picked,
+        onSelected: (next) => {
+          linkPicked = { taskId: task.id, ids: next };
+          button.update({ label: label(), disabled: next.length === 0 });
+        },
+        disabled: locked,
+      }),
     );
+    linkBox.append(actions, errorSlot);
+    const button = mountButton(actions, {
+      label: label(),
+      size: 'xs',
+      loading: linking,
+      disabled: locked || picked().length === 0,
+      onClick: () => {
+        const taskId = task.id;
+        const chosen = offered.filter((c) => picked().includes(c.id));
+        if (linking || chosen.length === 0) return;
+        linking = true;
+        linkError = null;
+        linkKey = null;
+        if (current !== null) drawLinkChild(current);
+        void linkChildren(chosen, callbacks.onLinkChild).then((error) => {
+          linking = false;
+          if (disposed) return;
+          if (error !== null) linkError = { taskId, message: error };
+          linkKey = null;
+          if (current !== null) drawLinkChild(current);
+        });
+      },
+    });
+    linkDisposers.push(button.dispose);
     if (linkError !== null) {
-      linkDisposers.push(mountBanner(errorSlot, { tone: 'error', title: 'Could not link the task', body: linkError.message }).dispose);
+      linkDisposers.push(mountBanner(errorSlot, { tone: 'error', title: 'Could not link every task', body: linkError.message }).dispose);
     }
   };
 
