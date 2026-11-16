@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.3
 
 - **Search tasks** in the toolbar filters the board as you type: a card stays when every word appears in its title or description (case and accents ignored, so `zadanie` finds `Żądanie`; locally the description without the heading and the `Type` / `Status` / `Blocked by` lines, as the edit form shows it). A matching sub-task brings its parent along, also when **Hide sub-tasks** is on. Progress, blockers and the Review badge still count every task; the search is kept for this panel session only. Escape or the field's clear button empties it; with nothing left the board says **No tasks match**.
 

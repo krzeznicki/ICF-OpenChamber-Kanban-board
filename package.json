@@ -1,6 +1,6 @@
 {
   "name": "icf-kanban",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Kanban Board: an OpenChamber extension with a Kanban board over local .scratch/ files or GitHub Issues",
   "license": "MIT",
   "private": true,
