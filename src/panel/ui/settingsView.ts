@@ -1,7 +1,8 @@
 // Settings: a side sheet over the board (like the task detail) with three tabs. "Global" and
 // "This project" draw the same form over one stored layer each; a field left unset inherits (the
 // built-in default for Global, the global value for a project) and shows what it inherits as its
-// placeholder or as the "Use …" option; both pick the preset set. "Presets" edits the sets: their
+// placeholder or as the "Use …" option; both pick the preset set. Global also lists the Keyboard
+// shortcuts (record a new key, reset one or all; stored as overrides). "Presets" edits the sets: their
 // preset texts, the user's own presets and sets. Every change is reported at once with the whole new
 // layer or stored sets; the caller saves it. The sheet redraws a tab only when the tab is switched, a
 // set is chosen, or a preset or set is added or deleted, so a text field keeps its focus while typing.
@@ -37,6 +38,20 @@ import {
   type SettingsLayer,
 } from '../settings.ts';
 import { START_PATH_NOTE, type StartLists } from '../models.ts';
+import {
+  bindingOf,
+  CONTEXT_LABELS,
+  createKeymap,
+  formatBinding,
+  resetOverride,
+  setOverride,
+  type ActionId,
+  type Binding,
+  type Overrides,
+  type Platform,
+  type ShortcutContext,
+} from '../keymap.ts';
+import { detectPlatform } from '../shortcuts.ts';
 import { mountCloseButton } from './closeButton.ts';
 import { askChoice } from './confirm.ts';
 import { mountStartTarget } from './startTarget.ts';
@@ -344,7 +359,159 @@ const drawLayerForm = (
       'Add task offers "Let the model pick" for Type and State: your Small Model suggests them from the title and description once the task is created. Only the fields left to it change. Applies to every project.',
     );
     bool(row(fresh), 'Suggest type and state for new tasks', () => layer.suggestFields, (v) => (layer.suggestFields = v), base.suggestFields);
+    drawShortcuts(
+      section('Keyboard shortcuts', 'Shortcuts for the board, an open task and Add task. Record a new key for one, or reset it. Applies to every project.'),
+      disposers,
+      {
+        get: () => layer.shortcuts ?? {},
+        set: (next) => {
+          layer.shortcuts = Object.keys(next).length === 0 ? undefined : next;
+          emit();
+        },
+        platform: detectPlatform(),
+      },
+    );
   }
+};
+
+/** What an inline line under a Shortcut says after a recording: a refusal or a warning. */
+type KeyNote = { id: ActionId; tone: 'error' | 'warning'; text: string };
+
+/**
+ * The Keyboard shortcuts section (Global tab): every Shortcut by context with its key; a rebindable
+ * one has Record and Reset, a fixed key only shows. Recording takes the next key combination in the
+ * capture phase (so neither the sheet's Escape nor the dispatcher sees it); Esc cancels. The Keymap
+ * validates it: a refusal shows inline and is not saved, a reserved key is saved with a warning.
+ */
+const drawShortcuts = (
+  root: HTMLElement,
+  disposers: Disposers,
+  opts: { get: () => Overrides; set: (next: Overrides) => void; platform: Platform },
+): void => {
+  const { platform } = opts;
+  const list = el('div', 'kb-keys');
+  const footer = el('div', 'kb-actions kb-actions-start');
+  root.append(list, footer);
+  let recording: ActionId | null = null;
+  let note: KeyNote | null = null;
+  let rowDisposers: Disposers = [];
+
+  const keyText = (b: Binding): string => formatBinding(b, platform);
+  const modName = platform === 'mac' ? '⌘' : 'Ctrl';
+
+  const record = (id: ActionId, b: Binding): void => {
+    const keymap = createKeymap(opts.get());
+    const v = keymap.validate(id, b);
+    if (!v.ok) {
+      const text =
+        v.reason === 'duplicate'
+          ? `${keyText(b)} is already used by “${v.holder.label}” in ${CONTEXT_LABELS[v.holder.context]}. Not saved.`
+          : v.reason === 'no-modifier'
+            ? `A Shortcut needs ${modName}: ${keyText(b)} would fire while typing. Not saved.`
+            : 'This key cannot be changed.';
+      note = { id, tone: 'error', text };
+      return;
+    }
+    opts.set(setOverride(opts.get(), id, b));
+    note = v.warning === 'reserved' ? { id, tone: 'warning', text: `Saved. OpenChamber or the system may take ${keyText(b)} before the board sees it.` } : null;
+  };
+
+  const onKey = (e: KeyboardEvent): void => {
+    if (recording === null) return;
+    // Taken here, before the sheet's own Escape and the Shortcut dispatcher.
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.isComposing || e.keyCode === 229) return;
+    const id = recording;
+    if (e.key === 'Escape') {
+      recording = null;
+      draw();
+      return;
+    }
+    const b = bindingOf({ key: e.key, code: e.code, meta: e.metaKey, ctrl: e.ctrlKey, shift: e.shiftKey, alt: e.altKey, platform });
+    if (b === null) return; // a lone modifier: keep waiting for the key
+    recording = null;
+    record(id, b);
+    draw();
+  };
+  window.addEventListener('keydown', onKey, true);
+  disposers.push(() => window.removeEventListener('keydown', onKey, true));
+
+  const button = (slot: HTMLElement, label: string, onClick: () => void, disabled = false): void => {
+    rowDisposers.push(mountButton(slot, { label, variant: 'ghost', size: 'xs', disabled, onClick }).dispose);
+  };
+
+  const draw = (): void => {
+    for (const d of rowDisposers) d();
+    rowDisposers = [];
+    list.replaceChildren();
+    footer.replaceChildren();
+    const keymap = createKeymap(opts.get());
+    for (const context of Object.keys(CONTEXT_LABELS) as ShortcutContext[]) {
+      list.append(el('h4', 'kb-keys-context', CONTEXT_LABELS[context]));
+      for (const s of keymap.list(context)) {
+        const row = el('div', 'kb-keys-row');
+        row.append(el('span', 'kb-keys-action', s.label));
+        const key = el('span', 'kb-keys-key');
+        if (recording === s.id) {
+          key.append(el('span', 'kb-keys-recording', 'Press keys… (Esc cancels)'));
+        } else {
+          key.append(el('kbd', 'kb-kbd', keyText(s.binding)));
+        }
+        row.append(key);
+        const actions = el('span', 'kb-keys-buttons');
+        row.append(actions);
+        if (s.fixed) {
+          actions.append(el('span', 'kb-muted', 'Fixed'));
+        } else {
+          if (recording === s.id) {
+            button(actions, 'Cancel', () => {
+              recording = null;
+              draw();
+            });
+          } else {
+            button(actions, 'Record', () => {
+              recording = s.id;
+              note = null;
+              draw();
+            });
+          }
+          button(
+            actions,
+            'Reset',
+            () => {
+              recording = null;
+              note = null;
+              opts.set(resetOverride(opts.get(), s.id));
+              draw();
+            },
+            !keymap.overridden(s.id),
+          );
+        }
+        list.append(row);
+        if (note !== null && note.id === s.id) list.append(el('p', `kb-keys-note kb-keys-${note.tone}`, note.text));
+      }
+    }
+    rowDisposers.push(
+      mountButton(footer, {
+        label: 'Reset all',
+        variant: 'outline',
+        size: 'xs',
+        disabled: Object.keys(opts.get()).length === 0,
+        onClick: () => {
+          recording = null;
+          note = null;
+          opts.set({});
+          draw();
+        },
+      }).dispose,
+    );
+  };
+  disposers.push(() => {
+    for (const d of rowDisposers) d();
+    rowDisposers = [];
+  });
+  draw();
 };
 
 /** The Presets tab: a set picker with set actions, then the chosen set's presets. */

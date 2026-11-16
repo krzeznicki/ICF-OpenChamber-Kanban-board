@@ -24,6 +24,7 @@ import { renderMarkdown } from './markdownView.ts';
 import { FILTER_OVER, openModalShell } from './modal.ts';
 import { mountEditForm } from './editForm.ts';
 import { mountStartOptions } from './startOptions.ts';
+import { hintLastChild, hintShortcut } from './shortcutHints.ts';
 
 const NO_TYPE = '';
 /** The Parent picker's "No parent" option, offered while the task has a parent: picking it unlinks. */
@@ -297,13 +298,16 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
       disposers.push(
         mountButton(session, { label: 'Edit', variant: 'ghost', size: 'sm', disabled: m.busy, onClick: () => startEdit(m) }).dispose,
       );
+      hintLastChild(session, 'task.edit', 'Edit');
       disposers.push(mountButton(session, { label: 'Delete', variant: 'ghost', size: 'sm', disabled: m.busy, onClick: callbacks.onDelete }).dispose);
+      hintLastChild(session, 'task.delete', 'Delete');
     }
     if (m.archived) {
       disposers.push(mountButton(session, { label: 'Unarchive', variant: 'outline', size: 'sm', onClick: callbacks.onUnarchive }).dispose);
     }
     if (m.session === 'open') {
       disposers.push(mountButton(session, { label: 'Open session', variant: 'default', size: 'sm', onClick: callbacks.onOpenSession }).dispose);
+      hintLastChild(session, 'task.openSession', 'Open session');
     } else if (m.session === 'archived') {
       session.append(el('span', 'kb-muted', 'Session archived'));
     } else if (m.session === 'missing') {
@@ -474,6 +478,7 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
     if (parents.length > 0 || parent !== null) {
       const parentSlot = el('div', 'kb-field');
       fields.append(parentSlot);
+      hintShortcut(parentSlot, 'task.pickParent', 'Pick parent');
       const listed = parent !== null && !parents.some((p) => p.id === parent.id) ? [parent, ...parents] : parents;
       // With a parent set, "No parent" unlinks it.
       const options = parent !== null ? [{ id: NO_PARENT, label: 'No parent', hint: 'Unlink from the parent' }, ...listed] : listed;
@@ -723,6 +728,7 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
             },
           }).dispose,
         );
+        hintLastChild(actions, 'task.addSubtask', 'Add sub-task');
       } else {
         const open = adder;
         const pick = el('div', 'kb-add-sub-modes');

@@ -34,7 +34,11 @@ const cell = (layout: Layout, column: number, row: number): Selected => {
   return { id: cards[r]!, column, row: r };
 };
 
-const firstCard = (layout: Layout): Selected | null => {
+/**
+ * The first drawn card in Navigation order: the top card of the first column with cards. ↓ from the
+ * search field selects it. null when the Board (as filtered) has no cards.
+ */
+export const firstSelected = (layout: Layout): Selected | null => {
   const column = layout.findIndex((cards) => cards.length > 0);
   return column === -1 ? null : cell(layout, column, 0);
 };
@@ -61,7 +65,7 @@ export const keepSelected = (layout: Layout, selected: Selected | null): Selecte
  */
 export const nextSelected = (layout: Layout, selected: Selected | null, direction: Direction): Selected | null => {
   const from = keepSelected(layout, selected);
-  if (from === null) return firstCard(layout);
+  if (from === null) return firstSelected(layout);
   // A vanished card's fallback is the step itself: the user sees where the selection went.
   if (from.id !== selected?.id) return from;
   const cards = layout[from.column]!;
