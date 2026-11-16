@@ -285,6 +285,8 @@ export const STORAGE_KEYS = {
   taskOrder: (projectId: string): string => fit(`taskOrder:${projectId}`),
   /** Which sections of the task modal are open (one entry for every task and project). */
   detailSections: 'detail-sections',
+  /** The project the board last showed by the host's directory or the user's pick (projectFollow.ts): a fresh board that cannot place its directory opens it. */
+  lastProject: 'lastProject',
 } as const;
 
 /** Archived-session marks kept per project. */
@@ -410,6 +412,12 @@ export const createSettingsStore = (storage: SettingsStorage) => {
     loadOrder: async (projectId: string): Promise<string[]> => parseOrder(await storage.get(STORAGE_KEYS.taskOrder(projectId))),
     saveOrder: (projectId: string, order: readonly string[]): Promise<void> =>
       put(STORAGE_KEYS.taskOrder(projectId), order.slice(0, ORDER_MAX), order.length === 0),
+    loadLastProject: async (): Promise<string | null> => {
+      const v = await storage.get(STORAGE_KEYS.lastProject);
+      return typeof v === 'string' && v !== '' ? v : null;
+    },
+    saveLastProject: (id: string | null): Promise<void> =>
+      id === null ? storage.delete(STORAGE_KEYS.lastProject) : storage.set(STORAGE_KEYS.lastProject, id as never),
     loadSections: async (): Promise<Sections> => parseSections(await storage.get(STORAGE_KEYS.detailSections)),
     saveSections: (sections: Sections): Promise<void> => {
       const clean = parseSections(sections);

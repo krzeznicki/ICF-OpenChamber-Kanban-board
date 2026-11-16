@@ -1,7 +1,8 @@
 // The service's routes, free of HTTP: `main.ts` reads the request and writes `{status, json}` back.
-// Every POST body carries `directory`, the project root as an absolute path.
-import { stat } from 'node:fs/promises';
-import { isAbsolute } from 'node:path';
+// Every POST body carries `directory`, the project root as an absolute path (for /project/of: the
+// directory whose project is asked for).
+import { realpath, stat } from 'node:fs/promises';
+import { basename, dirname, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readSessionEventRequest, SESSION_EVENTS_PATH, type GuestSessionEventRequest } from '@openchamber/sdk';
 import { readConfig, readLabels, writeConfig, type ProjectConfig } from '../core/config.ts';
@@ -323,7 +324,51 @@ const detectRemote = async (dir: string, exec: Exec): Promise<string | null> => 
   return r.code === 0 ? githubRemote(r.stdout) : null;
 };
 
+/**
+ * The main checkout of the repository `dir` is in: for a worktree (OpenChamber's, or one made with
+ * git) the directory it was made from. Null outside git and for a bare repository.
+ */
+const mainCheckout = async (dir: string, exec: Exec): Promise<string | null> => {
+  const r = await exec('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: dir, timeoutMs: 10_000 });
+  const common = r.code === 0 ? r.stdout.trim() : '';
+  return isAbsolute(common) && basename(common) === '.git' ? dirname(common) : null;
+};
+
+const real = async (path: string): Promise<string | null> => {
+  try {
+    return await realpath(path);
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * Which of `candidates` (project directories, returned as given) the worktree `dir` belongs to:
+ * the longest one holding its main checkout, else the only one inside that checkout (a project
+ * registered as a folder of the repository). Paths are compared resolved, so a symlinked project matches.
+ */
+const projectOf = async (dir: string, candidates: readonly string[], exec: Exec): Promise<string | null> => {
+  const checkout = await mainCheckout(dir, exec);
+  const root = checkout === null ? null : await real(checkout);
+  if (root === null) return null;
+  const resolved = (await Promise.all(candidates.map(async (c) => ({ given: c, path: await real(c) })))).flatMap((c) =>
+    c.path === null ? [] : [{ given: c.given, path: c.path }],
+  );
+  const holding = resolved.filter((c) => isInside(root, c.path)).sort((a, b) => b.path.length - a.path.length);
+  if (holding[0] !== undefined) return holding[0].given;
+  const within = resolved.filter((c) => isInside(c.path, root));
+  return within.length === 1 ? within[0]!.given : null;
+};
+
 const POST: Record<string, Route> = {
+  /** `directory` here is any directory (a session's worktree), not a project's. */
+  '/project/of': async (body, dir, deps) => {
+    const candidates = body.candidates;
+    if (!Array.isArray(candidates) || !candidates.every((c): c is string => typeof c === 'string' && isAbsolute(c))) {
+      return invalid('"candidates" must be an array of absolute paths');
+    }
+    return { project: await projectOf(dir, candidates, deps.exec) };
+  },
   '/config/read': async (_body, dir) => {
     try {
       return { config: await readConfig(dir) };

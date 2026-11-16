@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.8
+
+- Fixed: the full-screen board opened from a chat in a worktree (a session started from a card, in OpenChamber's In work) showed the first project of the list instead of the session's. Only the rail panel looked the project up, by its session id; the page has no session, so nothing placed the worktree's directory. Now both look it up by directory (`projectFollow.ts`): a session of that directory in the projects' session lists, else the project of the worktree's main checkout, from the service's new `/project/of` (`git rev-parse --git-common-dir`; symlinked projects and a project registered as a folder of the repository match too). The lookup runs for each such directory, not once per frame, tries again when the service is not up yet, and a fresh board waits for it instead of flashing the first project.
+- A freshly opened board whose directory names no project (or whose lookup failed) shows the last used project instead of the first one: the last project it followed by directory or you picked in the switcher, kept for every panel and page in the extension's storage (`lastProject`).
+
 ## 0.3.7
 
 - The task modal's **Add sub-task** → **Existing tasks** shows the open tasks it may link as a list with checkboxes (and a **Filter** field over 8 of them), as Add task's existing sub-tasks do, instead of a search select; **Link selected** links the checked tasks one after another and names any that could not be linked (`link.ts` `linkChildren`). The checkbox list is shared by both modals (`ui/checkList.ts`).

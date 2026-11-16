@@ -2882,6 +2882,11 @@ ${GUEST_UI_LOOK_CSS}`;
       /** Unlinks a sub-task from its parent; like setParent the returned task can have a new id (local: it became a feature). */
       removeParent: (id) => call("POST", "/tasks/unparent", { id }).then((r) => r.task),
       close: (id, withChildren = false) => call("POST", "/tasks/close", { id, withChildren }).then((r) => r.tasks),
+      /**
+       * Which of `candidates` (project directories) the git worktree `directory` was made from, or
+       * null. Here `directory` is a session's worktree, not a project.
+       */
+      projectOfWorktree: (candidates) => call("POST", "/project/of", { candidates }).then((r) => r.project),
       cliPath: () => call("GET", "/cli").then((r) => r.path),
       /** Path B: the service makes the worktree (if asked) and starts the session with this model, agent and thinking level. */
       startSession: (input) => call("POST", "/sessions/start", input),
@@ -4150,7 +4155,9 @@ ${ref}`,
     /** Per project: the manual card order, task ids (order.ts). */
     taskOrder: (projectId) => fit(`taskOrder:${projectId}`),
     /** Which sections of the task modal are open (one entry for every task and project). */
-    detailSections: "detail-sections"
+    detailSections: "detail-sections",
+    /** The project the board last showed by the host's directory or the user's pick (projectFollow.ts): a fresh board that cannot place its directory opens it. */
+    lastProject: "lastProject"
   };
   var ARCHIVED_MAX = 500;
   var parseArchivedSessions = (raw) => new Set(Array.isArray(raw) ? raw.filter((id) => typeof id === "string" && id !== "").slice(-ARCHIVED_MAX) : []);
@@ -4245,6 +4252,11 @@ ${ref}`,
       saveArchivedTasks: (projectId, marks) => put(STORAGE_KEYS.archivedTasks(projectId), serializeArchived(marks), marks.size === 0),
       loadOrder: async (projectId) => parseOrder(await storage.get(STORAGE_KEYS.taskOrder(projectId))),
       saveOrder: (projectId, order2) => put(STORAGE_KEYS.taskOrder(projectId), order2.slice(0, ORDER_MAX), order2.length === 0),
+      loadLastProject: async () => {
+        const v2 = await storage.get(STORAGE_KEYS.lastProject);
+        return typeof v2 === "string" && v2 !== "" ? v2 : null;
+      },
+      saveLastProject: (id) => id === null ? storage.delete(STORAGE_KEYS.lastProject) : storage.set(STORAGE_KEYS.lastProject, id),
       loadSections: async () => parseSections(await storage.get(STORAGE_KEYS.detailSections)),
       saveSections: (sections2) => {
         const clean2 = parseSections(sections2);
@@ -12623,9 +12635,9 @@ ${ref}`,
       dom.card.classList.add("is-dragging");
       document.documentElement.classList.add("kb-dragging");
       container.setPointerCapture(p.pointerId);
-      follow(x, y);
+      follow2(x, y);
     };
-    const follow = (x, y) => {
+    const follow2 = (x, y) => {
       if (dom?.ghost == null) return;
       dom.ghost.style.transform = `translate(${x - dom.dx}px, ${y - dom.dy}px)`;
       const hit = document.elementFromPoint(x, y);
@@ -12643,7 +12655,7 @@ ${ref}`,
       press = next;
       if (before !== null && (next === null || input.type === "down")) cleanup(before.pointerId, before.taskId);
       if (effect.kind === "start" && next !== null && at !== void 0) startGhost(next, at.x, at.y);
-      else if (effect.kind === "follow" && at !== void 0) follow(at.x, at.y);
+      else if (effect.kind === "follow" && at !== void 0) follow2(at.x, at.y);
       else if (effect.kind === "open") callbacks.onOpen(effect.taskId);
       else if (effect.kind === "drop") callbacks.onDrop(effect.taskId, effect.from, effect.to);
       else if (effect.kind === "link") callbacks.onLink(effect.taskId, effect.parentId);
@@ -12893,7 +12905,7 @@ ${ref}`,
     const following = (op) => followingMove(
       op,
       async (from, to) => {
-        follow(from, to);
+        follow2(from, to);
         deps.order.rename(from, to);
         const ctx = deps.start.context();
         if (ctx !== null) await deps.start.move(ctx.projectId, from, to);
@@ -12917,7 +12929,7 @@ ${ref}`,
         followed = null;
       });
     };
-    const follow = (from, to) => {
+    const follow2 = (from, to) => {
       if (detail === null || detail.id !== from) return;
       detail.id = to;
       followed = to;
@@ -13885,6 +13897,76 @@ ${body}`);
     return values.map((v2) => replace2(`${m[1]}${m[2]}${v2}`, true));
   };
 
+  // src/panel/projectFollow.ts
+  var LOOKUP_TRIES = 3;
+  var LOOKUP_RETRY_MS = 2e3;
+  var projectContaining = (dir, projects) => {
+    if (dir === null) return null;
+    let best = null;
+    for (const p of projects) {
+      const inside = dir === p.directory || dir.startsWith(p.directory.endsWith("/") ? p.directory : `${p.directory}/`);
+      if (inside && (best === null || p.directory.length > best.directory.length)) best = p;
+    }
+    return best;
+  };
+  var listKey = (projects) => projects.map((p) => `${p.id}
+${p.directory}`).join("\n");
+  var createProjectFollow = (deps) => {
+    const wait = deps.wait ?? ((ms) => new Promise((done) => setTimeout(done, ms)));
+    const answered = /* @__PURE__ */ new Map();
+    const running = /* @__PURE__ */ new Map();
+    const lookedUp = (dir, projects) => {
+      const a = answered.get(dir);
+      if (a === void 0 || a.list !== listKey(projects)) return void 0;
+      return projects.find((p) => p.id === a.projectId) ?? null;
+    };
+    const find = async (dir, projects, sessionId) => {
+      const lists2 = await Promise.allSettled(projects.map((p) => deps.listSessions(p.id)));
+      const records = lists2.flatMap((r) => r.status === "fulfilled" ? r.value.sessions : []);
+      const record4 = records.find((s) => s.id === sessionId) ?? records.find((s) => s.directory === dir);
+      if (record4 !== void 0 && projects.some((p) => p.id === record4.projectId)) return record4.projectId;
+      const directory = await deps.projectOfWorktree(dir, projects.map((p) => p.directory));
+      return projects.find((p) => p.directory === directory)?.id ?? null;
+    };
+    const findWithRetries = async (dir, projects, sessionId) => {
+      for (let n = 1; ; n++) {
+        try {
+          const projectId = await find(dir, projects, sessionId);
+          answered.set(dir, { projectId, list: listKey(projects) });
+          return projectId;
+        } catch {
+          if (n >= LOOKUP_TRIES) return null;
+          await wait(LOOKUP_RETRY_MS);
+        }
+      }
+    };
+    return {
+      /** The project the directory names: the one containing it, else the one looked up for it; never a fallback. */
+      recognised: (dir, projects) => projectContaining(dir, projects) ?? (dir === null ? null : lookedUp(dir, projects)) ?? null,
+      /**
+       * The project to show: the one the directory names (`recognised`), else the one shown now, else
+       * the last used one (`lastId`, kept across frames), else the first.
+       */
+      choose: (dir, projects, current, lastId = null) => projectContaining(dir, projects) ?? (dir === null ? null : lookedUp(dir, projects)) ?? current ?? projects.find((p) => p.id === lastId) ?? projects[0] ?? null,
+      /** `dir` lies outside every project and no lookup has answered for it (and this project list) yet. */
+      unknown: (dir, projects) => dir !== null && projectContaining(dir, projects) === null && lookedUp(dir, projects) === void 0,
+      /**
+       * Looks up the project of a directory outside every project; `sessionId` is the chat open there,
+       * when known. Resolves to its id (then `choose` answers it) or null; one lookup per directory
+       * and project list at a time.
+       */
+      lookup: (dir, projects, sessionId) => {
+        const key = `${dir}
+${listKey(projects)}`;
+        const busy = running.get(key);
+        if (busy !== void 0) return busy;
+        const job = findWithRetries(dir, projects, sessionId).finally(() => running.delete(key));
+        running.set(key, job);
+        return job;
+      }
+    };
+  };
+
   // src/panel/sessionFocus.ts
   var tasksForSession = (sessionId, tasks, sessions, links = [], detached2 = /* @__PURE__ */ new Map()) => {
     const since = /* @__PURE__ */ new Map();
@@ -14562,7 +14644,6 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     projectId: null,
     pinned: false,
     hostDirectory: null,
-    sessionProject: null,
     sessions: [],
     sessionsReady: false,
     config: null,
@@ -14740,15 +14821,10 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
       }
     );
   };
-  var projectFor = (dir) => {
-    if (dir === null) return null;
-    let best = null;
-    for (const p of state.projects) {
-      const inside = dir === p.directory || dir.startsWith(p.directory.endsWith("/") ? p.directory : `${p.directory}/`);
-      if (inside && (best === null || p.directory.length > best.directory.length)) best = p;
-    }
-    return best;
-  };
+  var follow = createProjectFollow({
+    listSessions: (id) => host.listSessions(id),
+    projectOfWorktree: (dir, directories) => createApi(host, dir).projectOfWorktree(directories)
+  });
   var draw = () => {
     board.setCanAdd(state.view === "board" && state.config !== null);
     state.columns = /* @__PURE__ */ new Map();
@@ -14974,12 +15050,22 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     }
   };
   var projectOptions = () => state.projects.map((p) => ({ id: p.id, label: p.name, hint: p.directory }));
-  var followHost = () => {
+  var lastProject = null;
+  var lastProjectLoaded = false;
+  var rememberProject = (id) => {
+    if (id === lastProject) return;
+    lastProject = id;
+    saver.save(STORAGE_KEYS.lastProject, () => store.saveLastProject(id));
+  };
+  var followHost = (lookUp = true) => {
     const current = project();
     if (state.pinned && current !== null) return;
-    const bySession = state.sessionProject !== null && state.sessionProject.directory === state.hostDirectory ? state.sessionProject.projectId : null;
-    const next = projectFor(state.hostDirectory) ?? state.projects.find((p) => p.id === bySession) ?? current ?? state.projects[0] ?? null;
-    void selectProject(next?.id ?? null);
+    if (lookUp && lookUpHostProject() && current === null) return;
+    if (current === null && !projectsSettled && follow.unknown(state.hostDirectory, state.projects)) return;
+    const named = follow.recognised(state.hostDirectory, state.projects);
+    if (current === null && named === null && !lastProjectLoaded) return;
+    if (named !== null) rememberProject(named.id);
+    void selectProject(follow.choose(state.hostDirectory, state.projects, current, lastProject)?.id ?? null);
   };
   var summaryRedraw = false;
   var summaryChanged = () => {
@@ -15153,33 +15239,23 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
   };
   var sessionFocus = createSessionFocus(null);
   var panelSession = null;
-  var sessionProjectAsked = false;
   var projectsSettled = false;
-  var sessionProjectPending = false;
-  var findSessionProject = async () => {
-    const sessionId = panelSession;
-    if (sessionId === null || sessionProjectAsked || projectFor(state.hostDirectory) !== null) return;
-    sessionProjectAsked = true;
-    sessionProjectPending = true;
+  var projectLookups = 0;
+  var lookUpHostProject = () => {
     const directory = state.hostDirectory;
-    const lists2 = await Promise.allSettled(state.projects.map((p) => host.listSessions(p.id)));
-    sessionProjectPending = false;
-    for (const r of lists2) {
-      const record4 = r.status === "fulfilled" ? r.value.sessions.find((s) => s.id === sessionId) : void 0;
-      if (record4 === void 0) continue;
-      state.sessionProject = { directory, projectId: record4.projectId };
-      if (!state.pinned && state.hostDirectory === directory && projectFor(directory) === null && state.projectId !== record4.projectId) {
-        followHost();
-        return;
-      }
-      break;
-    }
-    draw();
+    if (!projectsSettled || !follow.unknown(directory, state.projects)) return false;
+    projectLookups++;
+    void follow.lookup(directory, state.projects, panelSession?.directory === directory ? panelSession.id : null).then(() => {
+      projectLookups--;
+      if (state.hostDirectory === directory) followHost(false);
+      draw();
+    });
+    return true;
   };
   var focusSession = () => {
     const tasks = state.tasks ?? [];
     const focus = sessionFocus.next({
-      ready: projectsSettled && !sessionProjectPending && state.view === "board" && state.tasks !== null && state.sessionsReady,
+      ready: projectsSettled && projectLookups === 0 && state.view === "board" && state.tasks !== null && state.sessionsReady,
       tasks,
       sessions: state.sessions,
       links: starter.links(),
@@ -15232,6 +15308,11 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
   };
   var start = (ctx) => {
     injectStyles();
+    void store.loadLastProject().catch(() => null).then((id) => {
+      lastProject ??= id;
+      lastProjectLoaded = true;
+      if (state.projects.length > 0) followHost();
+    });
     void store.loadSections().then((s) => {
       sections = s;
     }).catch(() => {
@@ -15239,12 +15320,14 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     const root = document.getElementById("root") ?? document.body;
     state.hostDirectory = ctx.directory;
     if (ctx.surface === "panel") {
-      panelSession = ctx.session?.id ?? null;
-      sessionFocus = createSessionFocus(panelSession);
+      const id = ctx.session?.id ?? null;
+      panelSession = id === null ? null : { id, directory: ctx.directory };
+      sessionFocus = createSessionFocus(id);
     }
     board = createBoard(root, {
       onProject: (id) => {
         state.pinned = true;
+        rememberProject(id);
         void selectProject(id);
       },
       onHideSubtasks: (hide) => {
@@ -15331,12 +15414,10 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
       board.setProjects(projectOptions(), state.projectId);
       if (snapshot.state === "loading" && snapshot.projects.length === 0) return;
       if (state.projectId !== null && project() === null) state.pinned = false;
+      const settled = snapshot.state !== "loading";
+      if (settled) projectsSettled = true;
       followHost();
-      if (snapshot.state !== "loading") {
-        projectsSettled = true;
-        void findSessionProject();
-        draw();
-      }
+      if (settled) draw();
     }).catch((e) => {
       board.setStatus({
         kind: "banner",

@@ -241,6 +241,48 @@ test('/config/detect on a real repo with and without a remote', async (t) => {
   });
 });
 
+test('/project/of: the project a worktree was made from, also through a symlink and for a project inside the repository', async (t) => {
+  const { realExec } = await import('../src/core/exec.ts');
+  const { realpath, symlink } = await import('node:fs/promises');
+  const real = { exec: realExec };
+  const root = await realpath(await tmp(t));
+  const repo = join(root, 'repo');
+  const other = join(root, 'other');
+  const worktree = join(root, 'elsewhere', 'wt');
+  await mkdir(join(repo, 'packages', 'x'), { recursive: true });
+  await mkdir(join(repo, 'packages', 'y'), { recursive: true });
+  await mkdir(other);
+  const git = async (...args: string[]): Promise<void> => {
+    const r = await realExec('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', ...args], { cwd: repo });
+    assert.equal(r.code, 0, r.stderr);
+  };
+  await git('init', '-q');
+  await git('commit', '-q', '--allow-empty', '-m', 'init');
+  await git('worktree', 'add', '-q', '-b', 'side', worktree);
+  await mkdir(join(worktree, 'src'));
+  const link = join(root, 'link');
+  await symlink(repo, link);
+  const of = async (directory: string, candidates: string[]): Promise<unknown> =>
+    (await handle('POST', '/project/of', { directory, candidates }, real)).json;
+
+  assert.deepEqual(await of(worktree, [other, repo]), { project: repo });
+  assert.deepEqual(await of(join(worktree, 'src'), [other, repo]), { project: repo });
+  assert.deepEqual(await of(repo, [other, repo]), { project: repo });
+  assert.deepEqual(await of(worktree, [other, link]), { project: link }, 'a symlinked project is answered as given');
+  assert.deepEqual(await of(worktree, [other, join(repo, 'packages', 'x')]), { project: join(repo, 'packages', 'x') });
+  assert.deepEqual(await of(worktree, [join(repo, 'packages', 'x'), join(repo, 'packages', 'y')]), { project: null }, 'two projects inside: no guess');
+  assert.deepEqual(await of(worktree, [other, join(root, 'missing')]), { project: null });
+  assert.deepEqual(await of(other, [other, repo]), { project: null }, 'outside git');
+  assert.equal((await handle('POST', '/project/of', { directory: worktree, candidates: ['relative'] }, real)).status, 400);
+});
+
+test('/project/of: a bare repository has no main checkout', async (t) => {
+  const directory = await tmp(t);
+  const { exec, calls } = gitExec('/srv/repo.git\n');
+  assert.deepEqual((await handle('POST', '/project/of', { directory, candidates: [directory] }, { exec })).json, { project: null });
+  assert.deepEqual(calls, [['git', 'rev-parse', '--path-format=absolute', '--git-common-dir']]);
+});
+
 test('/config/init github: a failed gh preflight is 422 and writes nothing', async (t) => {
   const { fakeGh } = await import('./fakeGh.ts');
   const cases: Array<[Parameters<typeof fakeGh>[1], string, RegExp]> = [
