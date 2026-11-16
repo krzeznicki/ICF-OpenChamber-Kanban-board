@@ -50,6 +50,8 @@ import { stateTone } from './ui/detail.ts';
 import { openSessionTasks } from './ui/sessionTasks.ts';
 import { bindingOf, sameBinding } from './keymap.ts';
 import { createShortcuts, type Shortcuts } from './shortcuts.ts';
+import { cheatSheetGroups } from './cheatSheet.ts';
+import { openCheatSheet } from './ui/cheatSheet.ts';
 import { openSettings } from './ui/settingsView.ts';
 import { injectStyles } from './ui/styles.ts';
 import { mountWizard } from './ui/wizard.ts';
@@ -970,6 +972,7 @@ const installShortcuts = (): void => {
   });
   shortcuts.on('add.create', () => editor.submitAddForm());
   installToolbarShortcuts(shortcuts);
+  installCheatSheet(shortcuts);
 };
 
 /**
@@ -986,6 +989,19 @@ const installToolbarShortcuts = (shortcuts: Shortcuts): void => {
   document.addEventListener('keydown', (e) => {
     const pressed = bindingOf({ key: e.key, code: e.code, meta: e.metaKey, ctrl: e.ctrlKey, shift: e.shiftKey, alt: e.altKey, platform: shortcuts.platform });
     if (pressed !== null && sameBinding(pressed, shortcuts.keymap().get('board.refresh').binding)) e.preventDefault();
+  });
+};
+
+/** `?` on the Board opens the cheat sheet, built from the Keymap now; no Shortcuts while it is open. */
+const installCheatSheet = (shortcuts: Shortcuts): void => {
+  let open = false;
+  shortcuts.addLayer(() => (open ? 'none' : null), { front: true });
+  shortcuts.on('board.cheatSheet', () => {
+    if (open) return false;
+    open = true;
+    openCheatSheet(cheatSheetGroups(shortcuts.keymap(), shortcuts.platform), () => {
+      open = false;
+    });
   });
 };
 
