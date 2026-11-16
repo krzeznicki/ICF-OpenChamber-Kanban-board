@@ -1,9 +1,9 @@
-// The board shell: a toolbar (a TEST badge in the test build, project switcher, "Hide sub-tasks", Add task, Settings, Refresh), a
-// status slot for banners, spinner and empty states, and the five columns. The Done header carries
+// The board shell: a toolbar (a TEST badge in the test build, project switcher, "Hide sub-tasks", a search field,
+// Add task, Settings, Refresh), a status slot for banners, spinner and empty states, and the five columns. The Done header carries
 // "Archive done" and "Show archived (N)" (archive.ts).
 // It draws what main.ts hands it and reports clicks back; it holds no data of its own. Dragging
 // is attached to `columns` by the editor (ui/dnd.ts).
-import { mountBanner, mountButton, mountEmpty, mountSelect, mountSpinner, mountSwitch } from '@openchamber/sdk/ui';
+import { mountBanner, mountButton, mountEmpty, mountSearchField, mountSelect, mountSpinner, mountSwitch } from '@openchamber/sdk/ui';
 import type { BannerTone, SelectOption } from '@openchamber/sdk/ui';
 import type { Task } from '../../core/types.ts';
 import { VARIANT } from '../../core/variant.ts';
@@ -13,6 +13,8 @@ import { renderCard } from './card.ts';
 export type BoardCallbacks = {
   onProject: (projectId: string) => void;
   onHideSubtasks: (hide: boolean) => void;
+  /** The search field's text, on every keystroke (search.ts filters the cards). */
+  onSearch: (query: string) => void;
   onRefresh: () => void;
   onAdd: () => void;
   onSettings: () => void;
@@ -46,11 +48,12 @@ export const createBoard = (root: HTMLElement, callbacks: BoardCallbacks) => {
   const toolbar = div('kb-toolbar');
   const projectSlot = div('kb-project');
   const switchSlot = div('kb-hide');
+  const searchSlot = div('kb-search');
   const spacer = div('kb-spacer');
   const addSlot = div('kb-add-button');
   const settingsSlot = div('kb-settings-button');
   const refreshSlot = div('kb-refresh');
-  toolbar.append(projectSlot, switchSlot, spacer, addSlot, settingsSlot, refreshSlot);
+  toolbar.append(projectSlot, switchSlot, searchSlot, spacer, addSlot, settingsSlot, refreshSlot);
   // The local test build (npm run build:test) says so, so it is never mistaken for production.
   if (VARIANT === 'test') {
     const badge = document.createElement('span');
@@ -81,6 +84,16 @@ export const createBoard = (root: HTMLElement, callbacks: BoardCallbacks) => {
     onChange: (checked) => {
       hideSwitch.update({ checked });
       callbacks.onHideSubtasks(checked);
+    },
+  });
+  // The kit's field clears itself on Escape and with its clear button.
+  const search = mountSearchField(searchSlot, {
+    value: '',
+    placeholder: 'Search tasks',
+    label: 'Search tasks by title or description',
+    onChange: (query) => {
+      search.update({ value: query });
+      callbacks.onSearch(query);
     },
   });
   const add = mountButton(addSlot, { label: 'Add task', size: 'sm', disabled: true, onClick: callbacks.onAdd });

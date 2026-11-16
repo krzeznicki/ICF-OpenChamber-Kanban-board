@@ -725,8 +725,9 @@ var fieldsTight = (text) => {
   const f = headerFields(splitLines(text));
   return f.length > 1 && f.every((x, i) => i === 0 || x.index === f[i - 1].index + 1);
 };
+var foldText = (text) => text.replace(/[łŁ]/g, "l").normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 var slugify = (title) => {
-  const slug = title.replace(/[łŁ]/g, "l").normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60).replace(/-+$/, "");
+  const slug = foldText(title).replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60).replace(/-+$/, "");
   return slug === "" ? "issue" : slug;
 };
 var issueFileName = (n, title) => `${pad(n)}-${slugify(title)}.md`;
