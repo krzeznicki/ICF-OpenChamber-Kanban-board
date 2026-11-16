@@ -325,6 +325,8 @@ npm install
 npm run check   # typecheck + tests + build
 ```
 
+The node tests have no layout, so drag and drop across columns of different lengths is checked separately, by hand, in headless Chrome (`CHROME` overrides the default macOS path): `sh scripts/debug/drag-across-columns/run.sh` must print only `PASS` lines.
+
 `npm run build` bundles with esbuild: the panel to `panel/main.js` (IIFE), the service to `service/main.js` and the CLI to `build/cli/task-board.mjs` (ESM). Commit the built files with the sources: installs never build.
 
 Before a release, check the package with OpenChamber's checker. On Node 26 it cannot run from `node_modules` directly (Node will not strip types there), so copy it out first:

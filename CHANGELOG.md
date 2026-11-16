@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Fixed: a card at the end of a long column could not be dragged into the column beside it. Each column was only as tall as its own cards, so beside the end of a long list there was no column under the pointer and the drop was cancelled. Columns now all reach the bottom of the board (the longest column, at least the rest of the window), and the whole height takes the drop. `scripts/debug/drag-across-columns/run.sh` checks it in headless Chrome (not part of `npm test`).
+- Fixed: a card at the end of a long column could not be dragged into the column beside it. Each column was only as tall as its own cards, so beside the end of a long list there was no column under the pointer and the drop was cancelled. On the full-screen board, where columns sit side by side, they now all reach the bottom of the board (the longest column, at least the rest of the window), and the whole height takes the drop. The rail panel, where columns are stacked, is unchanged.
 
 ## 0.3.8
 
