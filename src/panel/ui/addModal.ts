@@ -75,10 +75,17 @@ const el = <K extends keyof HTMLElementTagNameMap>(tag: K, className: string, te
   return node;
 };
 
+export type AddModalHandle = {
+  setStart: (start: AddModalStart | null) => void;
+  /** Creates the task, as the Create task button does (Mod+Enter); false when the form is busy or done. */
+  submit: () => boolean;
+  dispose: () => void;
+};
+
 export const openAddModal = (
   model: AddModalModel,
   callbacks: AddModalCallbacks,
-): { setStart: (start: AddModalStart | null) => void; dispose: () => void } => {
+): AddModalHandle => {
   const d: AddDraft = emptyDraft(model.suggest);
   if (!model.suggest) d.type = model.types.includes('enhancement') ? 'enhancement' : NONE;
   /** A type literally named like the sentinel is not offered (it would read as the model's pick). */
@@ -278,8 +285,9 @@ export const openAddModal = (
       });
       fieldSlot.querySelector('input')?.setAttribute('aria-label', `Sub-task ${i + 1}`);
       // Enter adds the next row instead of submitting the whole form.
+      // Mod+Enter is left to the Create task Shortcut (shortcuts.ts).
       fieldSlot.addEventListener('keydown', (e) => {
-        if (e.key !== 'Enter' || e.isComposing) return;
+        if (e.key !== 'Enter' || e.isComposing || e.metaKey || e.ctrlKey) return;
         e.preventDefault();
         d.subtasks.splice(i + 1, 0, '');
         drawSubtasks(i + 1);
@@ -400,7 +408,7 @@ export const openAddModal = (
     if (tone !== null) errorDispose = mountBanner(errorSlot, { tone, title, body }).dispose;
     if (tone !== null) errorSlot.scrollIntoView({ block: 'nearest' });
   };
-  const create = mountButton(actions, { label: 'Create task', size: 'sm', onClick: () => submit() });
+  const create = mountButton(actions, { label: 'Create task', size: 'sm', onClick: () => void submit() });
   let createDisposed = false;
   const cancel = mountButton(actions, { label: 'Cancel', variant: 'outline', size: 'sm', onClick: dismiss });
 
@@ -416,13 +424,13 @@ export const openAddModal = (
     lockStart();
   };
 
-  const submit = (): void => {
-    if (busy || finished) return;
+  const submit = (): boolean => {
+    if (busy || finished) return false;
     const invalid = validateDraft(d);
     if (invalid.title !== undefined) {
       titleField.update({ error: invalid.title });
       titleSlot.querySelector('input')?.focus();
-      return;
+      return true;
     }
     showBanner(null);
     setBusy(true);
@@ -441,6 +449,7 @@ export const openAddModal = (
       cancel.update({ label: 'Close', variant: 'default' });
       actions.querySelector('button')?.focus();
     });
+    return true;
   };
 
   form.addEventListener('submit', (e) => {
@@ -465,6 +474,7 @@ export const openAddModal = (
       start = next;
       drawStart();
     },
+    submit,
     dispose: () => {
       for (const x of [...disposers, ...blockerDisposers, ...subDisposers, ...existingDisposers]) x();
       for (const h of fixed) h.dispose();
