@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import type { Task, TaskState } from '../src/core/types.ts';
 import { groupTasks } from '../src/panel/columns.ts';
 import { filterBoard } from '../src/panel/search.ts';
-import { keepSelected, layoutOf, locate, nextSelected, type Layout, type Selected } from '../src/panel/navigation.ts';
+import { firstSelected, keepSelected, layoutOf, locate, nextSelected, type Layout, type Selected } from '../src/panel/navigation.ts';
 
 // Backlog a b c | Ready (empty) | In Progress x | Review p q r s | Done (empty)
 const board: Layout = [['a', 'b', 'c'], [], ['x'], ['p', 'q', 'r', 's'], []];
@@ -77,6 +77,38 @@ test('hidden sub-tasks and the search filter: only drawn cards are stepped throu
   assert.deepEqual(searched[0], []);
   assert.equal(step('apple', 'left', searched), 'apple');
   assert.equal(nextSelected(searched, null, 'down')?.id, 'apple');
+});
+
+test('firstSelected (↓ from the search field): the first card in Navigation order, after the search filter', () => {
+  assert.deepEqual(firstSelected(board), { id: 'a', column: 0, row: 0 });
+  assert.deepEqual(firstSelected([[], [], ['k', 'm']]), { id: 'k', column: 2, row: 0 });
+  assert.equal(firstSelected([[], []]), null);
+  const t = (id: string, title: string, state: TaskState): Task => ({
+    id,
+    kind: 'ticket',
+    title,
+    body: '',
+    state,
+    type: null,
+    parentId: null,
+    blockedBy: [],
+    url: null,
+    updatedAt: 0,
+    claimed: false,
+  });
+  const tasks = [t('b1', 'Banana', 'needs-triage'), t('r1', 'Red apple', 'ready-for-agent'), t('r2', 'Green apple', 'ready-for-agent')];
+  const searched = layoutOf(filterBoard(groupTasks(tasks, [], new Set(), false), tasks, 'apple', 'local'));
+  const first = firstSelected(searched);
+  assert.ok(first !== null);
+  assert.equal(first.column, 1);
+  assert.equal(searched[1]![0], first.id);
+  assert.ok(!searched.flat().includes('b1'));
+});
+
+test('search filter: a Selected card filtered out falls back to a card still drawn', () => {
+  const filtered: Layout = [['c'], [], [], ['q'], []];
+  assert.equal(keepSelected(filtered, at(board, 'a'))?.id, 'c');
+  assert.equal(step('c', 'right', filtered), 'q');
 });
 
 test('keepSelected: a card still drawn keeps its selection at its new place (moved to another column)', () => {

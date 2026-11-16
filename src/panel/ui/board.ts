@@ -1,5 +1,6 @@
 // The board shell: a toolbar (a TEST badge in the test build, project switcher, "Hide sub-tasks", a search field,
-// Add task, Settings, Refresh; the search completes filters, ui/searchSuggest.ts), a status slot for banners, spinner and empty states, and the five columns. The Done header carries
+// Add task, Settings, Refresh; the search completes filters, ui/searchSuggest.ts, and hands Esc in an
+// empty field and ↓ back to main.ts for the Board), a status slot for banners, spinner and empty states, and the five columns. The Done header carries
 // "Archive done" and "Show archived (N)" (archive.ts).
 // It draws what main.ts hands it and reports clicks back; it holds no data of its own. Dragging
 // is attached to `columns` by the editor (ui/dnd.ts).
@@ -19,6 +20,10 @@ export type BoardCallbacks = {
   onSearch: (query: string) => void;
   /** The search field's completions for the text and caret (search.ts searchSuggestions). */
   suggest: (text: string, caret: number) => Suggestion[];
+  /** Esc in the empty search field (the kit's first Esc clears it): back to the Board. */
+  onSearchExit: () => void;
+  /** ↓ in the search field with no completion list open: select the first card; false when none. */
+  onSearchDown: () => boolean;
   onRefresh: () => void;
   onAdd: () => void;
   onSettings: () => void;
@@ -106,6 +111,19 @@ export const createBoard = (root: HTMLElement, callbacks: BoardCallbacks) => {
   };
   // The field's completion list lives as long as the board, like the field itself.
   mountSearchSuggest(searchSlot, { suggest: callbacks.suggest, apply: setQuery });
+  // Esc and ↓ in the field, in steps: the completion list takes them first (capturing on the slot),
+  // then the kit's Esc clears a non-empty field (both preventDefault); only what is left reaches here,
+  // registered after the kit's listener on the same input.
+  const searchInput = searchSlot.querySelector<HTMLInputElement>('input');
+  searchInput?.addEventListener('keydown', (e) => {
+    if (e.defaultPrevented || e.isComposing || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+    if (e.key === 'Escape' && searchInput.value === '') {
+      e.preventDefault();
+      callbacks.onSearchExit();
+    } else if (e.key === 'ArrowDown' && callbacks.onSearchDown()) {
+      e.preventDefault();
+    }
+  });
   const add = mountButton(addSlot, { label: 'Add task', size: 'sm', disabled: true, onClick: callbacks.onAdd });
   mountButton(settingsSlot, { label: 'Settings', variant: 'outline', size: 'sm', onClick: callbacks.onSettings });
   const refresh = mountButton(refreshSlot, { label: 'Refresh', variant: 'outline', size: 'sm', onClick: callbacks.onRefresh });
@@ -167,6 +185,13 @@ export const createBoard = (root: HTMLElement, callbacks: BoardCallbacks) => {
      * Opens the project switcher with its search focused, as a click on it does (the Project
      * switcher Shortcut). False when it is disabled (no projects); an open one gets its search focused.
      */
+    /** Focuses the search field with its text selected (the Search Shortcut). */
+    focusSearch: (): boolean => {
+      if (searchInput === null) return false;
+      searchInput.focus();
+      searchInput.select();
+      return true;
+    },
     openProjects: (): boolean => {
       const trigger = projectSlot.querySelector<HTMLButtonElement>('.oc-sdk-trigger');
       if (trigger === null || trigger.disabled) return false;

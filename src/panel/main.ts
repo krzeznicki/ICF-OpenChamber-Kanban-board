@@ -52,7 +52,7 @@ import { bindingOf, sameBinding } from './keymap.ts';
 import { createShortcuts, type Shortcuts } from './shortcuts.ts';
 import { cheatSheetGroups } from './cheatSheet.ts';
 import { openCheatSheet } from './ui/cheatSheet.ts';
-import { layoutOf } from './navigation.ts';
+import { firstSelected, layoutOf } from './navigation.ts';
 import { createSelection, type Selection } from './ui/selection.ts';
 import { openSettings } from './ui/settingsView.ts';
 import { injectStyles } from './ui/styles.ts';
@@ -1036,6 +1036,7 @@ const installShortcuts = (): void => {
 const installToolbarShortcuts = (shortcuts: Shortcuts): void => {
   shortcuts.on('board.projects', () => board.openProjects());
   shortcuts.on('board.settings', () => showSettings());
+  shortcuts.on('board.search', () => board.focusSearch());
   shortcuts.on('board.refresh', () => {
     if (!board.busy()) void load();
   });
@@ -1093,6 +1094,19 @@ const start = (ctx: HostReadyContext): void => {
       draw();
     },
     suggest: (text, caret) => searchSuggestions(text, caret, boardTypes()),
+    // Second Esc: focus back on the Selected card, or on the Board itself when there is none.
+    onSearchExit: () => {
+      const id = selection.get();
+      if (id !== null) selection.set(id, { focus: true });
+      if (id === null || !selection.focusOnBoard()) (document.activeElement as HTMLElement | null)?.blur();
+    },
+    // ↓: the first card the search left, in Navigation order.
+    onSearchDown: () => {
+      const first = firstSelected(selection.layout());
+      if (first === null) return false;
+      selection.set(first.id, { focus: true });
+      return true;
+    },
     onRefresh: () => void load(),
     onAdd: () => editor.showAdd(),
     onSettings: showSettings,
