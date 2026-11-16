@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.7
 
 - The task modal's **Add sub-task** → **Existing tasks** shows the open tasks it may link as a list with checkboxes (and a **Filter** field over 8 of them), as Add task's existing sub-tasks do, instead of a search select; **Link selected** links the checked tasks one after another and names any that could not be linked (`link.ts` `linkChildren`). The checkbox list is shared by both modals (`ui/checkList.ts`).
 
