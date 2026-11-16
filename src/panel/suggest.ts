@@ -17,6 +17,9 @@ export const SUGGEST_STATES: readonly TaskState[] = CREATE_STATES;
 export const SUGGEST_SYSTEM =
   'You sort software tasks on a Kanban board. Answer with one JSON object only: no prose, no explanation, no markdown.';
 
+/** The type for a task that needs working out before it can be implemented (when the board has it). */
+export const RESEARCH_TYPE = 'research';
+
 /** `{"type":"enhancement","state":"ready-for-agent"}` is about 15 tokens; room for a little more. */
 const MAX_OUTPUT_TOKENS = 100;
 const TITLE_MAX = 500;
@@ -49,6 +52,13 @@ export const buildSuggestPrompt = (task: { title: string; body: string }, types:
     'Pick a type and a state for the task below, for a Kanban board.',
     '',
     typeLine,
+    // A vague task gets research: its preset (Plan) works out what is wanted and may add the
+    // sub-tasks, after which the default preset turns to orchestrate (settings.ts resolveStart).
+    ...(types.includes(RESEARCH_TYPE)
+      ? [
+          `If the task is not described completely enough to implement (the goal is unclear, details are missing, there are open questions or something must be investigated first), pick ${RESEARCH_TYPE}.`,
+        ]
+      : []),
     'States (pick exactly one):',
     ...SUGGEST_STATES.map((s) => `- ${s}: ${STATE_HINTS[s] ?? s}`),
     '',

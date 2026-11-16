@@ -67,6 +67,14 @@ test('buildSuggestPrompt: lists the types and the four states, the task as data,
   assert.match(p.slice(json), /\{"type": .*"state": .*\}/);
 });
 
+test('buildSuggestPrompt: a task not described well enough to implement is research, when the board has that type', () => {
+  const p = buildSuggestPrompt({ title: 'Better search', body: 'Make search better.' }, TYPES);
+  assert.ok(TYPES.includes('research'));
+  assert.match(p, /not described completely enough to implement[^\n]*pick research/);
+  const without = buildSuggestPrompt({ title: 'Better search', body: '' }, ['bug', 'enhancement']);
+  assert.doesNotMatch(without, /pick research/);
+});
+
 test('buildSuggestPrompt: a huge body is cut so the prompt stays under the limit, the instruction kept', () => {
   const p = buildSuggestPrompt({ title: 'T'.repeat(500), body: 'x'.repeat(PROMPT_MAX * 2) }, TYPES);
   assert.ok(p.length <= PROMPT_MAX, String(p.length));
