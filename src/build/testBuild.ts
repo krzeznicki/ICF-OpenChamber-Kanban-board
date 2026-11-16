@@ -18,7 +18,7 @@ const obj = (v: unknown, what: string): Json => {
 };
 
 /**
- * The test build's package.json: own id, name, icon and a prerelease version (`<v>-test.g<sha>`), plus
+ * The test build's package.json: own id, name, icon, slash command names (`<name>-test`) and a prerelease version (`<v>-test.g<sha>`), plus
  * `kanbanBuild.variant`. Development-only fields (scripts, devDependencies) are dropped.
  * The input is not modified.
  */
@@ -38,6 +38,13 @@ export const testManifest = (pkg: Json, sha: string): Json => {
   panel.name = TEST_NAME;
   panel.icon = TEST_ICON;
   if (contributes.page !== undefined) obj(contributes.page, 'contributes.page').title = TEST_NAME;
+  // The host keeps the first install's command for a shared name, so /kanban would reach production only.
+  if (Array.isArray(contributes.commands)) {
+    contributes.commands = contributes.commands.map((c) => {
+      const command = obj(c, 'contributes.commands entry');
+      return { ...command, name: `${String(command.name)}-test` };
+    });
+  }
   out.kanbanBuild = { variant: 'test' };
   return out;
 };
