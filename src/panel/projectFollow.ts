@@ -75,12 +75,20 @@ export const createProjectFollow = (deps: FollowDeps) => {
   };
 
   return {
+    /** The project the directory names: the one containing it, else the one looked up for it; never a fallback. */
+    recognised: (dir: string | null, projects: readonly GuestProject[]): GuestProject | null =>
+      projectContaining(dir, projects) ?? (dir === null ? null : lookedUp(dir, projects)) ?? null,
     /**
-     * The project to show: the one containing the host's directory, else the one looked up for it,
-     * else the one shown now, else the first.
+     * The project to show: the one the directory names (`recognised`), else the one shown now, else
+     * the last used one (`lastId`, kept across frames), else the first.
      */
-    choose: (dir: string | null, projects: readonly GuestProject[], current: GuestProject | null): GuestProject | null =>
-      projectContaining(dir, projects) ?? (dir === null ? null : lookedUp(dir, projects)) ?? current ?? projects[0] ?? null,
+    choose: (dir: string | null, projects: readonly GuestProject[], current: GuestProject | null, lastId: string | null = null): GuestProject | null =>
+      projectContaining(dir, projects) ??
+      (dir === null ? null : lookedUp(dir, projects)) ??
+      current ??
+      projects.find((p) => p.id === lastId) ??
+      projects[0] ??
+      null,
     /** `dir` lies outside every project and no lookup has answered for it (and this project list) yet. */
     unknown: (dir: string | null, projects: readonly GuestProject[]): dir is string =>
       dir !== null && projectContaining(dir, projects) === null && lookedUp(dir, projects) === undefined,

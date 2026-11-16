@@ -379,6 +379,25 @@ test('detail sections: defaults (Settings collapsed), defensive parse, short key
   assert.deepEqual(await s.loadSections(), { ...DEFAULT_SECTIONS, task: false });
 });
 
+test('last used project: one id for every frame, read defensively, cleared with null', async () => {
+  const { STORAGE_KEYS: K, createSettingsStore: create } = await import('../src/panel/settings.ts');
+  const data = new Map<string, unknown>();
+  const storage: SettingsStorage = {
+    get: async (k) => data.get(k),
+    set: async (k, v) => void data.set(k, v),
+    delete: async (k) => void data.delete(k),
+  };
+  const s = create(storage);
+  assert.equal(await s.loadLastProject(), null);
+  await s.saveLastProject('p1');
+  assert.equal(data.get(K.lastProject), 'p1');
+  assert.equal(await s.loadLastProject(), 'p1');
+  data.set(K.lastProject, { id: 'p1' });
+  assert.equal(await s.loadLastProject(), null);
+  await s.saveLastProject(null);
+  assert.equal(data.has(K.lastProject), false);
+});
+
 test('archived sessions: parsed defensively, stored per project under archivedSessions:<projectId>', async () => {
   const { parseArchivedSessions, STORAGE_KEYS: K, createSettingsStore: create } = await import('../src/panel/settings.ts');
   assert.deepEqual([...parseArchivedSessions(['a', 3, '', 'b', 'a'])], ['a', 'b']);

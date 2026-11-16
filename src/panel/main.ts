@@ -583,6 +583,17 @@ const selectProject = async (id: string | null): Promise<void> => {
 
 const projectOptions = () => state.projects.map((p) => ({ id: p.id, label: p.name, hint: p.directory }));
 
+/** The project the board last showed by the host's directory or the user's pick, kept across frames; read once in start(). */
+let lastProject: string | null = null;
+let lastProjectLoaded = false;
+
+/** A project the directory named or the user picked becomes the last used one; a fallback never does. */
+const rememberProject = (id: string): void => {
+  if (id === lastProject) return;
+  lastProject = id;
+  saver.save(STORAGE_KEYS.lastProject, () => store.saveLastProject(id));
+};
+
 /** `lookUp` false: the lookup for the host's directory just ended, so it is not started again. */
 const followHost = (lookUp = true): void => {
   const current = project();
@@ -591,7 +602,11 @@ const followHost = (lookUp = true): void => {
   if (lookUp && lookUpHostProject() && current === null) return;
   // Nor on a project list still loading, where the directory's project may only be missing yet.
   if (current === null && !projectsSettled && follow.unknown(state.hostDirectory, state.projects)) return;
-  void selectProject(follow.choose(state.hostDirectory, state.projects, current)?.id ?? null);
+  const named = follow.recognised(state.hostDirectory, state.projects);
+  // Nor before the last used project is read, which a directory nothing names falls back to.
+  if (current === null && named === null && !lastProjectLoaded) return;
+  if (named !== null) rememberProject(named.id);
+  void selectProject(follow.choose(state.hostDirectory, state.projects, current, lastProject)?.id ?? null);
 };
 
 // --- summaries (summaries.ts) ---
@@ -936,6 +951,14 @@ const saveSections = (next: Sections): void => {
 const start = (ctx: HostReadyContext): void => {
   injectStyles();
   void store
+    .loadLastProject()
+    .catch(() => null)
+    .then((id) => {
+      lastProject ??= id;
+      lastProjectLoaded = true;
+      if (state.projects.length > 0) followHost();
+    });
+  void store
     .loadSections()
     .then((s) => {
       sections = s;
@@ -951,6 +974,7 @@ const start = (ctx: HostReadyContext): void => {
   board = createBoard(root, {
     onProject: (id) => {
       state.pinned = true;
+      rememberProject(id);
       void selectProject(id);
     },
     onHideSubtasks: (hide) => {

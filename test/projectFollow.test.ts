@@ -73,6 +73,25 @@ test('a directory no lookup can place keeps the shown project, else the first', 
   assert.equal(follow.choose(WORKTREE, projects, null)?.name, 'first');
 });
 
+test('a directory no lookup can place opens the last used project, when a fresh board has none shown', async () => {
+  const follow = createProjectFollow(deps());
+  await follow.lookup(WORKTREE, projects, null);
+  assert.equal(follow.choose(WORKTREE, projects, null, 'id-kanban')?.name, 'kanban');
+  assert.equal(follow.choose(WORKTREE, projects, projects[0]!, 'id-kanban')?.name, 'first', 'the project shown now stays');
+  assert.equal(follow.choose(WORKTREE, projects, null, 'id-gone')?.name, 'first', 'a last project that went away');
+  assert.equal(follow.choose('/projects/first', projects, null, 'id-kanban')?.name, 'first', 'a known directory wins');
+});
+
+test('recognised: only a project the directory names counts, not a fallback', async () => {
+  const follow = createProjectFollow(deps({ projectOfWorktree: async (dir) => (dir === WORKTREE ? '/projects/kanban' : null) }));
+  assert.equal(follow.recognised('/projects/first/src', projects)?.name, 'first');
+  assert.equal(follow.recognised(WORKTREE, projects), null, 'not looked up yet');
+  await follow.lookup(WORKTREE, projects, null);
+  assert.equal(follow.recognised(WORKTREE, projects)?.name, 'kanban');
+  assert.equal(follow.recognised('/tmp/nowhere', projects), null);
+  assert.equal(follow.recognised(null, projects), null);
+});
+
 test('a lookup that cannot ask the service tries again by itself, so a starting service does not leave the first project', async () => {
   let calls = 0;
   const d = deps({

@@ -4155,7 +4155,9 @@ ${ref}`,
     /** Per project: the manual card order, task ids (order.ts). */
     taskOrder: (projectId) => fit(`taskOrder:${projectId}`),
     /** Which sections of the task modal are open (one entry for every task and project). */
-    detailSections: "detail-sections"
+    detailSections: "detail-sections",
+    /** The project the board last showed by the host's directory or the user's pick (projectFollow.ts): a fresh board that cannot place its directory opens it. */
+    lastProject: "lastProject"
   };
   var ARCHIVED_MAX = 500;
   var parseArchivedSessions = (raw) => new Set(Array.isArray(raw) ? raw.filter((id) => typeof id === "string" && id !== "").slice(-ARCHIVED_MAX) : []);
@@ -4250,6 +4252,11 @@ ${ref}`,
       saveArchivedTasks: (projectId, marks) => put(STORAGE_KEYS.archivedTasks(projectId), serializeArchived(marks), marks.size === 0),
       loadOrder: async (projectId) => parseOrder(await storage.get(STORAGE_KEYS.taskOrder(projectId))),
       saveOrder: (projectId, order2) => put(STORAGE_KEYS.taskOrder(projectId), order2.slice(0, ORDER_MAX), order2.length === 0),
+      loadLastProject: async () => {
+        const v2 = await storage.get(STORAGE_KEYS.lastProject);
+        return typeof v2 === "string" && v2 !== "" ? v2 : null;
+      },
+      saveLastProject: (id) => id === null ? storage.delete(STORAGE_KEYS.lastProject) : storage.set(STORAGE_KEYS.lastProject, id),
       loadSections: async () => parseSections(await storage.get(STORAGE_KEYS.detailSections)),
       saveSections: (sections2) => {
         const clean2 = parseSections(sections2);
@@ -13934,11 +13941,13 @@ ${p.directory}`).join("\n");
       }
     };
     return {
+      /** The project the directory names: the one containing it, else the one looked up for it; never a fallback. */
+      recognised: (dir, projects) => projectContaining(dir, projects) ?? (dir === null ? null : lookedUp(dir, projects)) ?? null,
       /**
-       * The project to show: the one containing the host's directory, else the one looked up for it,
-       * else the one shown now, else the first.
+       * The project to show: the one the directory names (`recognised`), else the one shown now, else
+       * the last used one (`lastId`, kept across frames), else the first.
        */
-      choose: (dir, projects, current) => projectContaining(dir, projects) ?? (dir === null ? null : lookedUp(dir, projects)) ?? current ?? projects[0] ?? null,
+      choose: (dir, projects, current, lastId = null) => projectContaining(dir, projects) ?? (dir === null ? null : lookedUp(dir, projects)) ?? current ?? projects.find((p) => p.id === lastId) ?? projects[0] ?? null,
       /** `dir` lies outside every project and no lookup has answered for it (and this project list) yet. */
       unknown: (dir, projects) => dir !== null && projectContaining(dir, projects) === null && lookedUp(dir, projects) === void 0,
       /**
@@ -15041,12 +15050,22 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     }
   };
   var projectOptions = () => state.projects.map((p) => ({ id: p.id, label: p.name, hint: p.directory }));
+  var lastProject = null;
+  var lastProjectLoaded = false;
+  var rememberProject = (id) => {
+    if (id === lastProject) return;
+    lastProject = id;
+    saver.save(STORAGE_KEYS.lastProject, () => store.saveLastProject(id));
+  };
   var followHost = (lookUp = true) => {
     const current = project();
     if (state.pinned && current !== null) return;
     if (lookUp && lookUpHostProject() && current === null) return;
     if (current === null && !projectsSettled && follow.unknown(state.hostDirectory, state.projects)) return;
-    void selectProject(follow.choose(state.hostDirectory, state.projects, current)?.id ?? null);
+    const named = follow.recognised(state.hostDirectory, state.projects);
+    if (current === null && named === null && !lastProjectLoaded) return;
+    if (named !== null) rememberProject(named.id);
+    void selectProject(follow.choose(state.hostDirectory, state.projects, current, lastProject)?.id ?? null);
   };
   var summaryRedraw = false;
   var summaryChanged = () => {
@@ -15289,6 +15308,11 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
   };
   var start = (ctx) => {
     injectStyles();
+    void store.loadLastProject().catch(() => null).then((id) => {
+      lastProject ??= id;
+      lastProjectLoaded = true;
+      if (state.projects.length > 0) followHost();
+    });
     void store.loadSections().then((s) => {
       sections = s;
     }).catch(() => {
@@ -15303,6 +15327,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     board = createBoard(root, {
       onProject: (id) => {
         state.pinned = true;
+        rememberProject(id);
         void selectProject(id);
       },
       onHideSubtasks: (hide) => {
