@@ -8,13 +8,17 @@ import type { BannerTone, SelectOption } from '@openchamber/sdk/ui';
 import type { Task } from '../../core/types.ts';
 import { VARIANT } from '../../core/variant.ts';
 import { COLUMNS, type BoardModel } from '../columns.ts';
+import type { Suggestion } from '../search.ts';
 import { renderCard } from './card.ts';
+import { mountSearchSuggest } from './searchSuggest.ts';
 
 export type BoardCallbacks = {
   onProject: (projectId: string) => void;
   onHideSubtasks: (hide: boolean) => void;
   /** The search field's text, on every keystroke (search.ts filters the cards). */
   onSearch: (query: string) => void;
+  /** The search field's completions for the text and caret (search.ts searchSuggestions). */
+  suggest: (text: string, caret: number) => Suggestion[];
   onRefresh: () => void;
   onAdd: () => void;
   onSettings: () => void;
@@ -92,9 +96,16 @@ export const createBoard = (root: HTMLElement, callbacks: BoardCallbacks) => {
   // The kit's field clears itself on Escape and with its clear button.
   const search = mountSearchField(searchSlot, {
     value: '',
-    placeholder: 'Search tasks',
-    label: 'Search tasks by title or description',
+    placeholder: 'Search tasks, type:, status:…',
+    label: 'Search tasks by title or description, or filter with type:, state:, status: and column:',
     onChange: (query) => {
+      search.update({ value: query });
+      callbacks.onSearch(query);
+    },
+  });
+  mountSearchSuggest(searchSlot, {
+    suggest: callbacks.suggest,
+    apply: (query) => {
       search.update({ value: query });
       callbacks.onSearch(query);
     },

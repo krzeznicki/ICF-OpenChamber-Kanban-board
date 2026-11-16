@@ -37,7 +37,7 @@ import { MODEL_NOTICES, createLimiter, createModelAvailability } from './limiter
 import { createSuggester, createTypeClassifier } from './suggest.ts';
 import { taskTypes } from './moves.ts';
 import { MODEL_PICK } from './addTask.ts';
-import { filterBoard } from './search.ts';
+import { filterBoard, searchSuggestions } from './search.ts';
 import { createSummaries } from './summaries.ts';
 import { createSessionFocus } from './sessionFocus.ts';
 import { createBoard, type Board } from './ui/board.ts';
@@ -369,7 +369,7 @@ const draw = (): void => {
   auditLinks();
   focusSession();
   if (state.tasks.length > 0 && state.query.trim() !== '' && Object.values(shown).every((cards) => cards.length === 0)) {
-    board.setStatus({ kind: 'empty', title: 'No tasks match', body: `Nothing has "${state.query.trim()}" in its title or description.` });
+    board.setStatus({ kind: 'empty', title: 'No tasks match', body: `No task on the board matches "${state.query.trim()}".` });
   } else if (state.tasks.length === 0) {
     board.setStatus({
       kind: 'empty',
@@ -973,6 +973,7 @@ const start = (ctx: HostReadyContext): void => {
       state.query = query;
       draw();
     },
+    suggest: (text, caret) => searchSuggestions(text, caret, state.tasks === null ? [] : taskTypes(state.tasks, settings().types).filter((t) => t !== MODEL_PICK)),
     onRefresh: () => void load(),
     onAdd: () => editor.showAdd(),
     onSettings: showSettings,
