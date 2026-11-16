@@ -3883,6 +3883,10 @@ ${ref}`,
           model.answered();
           texts.set(key, text3);
           await store2(key, taskPrefix(projectId, task.id), text3);
+          try {
+            deps.onGenerated?.(projectId, task);
+          } catch {
+          }
           return text3;
         } catch (e) {
           const code2 = codeOf(e);
@@ -4126,6 +4130,8 @@ ${ref}`,
     /** The preset sets: edits of the built-in sets and the user's own sets (presets.ts StoredSets). */
     presetSets: "presetSets",
     card: (projectId, taskId) => fit(`card:${projectId}:${taskId}`),
+    /** `true`: the user created the task with "No type" in the Add task modal (suggest.ts createTypeClassifier). */
+    noType: (projectId, taskId) => fit(`noType:${projectId}:${taskId}`),
     /** Per project: task id -> when the user dragged the card away from its session (columns.ts Detached). */
     detached: (projectId) => fit(`detached:${projectId}`),
     /** Per project: session ids a host lookup found archived (columns.ts markArchived). */
@@ -4211,6 +4217,17 @@ ${ref}`,
       },
       /** The task was deleted: its start options go. */
       forgetCard: (projectId, taskId) => storage.delete(STORAGE_KEYS.card(projectId, taskId)),
+      /** The user created the task with "No type" in the Add task modal: the Small Model never picks its type. */
+      markNoType: (projectId, taskId) => storage.set(STORAGE_KEYS.noType(projectId, taskId), true),
+      hasNoType: async (projectId, taskId) => await storage.get(STORAGE_KEYS.noType(projectId, taskId)) === true,
+      /** The task got a new id: its "No type" mark follows it. */
+      moveNoType: async (projectId, from, to) => {
+        if (await storage.get(STORAGE_KEYS.noType(projectId, from)) !== true) return;
+        await storage.set(STORAGE_KEYS.noType(projectId, to), true);
+        await storage.delete(STORAGE_KEYS.noType(projectId, from));
+      },
+      /** The task was deleted: its "No type" mark goes. */
+      forgetNoType: (projectId, taskId) => storage.delete(STORAGE_KEYS.noType(projectId, taskId)),
       loadDetached: async (projectId) => parseDetached(await storage.get(STORAGE_KEYS.detached(projectId))),
       saveDetached: (projectId, marks) => put(STORAGE_KEYS.detached(projectId), Object.fromEntries(marks), marks.size === 0),
       loadArchived: async (projectId) => parseArchivedSessions(await storage.get(STORAGE_KEYS.archivedSessions(projectId))),
@@ -4351,9 +4368,25 @@ ${ref}`,
       deps.onNotice?.(message2);
     };
     const model = deps.availability ?? createModelAvailability((code2) => notice(code2 === "NOT_GRANTED" ? NOTICES.NOT_GRANTED : NOTICES.NO_MODEL));
+    const running = /* @__PURE__ */ new Map();
     const suggest = async (job) => {
       if (!job.asked.type && !job.asked.state) return { kind: "kept" };
       if (!model.available()) return { kind: "unavailable" };
+      if (job.quiet === true && running.has(job.taskId)) return { kind: "kept" };
+      running.set(job.taskId, (running.get(job.taskId) ?? 0) + 1);
+      try {
+        return await ask(job);
+      } finally {
+        const n = (running.get(job.taskId) ?? 1) - 1;
+        if (n === 0) running.delete(job.taskId);
+        else running.set(job.taskId, n);
+      }
+    };
+    const ask = async (job) => {
+      const failed = () => {
+        if (job.quiet !== true) notice(NOTICES.failed(job.taskId));
+        return { kind: "failed" };
+      };
       let suggestion;
       try {
         const answer = await deps.limit.run(() => {
@@ -4375,10 +4408,7 @@ ${ref}`,
         }
         suggestion = null;
       }
-      if (suggestion === null) {
-        notice(NOTICES.failed(job.taskId));
-        return { kind: "failed" };
-      }
+      if (suggestion === null) return failed();
       if (deps.busy?.(job.taskId) === true) return { kind: "kept" };
       const written = {};
       try {
@@ -4401,8 +4431,7 @@ ${ref}`,
         }
         return { kind: "applied", ...written };
       } catch {
-        notice(NOTICES.failed(job.taskId));
-        return { kind: "failed" };
+        return failed();
       } finally {
         if (written.type !== void 0 || written.state !== void 0) deps.onApplied?.(job.taskId, written);
       }
@@ -4412,6 +4441,38 @@ ${ref}`,
       available: () => model.available(),
       suggest
     };
+  };
+  var createTypeClassifier = (deps) => {
+    const asked = /* @__PURE__ */ new Set();
+    const onSummary = async (projectId, task) => {
+      const kept = { kind: "kept" };
+      if (task.type !== null || task.state === "done" || task.state === "wontfix") return kept;
+      if (!deps.enabled()) return kept;
+      const types = deps.types(projectId);
+      if (types.length === 0) return kept;
+      const key = `${projectId}\0${task.id}\0${task.body}`;
+      if (asked.has(key)) return kept;
+      asked.add(key);
+      let noType;
+      try {
+        noType = await deps.explicitNoType(projectId, task.id);
+      } catch {
+        return kept;
+      }
+      if (noType) return kept;
+      const target = deps.target(projectId);
+      if (target === null) return kept;
+      return deps.suggester.suggest({
+        taskId: task.id,
+        title: task.title,
+        body: task.body,
+        types,
+        asked: { type: true, state: false },
+        target,
+        quiet: true
+      });
+    };
+    return { onSummary };
   };
 
   // src/panel/moves.ts
@@ -13003,6 +13064,9 @@ ${ref}`,
             if (first) {
               first = false;
               saveStart(task2.id);
+              if (ctx !== null && draft.type === "") {
+                void deps.start.markNoType(ctx.projectId, task2.id).catch((e) => fail2(`Could not keep "No type" for ${task2.id}: ${errorText2(e)}`));
+              }
             }
             return task2;
           },
@@ -14578,6 +14642,8 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     },
     loadLanguage: async (projectId, taskId) => (await store.loadCard(projectId, taskId)).summaryLanguage,
     onChange: summaryChanged,
+    // A summary generated now: a task without a type gets one picked too (classifier below).
+    onGenerated: (projectId, task) => void classifier.onSummary(projectId, task),
     availability: smallModel
   });
   var suggester = createSuggester({
@@ -14589,6 +14655,18 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     onApplied: () => void load(),
     onNotice: (message2) => void host.toast({ kind: "info", message: message2 }).catch(() => {
     })
+  });
+  var classifier = createTypeClassifier({
+    suggester,
+    enabled: () => suggestEnabled(globalLoaded, state.globalSettings),
+    types: (projectId) => projectId !== state.projectId || state.settingsFor !== projectId || state.tasks === null ? [] : taskTypes(state.tasks, settings().types).filter((t) => t !== MODEL_PICK),
+    explicitNoType: (projectId, taskId) => store.hasNoType(projectId, taskId),
+    target: (projectId) => {
+      const p = state.projects.find((x) => x.id === projectId);
+      if (p === void 0) return null;
+      const api = createApi(host, p.directory);
+      return { get: api.get, setType: api.setType, setState: api.setState };
+    }
   });
   var summariseShown = (generate = true) => {
     if (state.tasks === null) return;
@@ -14805,11 +14883,14 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
         move: async (projectId, from, to) => {
           await saver.idle();
           await store.moveCard(projectId, from, to);
+          await store.moveNoType(projectId, from, to);
         },
         forget: async (projectId, taskId) => {
           await saver.idle();
           await store.forgetCard(projectId, taskId);
-        }
+          await store.forgetNoType(projectId, taskId);
+        },
+        markNoType: (projectId, taskId) => store.markNoType(projectId, taskId)
       },
       summary: {
         model: (task) => startContext() === null ? null : { text: summaries.get(task), status: summaries.status(task), auto: summaries.auto() },
