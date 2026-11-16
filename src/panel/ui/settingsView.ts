@@ -43,13 +43,14 @@ import {
   CONTEXT_LABELS,
   createKeymap,
   formatBinding,
+  pressFromEvent,
   resetOverride,
+  SHORTCUT_CONTEXTS,
   setOverride,
   type ActionId,
   type Binding,
   type Overrides,
   type Platform,
-  type ShortcutContext,
 } from '../keymap.ts';
 import { detectPlatform } from '../shortcuts.ts';
 import { mountCloseButton } from './closeButton.ts';
@@ -380,8 +381,10 @@ type KeyNote = { id: ActionId; tone: 'error' | 'warning'; text: string };
 /**
  * The Keyboard shortcuts section (Global tab): every Shortcut by context with its key; a rebindable
  * one has Record and Reset, a fixed key only shows. Recording takes the next key combination in the
- * capture phase (so neither the sheet's Escape nor the dispatcher sees it); Esc cancels. The Keymap
- * validates it: a refusal shows inline and is not saved, a reserved key is saved with a warning.
+ * capture phase (so neither the sheet's Escape nor the dispatcher sees it); Esc cancels, and so does
+ * focus leaving the recorder button, a press anywhere else or Settings closing, so typing elsewhere is
+ * never swallowed. The Keymap validates it: a refusal shows inline and is not saved, a reserved key
+ * is saved with a warning.
  */
 const drawShortcuts = (
   root: HTMLElement,
@@ -395,6 +398,8 @@ const drawShortcuts = (
   let recording: ActionId | null = null;
   let note: KeyNote | null = null;
   let rowDisposers: Disposers = [];
+  /** The drawn rows of rebindable Shortcuts: their recorder button and a switch into or out of recording. */
+  let rows = new Map<ActionId, { recorder: HTMLElement | null; show: (on: boolean) => void }>();
 
   const keyText = (b: Binding): string => formatBinding(b, platform);
   const modName = platform === 'mac' ? '⌘' : 'Ctrl';
@@ -408,12 +413,35 @@ const drawShortcuts = (
           ? `${keyText(b)} is already used by “${v.holder.label}” in ${CONTEXT_LABELS[v.holder.context]}. Not saved.`
           : v.reason === 'no-modifier'
             ? `A Shortcut needs ${modName}: ${keyText(b)} would fire while typing. Not saved.`
-            : 'This key cannot be changed.';
+            : v.reason === 'text-field'
+              ? `${keyText(b)} is left to text fields (select all, copy, paste, cut, undo). Not saved.`
+              : 'This key cannot be changed.';
       note = { id, tone: 'error', text };
       return;
     }
     opts.set(setOverride(opts.get(), id, b));
     note = v.warning === 'reserved' ? { id, tone: 'warning', text: `Saved. OpenChamber or the system may take ${keyText(b)} before the board sees it.` } : null;
+  };
+
+  /** Ends a recording without a key: the row shows its key again (no redraw, so a click lands). */
+  const stop = (): void => {
+    const id = recording;
+    if (id === null) return;
+    recording = null;
+    rows.get(id)?.show(false);
+  };
+
+  const start = (id: ActionId): void => {
+    stop();
+    if (note !== null) {
+      note = null;
+      draw();
+    }
+    const row = rows.get(id);
+    if (row === undefined) return;
+    recording = id;
+    row.show(true);
+    row.recorder?.focus();
   };
 
   const onKey = (e: KeyboardEvent): void => {
@@ -424,68 +452,94 @@ const drawShortcuts = (
     if (e.isComposing || e.keyCode === 229) return;
     const id = recording;
     if (e.key === 'Escape') {
-      recording = null;
-      draw();
+      stop();
       return;
     }
-    const b = bindingOf({ key: e.key, code: e.code, meta: e.metaKey, ctrl: e.ctrlKey, shift: e.shiftKey, alt: e.altKey, platform });
+    const b = bindingOf(pressFromEvent(e, platform));
     if (b === null) return; // a lone modifier: keep waiting for the key
     recording = null;
     record(id, b);
     draw();
   };
-  window.addEventListener('keydown', onKey, true);
-  disposers.push(() => window.removeEventListener('keydown', onKey, true));
-
-  const button = (slot: HTMLElement, label: string, onClick: () => void, disabled = false): void => {
-    rowDisposers.push(mountButton(slot, { label, variant: 'ghost', size: 'xs', disabled, onClick }).dispose);
+  /**
+   * A pointer is down on the recorder button: WebKit blurs the button on that press, and the
+   * focusout must not end the recording the click is about to toggle.
+   */
+  let pressingRecorder = false;
+  // A press outside the recorder button ends the recording before that click acts.
+  const onPointerDown = (e: PointerEvent): void => {
+    const recorder = recording === null ? null : (rows.get(recording)?.recorder ?? null);
+    pressingRecorder = recorder !== null && e.target instanceof Node && recorder.contains(e.target);
+    if (recording !== null && !pressingRecorder) stop();
   };
+  const onPointerUp = (): void => {
+    pressingRecorder = false;
+  };
+  window.addEventListener('keydown', onKey, true);
+  window.addEventListener('pointerdown', onPointerDown, true);
+  window.addEventListener('pointerup', onPointerUp, true);
+  // Settings closing (or the tab redrawing) ends a recording with the listeners.
+  disposers.push(() => {
+    recording = null;
+    window.removeEventListener('keydown', onKey, true);
+    window.removeEventListener('pointerdown', onPointerDown, true);
+    window.removeEventListener('pointerup', onPointerUp, true);
+  });
 
   const draw = (): void => {
     for (const d of rowDisposers) d();
     rowDisposers = [];
+    rows = new Map();
     list.replaceChildren();
     footer.replaceChildren();
     const keymap = createKeymap(opts.get());
-    for (const context of Object.keys(CONTEXT_LABELS) as ShortcutContext[]) {
-      list.append(el('h4', 'kb-keys-context', CONTEXT_LABELS[context]));
+    for (const { context, label } of SHORTCUT_CONTEXTS) {
+      list.append(el('h4', 'kb-keys-context', label));
       for (const s of keymap.list(context)) {
         const row = el('div', 'kb-keys-row');
         row.append(el('span', 'kb-keys-action', s.label));
         const key = el('span', 'kb-keys-key');
-        if (recording === s.id) {
-          key.append(el('span', 'kb-keys-recording', 'Press keys… (Esc cancels)'));
-        } else {
-          key.append(el('kbd', 'kb-kbd', keyText(s.binding)));
-        }
+        const kbd = el('kbd', 'kb-kbd', keyText(s.binding));
+        key.append(kbd);
         row.append(key);
         const actions = el('span', 'kb-keys-buttons');
         row.append(actions);
         if (s.fixed) {
           actions.append(el('span', 'kb-muted', 'Fixed'));
         } else {
-          if (recording === s.id) {
-            button(actions, 'Cancel', () => {
-              recording = null;
-              draw();
-            });
-          } else {
-            button(actions, 'Record', () => {
-              recording = s.id;
-              note = null;
-              draw();
-            });
-          }
-          button(
-            actions,
-            'Reset',
-            () => {
-              recording = null;
-              note = null;
-              opts.set(resetOverride(opts.get(), s.id));
-              draw();
+          const recorderButton = mountButton(actions, {
+            label: 'Record',
+            variant: 'ghost',
+            size: 'xs',
+            onClick: () => (recording === s.id ? stop() : start(s.id)),
+          });
+          rowDisposers.push(recorderButton.dispose);
+          const recorder = actions.querySelector<HTMLElement>('button');
+          const hint = el('span', 'kb-keys-recording', 'Press keys… (Esc cancels)');
+          rows.set(s.id, {
+            recorder,
+            show: (on) => {
+              key.replaceChildren(on ? hint : kbd);
+              recorderButton.update({ label: on ? 'Cancel' : 'Record' });
             },
-            !keymap.overridden(s.id),
+          });
+          // Focus leaving the recorder button (Tab, a click elsewhere, the window) ends the recording.
+          recorder?.addEventListener('focusout', () => {
+            if (recording === s.id && !pressingRecorder) stop();
+          });
+          rowDisposers.push(
+            mountButton(actions, {
+              label: 'Reset',
+              variant: 'ghost',
+              size: 'xs',
+              disabled: !keymap.overridden(s.id),
+              onClick: () => {
+                stop();
+                note = null;
+                opts.set(resetOverride(opts.get(), s.id));
+                draw();
+              },
+            }).dispose,
           );
         }
         list.append(row);
@@ -499,7 +553,7 @@ const drawShortcuts = (
         size: 'xs',
         disabled: Object.keys(opts.get()).length === 0,
         onClick: () => {
-          recording = null;
+          stop();
           note = null;
           opts.set({});
           draw();

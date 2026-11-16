@@ -134,6 +134,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
   background: var(--oc-elevated); color: var(--oc-elevated-fg); border: 1px solid var(--oc-border); border-radius: var(--oc-radius); }
 .kb-confirm-title { margin: 0; font-size: 1em; font-weight: 600; overflow-wrap: anywhere; }
 .kb-confirm-body { margin: 0; color: var(--oc-muted); font-size: 0.9em; }
+.kb-cheat-backdrop { z-index: 70; justify-content: center; align-items: center; padding: 1rem; }
 .kb-cheat { width: min(34rem, 100%); max-height: calc(100vh - 2rem); }
 .kb-cheat-body { display: flex; flex-direction: column; gap: 1rem; overflow-y: auto; min-height: 0; }
 .kb-cheat-group { display: flex; flex-direction: column; gap: 0.375rem; }

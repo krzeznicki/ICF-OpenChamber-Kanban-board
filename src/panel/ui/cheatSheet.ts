@@ -1,13 +1,15 @@
 // The cheat sheet `?` opens on the Board: the groups from cheatSheet.ts in a dialog over the board.
 // Esc (capture phase, like a confirm), the Close button or a click on the backdrop closes it. While
-// it is open main.ts reports no Shortcut context, so Board Shortcuts do not fire.
+// it is open main.ts's front context layer reports no Shortcut context, so Board Shortcuts do not
+// fire; aria-modal is for assistive technology. Its backdrop is its own (.kb-cheat-backdrop), not a
+// confirm's, so nothing takes it for a confirm.
 import { mountButton } from '@openchamber/sdk/ui';
 import type { CheatSheetGroup } from '../cheatSheet.ts';
 
 /** Draws the sheet; `onClose` runs once when it closes. Returns a function that closes it. */
 export const openCheatSheet = (groups: CheatSheetGroup[], onClose: () => void): (() => void) => {
   const backdrop = document.createElement('div');
-  backdrop.className = 'kb-backdrop kb-confirm-backdrop kb-cheat-backdrop';
+  backdrop.className = 'kb-backdrop kb-cheat-backdrop';
   const box = document.createElement('div');
   box.className = 'kb-confirm kb-cheat';
   box.setAttribute('role', 'dialog');

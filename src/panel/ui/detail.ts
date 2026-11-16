@@ -8,7 +8,7 @@
 import { mountBadge, mountBanner, mountButton, mountList, mountSelect, mountSpinner, mountTabs, mountTextField } from '@openchamber/sdk/ui';
 import type { Tone } from '@openchamber/sdk/ui';
 import type { Task, TaskState } from '../../core/types.ts';
-import type { Column } from '../columns.ts';
+import { COLUMNS, type Column } from '../columns.ts';
 import { subtaskModes, type SubtaskMode } from '../addTask.ts';
 import { linkChildren, type LinkChoice } from '../link.ts';
 import { columnForDigit } from '../openTask.ts';
@@ -139,7 +139,7 @@ export const stateTone = (state: TaskState): Tone =>
  * The Open task's Shortcuts (main.ts binds the keys): each does what its control does, and only
  * while that control is shown and enabled for this task; otherwise it returns false and does nothing.
  */
-export type DetailShortcuts = {
+export type OpenTaskShortcuts = {
   /** The header's Edit. */
   edit: () => boolean;
   /** The Edit form's Save. */
@@ -158,7 +158,7 @@ export type DetailShortcuts = {
   leave: () => Promise<boolean>;
 };
 
-export type DetailHandle = { update: (model: DetailModel) => void; dispose: () => void; shortcuts: DetailShortcuts };
+export type DetailHandle = { update: (model: DetailModel) => void; dispose: () => void; shortcuts: OpenTaskShortcuts };
 
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, className: string, text?: string): HTMLElementTagNameMap[K] => {
   const node = document.createElement(tag);
@@ -557,6 +557,9 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
         disposers.push(
           mountButton(moveRow, { label, variant: 'outline', size: 'xs', disabled: m.busy, onClick: () => callbacks.onMove(to) }).dispose,
         );
+        // Mod+N moves to Board column N (openTask.ts columnForDigit).
+        const n = COLUMNS.findIndex((c) => c.id === to) + 1;
+        if (n >= 1 && n <= 5) hintLastChild(moveRow, `task.state${n as 1 | 2 | 3 | 4 | 5}`, `Move to ${label}`);
       }
       quick.append(moveRow);
     }
@@ -789,7 +792,7 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
 
   /** The model while the header's Edit and Delete are shown and enabled. */
   const idle = (): DetailModel | null => (current !== null && editing === null && !current.busy ? current : null);
-  const shortcuts: DetailShortcuts = {
+  const shortcuts: OpenTaskShortcuts = {
     edit: () => {
       const m = idle();
       if (m === null) return false;

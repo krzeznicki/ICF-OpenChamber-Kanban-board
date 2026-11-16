@@ -2,13 +2,16 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   DEFAULT_SHORTCUTS,
+  SHORTCUT_CONTEXTS,
   bindingOf,
   bindingToString,
   createKeymap,
   formatBinding,
+  isReloadKey,
   parseBinding,
   parseOverrides,
   platformOf,
+  pressFromEvent,
   resetOverride,
   setOverride,
   type KeyInput,
@@ -169,12 +172,12 @@ test('validate: a key held by another Shortcut in the same context is refused, n
   assert.deepEqual(km.validate('task.edit', { key: 'k', mod: true, shift: false, alt: false }), { ok: true, warning: null });
   // Its own current key is not a duplicate.
   assert.deepEqual(km.validate('board.addTask', { key: 'a', mod: true, shift: false, alt: false }), { ok: true, warning: null });
-  // An override counts: Mod+J taken by Add task is refused for Search.
-  const moved = createKeymap({ 'board.addTask': 'Mod+j' });
+  // An override counts: Mod+J taken by the Project switcher is refused for Search.
+  const moved = createKeymap({ 'board.projects': 'Mod+j' });
   const w = moved.validate('board.search', { key: 'j', mod: true, shift: false, alt: false });
-  assert.equal(!w.ok && w.reason === 'duplicate' && w.holder.id, 'board.addTask');
+  assert.equal(!w.ok && w.reason === 'duplicate' && w.holder.id, 'board.projects');
   // and the freed default is available.
-  assert.deepEqual(moved.validate('board.search', { key: 'a', mod: true, shift: false, alt: false }), { ok: true, warning: null });
+  assert.deepEqual(moved.validate('board.search', { key: 'k', mod: true, shift: false, alt: false }), { ok: true, warning: null });
 });
 
 test('validate: Mod+W, Q, R, T and N warn that the app may take them first', () => {
@@ -183,7 +186,50 @@ test('validate: Mod+W, Q, R, T and N warn that the app may take them first', () 
     assert.deepEqual(km.validate('board.search', { key: k, mod: true, shift: false, alt: false }), { ok: true, warning: 'reserved' }, k);
   }
   assert.deepEqual(km.validate('board.search', { key: 'r', mod: true, shift: true, alt: false }), { ok: false, reason: 'duplicate', holder: km.get('board.refresh') });
-  assert.deepEqual(km.validate('task.edit', { key: 'r', mod: true, shift: true, alt: false }), { ok: true, warning: 'reserved' });
+  // Only a plain Mod+letter is what the app takes: with Shift or Alt it does not warn.
+  assert.deepEqual(km.validate('task.edit', { key: 'r', mod: true, shift: true, alt: false }), { ok: true, warning: null });
+  assert.deepEqual(km.validate('board.search', { key: 'w', mod: true, shift: false, alt: true }), { ok: true, warning: null });
+});
+
+test('validate: the keys a text field keeps (select all, clipboard, undo) are refused', () => {
+  const km = createKeymap();
+  for (const k of ['c', 'v', 'x', 'z']) {
+    assert.deepEqual(km.validate('task.edit', { key: k, mod: true, shift: false, alt: false }), { ok: false, reason: 'text-field' }, k);
+  }
+  assert.deepEqual(km.validate('task.edit', { key: 'a', mod: true, shift: false, alt: false }), { ok: false, reason: 'text-field' });
+  // With Shift or Alt the field has no meaning for it.
+  assert.deepEqual(km.validate('task.edit', { key: 'z', mod: true, shift: true, alt: false }), { ok: true, warning: null });
+  assert.deepEqual(km.validate('task.edit', { key: 'c', mod: true, shift: false, alt: true }), { ok: true, warning: null });
+  // Add task's own default Mod+A stays allowed, also back from another key.
+  const moved = createKeymap({ 'board.addTask': 'Mod+j' });
+  assert.deepEqual(moved.validate('board.addTask', { key: 'a', mod: true, shift: false, alt: false }), { ok: true, warning: null });
+});
+
+test('Esc on the Board is listed as a fixed key but never resolved, so its own handling stays', () => {
+  const km = createKeymap();
+  const esc = km.list('board').find((s) => s.binding.key === 'Escape');
+  assert.equal(esc?.fixed, true);
+  assert.equal(esc?.label, 'Leave search / close dialog');
+  for (const context of ['board', 'task', 'add'] as const) {
+    assert.equal(km.resolve(key('Escape', { context })), null, context);
+    assert.equal(km.resolve(key('Escape', { context, inTextField: true })), null, context);
+  }
+  assert.equal(km.label(esc!.id, 'mac'), 'Esc');
+  assert.deepEqual(km.validate(esc!.id, { key: 'j', mod: true, shift: false, alt: false }), { ok: false, reason: 'fixed' });
+});
+
+test('pressFromEvent: a keydown read into what the Keymap takes', () => {
+  const e = { key: 'R', code: 'KeyR', metaKey: true, ctrlKey: false, shiftKey: true, altKey: false };
+  assert.deepEqual(pressFromEvent(e, 'mac'), { key: 'R', code: 'KeyR', meta: true, ctrl: false, shift: true, alt: false, platform: 'mac' });
+  assert.deepEqual(bindingOf(pressFromEvent(e, 'mac')), { key: 'r', mod: true, shift: true, alt: false });
+});
+
+test('SHORTCUT_CONTEXTS: the contexts in listing order, with their names', () => {
+  assert.deepEqual(SHORTCUT_CONTEXTS, [
+    { context: 'board', label: 'Board' },
+    { context: 'task', label: 'Open task' },
+    { context: 'add', label: 'Add task' },
+  ]);
 });
 
 test('validate: fixed keys cannot be rebound', () => {
@@ -214,7 +260,7 @@ test('list: the Shortcuts of one context in table order, with current bindings',
   const board = km.list('board');
   assert.equal(board[0]!.id, 'board.addTask');
   assert.ok(board.every((s) => s.context === 'board'));
-  assert.deepEqual(board.filter((s) => s.fixed).map((s) => s.id), ['board.selectUp', 'board.selectDown', 'board.selectLeft', 'board.selectRight', 'board.openSelected', 'board.cheatSheet']);
+  assert.deepEqual(board.filter((s) => s.fixed).map((s) => s.id), ['board.selectUp', 'board.selectDown', 'board.selectLeft', 'board.selectRight', 'board.openSelected', 'board.escape', 'board.cheatSheet']);
   assert.equal(km.list('task').length, 13);
   assert.equal(km.all().length, DEFAULT_SHORTCUTS.length);
   // Ids are unique, and no two Shortcuts share a key in one context.
@@ -235,4 +281,12 @@ test('platformOf: macOS and iOS use Cmd', () => {
   assert.equal(platformOf('Win32'), 'other');
   assert.equal(platformOf('Linux x86_64'), 'other');
   assert.equal(platformOf(''), 'other');
+});
+
+test('isReloadKey: Mod+R and Mod+Shift+R are the browser reload; nothing else is', () => {
+  assert.equal(isReloadKey({ key: 'r', mod: true, shift: false, alt: false }), true);
+  assert.equal(isReloadKey({ key: 'r', mod: true, shift: true, alt: false }), true);
+  assert.equal(isReloadKey({ key: 'r', mod: true, shift: false, alt: true }), false);
+  assert.equal(isReloadKey({ key: 'r', mod: false, shift: true, alt: false }), false);
+  assert.equal(isReloadKey({ key: 'j', mod: true, shift: true, alt: false }), false);
 });
