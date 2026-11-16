@@ -38,6 +38,12 @@
         "entry": "panel/page.html",
         "title": "Kanban Board"
       },
+      "commands": [
+        {
+          "name": "kanban",
+          "description": "Open the Kanban Board panel"
+        }
+      ],
       "capabilities": [
         "sessions",
         "prompt",

@@ -1,5 +1,6 @@
 // Entry for both the rail panel (panel/index.html) and the full-screen page (panel/page.html).
 // The layout follows ctx.surface through the data-oc-surface attribute applyHostReady sets.
+// It also answers the `/kanban` slash command by opening the rail panel (see host.onResolve below).
 // Data: projects and sessions from the host, tasks from our service via host.serviceRequest.
 // Writes (drag and drop, the task modal, Add task) live in edit.ts; a drop on In Progress goes to starter.ts:
 // it starts an agent session (or queues it over the limit) and the card then follows that session. Settings (global, per project, presets, per card) come from the
@@ -10,6 +11,7 @@
 import { connectHost } from '@openchamber/sdk';
 import type { GuestProject, GuestSessionRecord, HostReadyContext } from '@openchamber/sdk';
 import { applyHostReady } from '@openchamber/sdk/ui';
+import { VARIANT, panelId } from '../core/variant.ts';
 import type { Task } from '../core/types.ts';
 import { archivableIds, archivedShown, archiveTasks, archiveWriteJob, createStorageSync, createPendingMarks, isArchived, mergeArchived, reconcileArchived, unarchiveTask } from './archive.ts';
 import { ApiError, createApi, type Api, type ConfigResult, type ProjectConfig } from './api.ts';
@@ -1093,9 +1095,19 @@ const start = (ctx: HostReadyContext): void => {
   });
 };
 
+// `/kanban` (`/kanban-test` in the test build) opens this panel and attaches nothing. With no
+// background entry the host asks a mounted panel frame, or loads this entry hidden just to answer;
+// the rail surface id is `plugin:<panel id>`. Arguments are ignored.
+host.onResolve(async () => {
+  await host.openSurface(`plugin:${panelId(VARIANT)}`);
+  return null;
+});
+
 let mounted = false;
 host.onReady((ctx) => {
   applyHostReady(ctx, document.documentElement);
+  // A hidden frame loaded only to answer a slash command: no board to draw or poll.
+  if (ctx.surface === 'background') return;
   if (mounted) return;
   mounted = true;
   start(ctx);
