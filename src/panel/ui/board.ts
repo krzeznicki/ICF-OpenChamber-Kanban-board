@@ -1,6 +1,6 @@
 // The board shell: a toolbar (a TEST badge in the test build, project switcher, "Hide sub-tasks", a search field,
 // Add task, Settings, Refresh; the search completes filters, ui/searchSuggest.ts), a status slot for banners, spinner and empty states, and the five columns. The Done header carries
-// "Archive done" and "Show archived (N)" (archive.ts).
+// "Archive done", "Show archived (N)" (archive.ts) and "Clear archive" (clearArchive.ts).
 // It draws what main.ts hands it and reports clicks back; it holds no data of its own. Dragging
 // is attached to `columns` by the editor (ui/dnd.ts).
 import { mountBanner, mountButton, mountEmpty, mountSearchField, mountSelect, mountSpinner, mountSwitch } from '@openchamber/sdk/ui';
@@ -26,6 +26,8 @@ export type BoardCallbacks = {
   onArchiveDone: () => void;
   /** The Done header's "Show archived (N)" switch. */
   onShowArchived: (show: boolean) => void;
+  /** The Done header's "Clear archive": deletes the archived tasks for good (the caller asks to confirm). */
+  onClearArchive: () => void;
 };
 
 /** The Done header's archive tools: how many done tasks "Archive done" takes, how many are archived. */
@@ -121,7 +123,7 @@ export const createBoard = (root: HTMLElement, callbacks: BoardCallbacks) => {
   };
   let cardDisposers: Array<() => void> = [];
 
-  /** "Archive done" and "Show archived (N)" under the Done header; disposed with the cards. */
+  /** "Archive done", "Show archived (N)" and "Clear archive" under the Done header; disposed with the cards. */
   const doneTools = (done: DoneTools): HTMLElement => {
     const tools = div('kb-column-tools');
     if (done.archivable > 0) {
@@ -135,6 +137,9 @@ export const createBoard = (root: HTMLElement, callbacks: BoardCallbacks) => {
       cardDisposers.push(
         mountSwitch(slot, { label: `Show archived (${done.archived})`, checked: done.showArchived, onChange: callbacks.onShowArchived }).dispose,
       );
+      const clear = div('kb-clear-archive');
+      tools.append(clear);
+      cardDisposers.push(mountButton(clear, { label: 'Clear archive', variant: 'outline', size: 'xs', onClick: callbacks.onClearArchive }).dispose);
     }
     return tools;
   };

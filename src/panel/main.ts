@@ -12,6 +12,7 @@ import type { GuestProject, GuestSessionRecord, HostReadyContext } from '@opench
 import { applyHostReady } from '@openchamber/sdk/ui';
 import type { Task } from '../core/types.ts';
 import { archivableIds, archivedShown, archiveTasks, archiveWriteJob, createStorageSync, createPendingMarks, isArchived, mergeArchived, reconcileArchived, unarchiveTask } from './archive.ts';
+import { clearArchivePlan, runClearArchive } from './clearArchive.ts';
 import { ApiError, createApi, type Api, type ConfigResult, type ProjectConfig } from './api.ts';
 import { applyOrder, forgetInOrder, pruneOrder, renameInOrder, reorder } from './order.ts';
 import { COLUMNS, groupTasks, pruneArchived, resolveSession, sessionForTask, sessionTarget, type Column, type SessionLookup } from './columns.ts';
@@ -844,6 +845,61 @@ const unarchive = (taskId: string): void => {
   setArchivedTasks(id, unarchiveTask(archivedTasks(), taskId));
 };
 
+/** A "Clear archive" is running: a second click waits for it. */
+let clearing = false;
+
+/**
+ * "Clear archive" (clearArchive.ts): every archived task is deleted for good, like the modal's Delete;
+ * the service drops their links and queue entries, here their card places and start options go. A
+ * local feature with a sub-task still on the board is kept (its folder would take that one too).
+ */
+const clearArchive = async (): Promise<void> => {
+  const id = state.projectId;
+  const p = project();
+  if (clearing || id === null || p === null || state.view !== 'board' || state.config === null || state.tasks === null) return;
+  const tracker = state.config.tracker;
+  const plan = clearArchivePlan(tracker, state.tasks, archivedTasks());
+  const n = archivedShown(state.tasks, archivedTasks()) - plan.skipped.length;
+  if (n <= 0) {
+    info('The archived features still have sub-tasks on the board; nothing to delete.');
+    return;
+  }
+  const where =
+    tracker === 'local'
+      ? 'Their files in .scratch/ are deleted (a feature with its whole folder).'
+      : 'Their issues are deleted on GitHub (only repository admins can delete issues); sub-issues not archived stay as top-level issues.';
+  const kept = plan.skipped.length > 0 ? ` ${plan.skipped.length} archived feature${plan.skipped.length === 1 ? '' : 's'} with sub-tasks still on the board stay${plan.skipped.length === 1 ? 's' : ''}.` : '';
+  const answer = await askChoice(
+    `Delete ${n} archived task${n === 1 ? '' : 's'} for good?`,
+    `${where}${kept} This cannot be undone from the board.`,
+    [{ id: 'clear', label: 'Delete all', variant: 'destructive' }],
+  );
+  if (answer === null || state.projectId !== id || state.tasks === null || state.config === null) return;
+  // The board may have reloaded while the question was open: plan again from what it lists now.
+  const fresh = clearArchivePlan(state.config.tracker, state.tasks, archivedTasks());
+  if (fresh.deletes.length === 0) return;
+  clearing = true;
+  const api = createApi(host, p.directory);
+  try {
+    const result = await runClearArchive(fresh.deletes, (taskId, withChildren) => api.remove(taskId, withChildren));
+    if (result.deleted.length > 0) {
+      info(`Deleted ${result.deleted.length} archived task${result.deleted.length === 1 ? '' : 's'}`);
+      forgetOrdered(result.deleted);
+      await saver.idle();
+      for (const d of result.deleted) {
+        await Promise.all([store.forgetCard(id, d), store.forgetNoType(id, d)]).catch((e: unknown) =>
+          fail(`Could not drop the start options of ${d}: ${errorText(e)}`),
+        );
+      }
+    }
+    for (const f of result.failed) fail(`Could not delete ${f.id}: ${f.error}`);
+  } finally {
+    clearing = false;
+    // The reload prunes the marks of deleted tasks (reconcileArchived).
+    await load();
+  }
+};
+
 // --- The rail panel opened in a chat: that session's task (sessionFocus.ts) ---
 
 /** Set in start(): the rail panel decides once, for the chat it was opened in; other surfaces never. */
@@ -997,6 +1053,7 @@ const start = (ctx: HostReadyContext): void => {
       state.showArchived = show;
       draw();
     },
+    onClearArchive: () => void clearArchive(),
   });
   editor = createEditor({
     host,

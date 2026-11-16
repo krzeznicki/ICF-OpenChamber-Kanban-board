@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Clear archive** in the Done header (shown while anything is archived) deletes every archived task for good, after an in-panel confirm with the count, the same way the task modal's Delete does (`clearArchive.ts`): locally the ticket files, and a feature with its whole folder only when every sub-task the board lists is archived too (otherwise the feature stays and its archived sub-tasks go); on GitHub one `gh issue delete` per archived issue (repository admins only), sub-issues before their parent, sub-issues not archived kept as top-level issues. One failed delete does not stop the rest; each failure gets its own toast. Session links, queued starts, start options and card places of deleted tasks go with them.
+
 ## 0.3.8
 
 - Fixed: the full-screen board opened from a chat in a worktree (a session started from a card, in OpenChamber's In work) showed the first project of the list instead of the session's. Only the rail panel looked the project up, by its session id; the page has no session, so nothing placed the worktree's directory. Now both look it up by directory (`projectFollow.ts`): a session of that directory in the projects' session lists, else the project of the worktree's main checkout, from the service's new `/project/of` (`git rev-parse --git-common-dir`; symlinked projects and a project registered as a folder of the repository match too). The lookup runs for each such directory, not once per frame, tries again when the service is not up yet, and a fresh board waits for it instead of flashing the first project.
