@@ -3157,10 +3157,7 @@ ${GUEST_UI_LOOK_CSS}`;
   var subtasksToCreate = (d, tracker) => canHaveSubtasks(tracker, d.parentId) ? subtaskTitles(d.subtasks) : [];
   var existingSubtaskChoices = (tasks, tracker, parentId) => canHaveSubtasks(tracker, parentId) ? newChildCandidates(tracker, parentId === "" ? null : parentId, tasks).map(choice) : [];
   var existingToLink = (d, tracker, tasks) => keepOffered(d.existing, existingSubtaskChoices(tasks, tracker, d.parentId));
-  var draftKind = (d, tracker) => {
-    if (tracker === "local") return d.parentId === "" ? "parent" : "ticket";
-    return subtaskTitles(d.subtasks).length > 0 || d.existing.length > 0 ? "parent" : "ticket";
-  };
+  var draftSubtasks = (d, tracker) => !(tracker === "local" && d.parentId !== "") && (subtaskTitles(d.subtasks).length > 0 || d.existing.length > 0);
   var draftType = (d) => d.type === "" || d.type === MODEL_PICK ? null : d.type;
   var validateDraft = (d) => d.title.trim() === "" ? { title: "A title is required" } : {};
   var toNewTask = (d, tracker) => {
@@ -4095,9 +4092,9 @@ ${ref}`,
   var suggestEnabled = (globalLoaded2, global) => globalLoaded2 && resolveSettings(global, {}).suggestFields;
   var resolveStart = (s, task, card, presets2 = BUILTIN_PRESETS) => {
     const c = parseCardOptions(card);
+    const bySubtasks = task.subtasks ? ORCHESTRATE_PRESET_ID : void 0;
     const byType = task.type !== null ? s.presetByType[task.type] : void 0;
-    const byKind = task.kind === "parent" && !(task.type === "bug" && byType !== void 0) ? ORCHESTRATE_PRESET_ID : void 0;
-    const wanted = c.presetId ?? byKind ?? byType ?? s.defaults.presetId;
+    const wanted = c.presetId ?? bySubtasks ?? byType ?? s.defaults.presetId;
     const model = c.model ?? s.defaults.model;
     return {
       presetId: presets2.some((p) => p.id === wanted) ? wanted : FALLBACK_PRESET_ID,
@@ -4258,6 +4255,7 @@ ${ref}`,
   // src/panel/suggest.ts
   var SUGGEST_STATES = CREATE_STATES;
   var SUGGEST_SYSTEM = "You sort software tasks on a Kanban board. Answer with one JSON object only: no prose, no explanation, no markdown.";
+  var RESEARCH_TYPE = "research";
   var MAX_OUTPUT_TOKENS2 = 100;
   var TITLE_MAX = 500;
   var CUT = "\n[\u2026the rest is cut]";
@@ -4277,6 +4275,11 @@ ${ref}`,
       "Pick a type and a state for the task below, for a Kanban board.",
       "",
       typeLine,
+      // A vague task gets research: its preset (Plan) works out what is wanted and may add the
+      // sub-tasks, after which the default preset turns to orchestrate (settings.ts resolveStart).
+      ...types.includes(RESEARCH_TYPE) ? [
+        `If the task is not described completely enough to implement (the goal is unclear, details are missing, there are open questions or something must be investigated first), pick ${RESEARCH_TYPE}.`
+      ] : [],
       "States (pick exactly one):",
       ...SUGGEST_STATES.map((s) => `- ${s}: ${STATE_HINTS[s] ?? s}`),
       "",
@@ -5694,7 +5697,7 @@ ${ref}`,
     };
     const drawStart = () => {
       const s = start2;
-      const inherited = s === null ? null : s.inherited(draftType(d), draftKind(d, model.tracker));
+      const inherited = s === null ? null : s.inherited(draftType(d), draftSubtasks(d, model.tracker));
       const key = s === null ? "loading" : JSON.stringify([s.projectId, inherited, s.summaryLanguage, s.presets.map((p) => [p.id, p.name])]);
       lockStart();
       if (key === startKey) return;
@@ -11597,6 +11600,103 @@ ${ref}`,
     return box;
   };
 
+  // src/core/localFormat.ts
+  var BOLD_FIELD = /^\*\*(Status|Type|Blocked by):\*\*\s*(.*)$/;
+  var BARE_FIELD = /^(Status|Type|Blocked by):\s*(.*)$/;
+  var HEADING = /^# (.*)$/;
+  var splitLines = (text3) => text3.split("\n");
+  var content = (line) => line.endsWith("\r") ? line.slice(0, -1) : line;
+  var matchField = (line) => {
+    const c = content(line);
+    const bold = BOLD_FIELD.exec(c);
+    if (bold) return { field: bold[1], value: bold[2].trim(), bare: false };
+    const bare = BARE_FIELD.exec(c);
+    if (bare) return { field: bare[1], value: bare[2].trim(), bare: true };
+    return null;
+  };
+  var FENCE2 = /^\s{0,3}(```|~~~)/;
+  var SECTION = /^## /;
+  var plainLines = (lines, headerOnly) => {
+    const out = [];
+    let fence2 = null;
+    for (let i = 0; i < lines.length; i++) {
+      const c = content(lines[i]);
+      const f = FENCE2.exec(c);
+      if (fence2 !== null) {
+        if (f && f[1] === fence2) fence2 = null;
+        continue;
+      }
+      if (f) {
+        fence2 = f[1];
+        continue;
+      }
+      if (headerOnly && SECTION.test(c)) break;
+      out.push([i, c]);
+    }
+    return out;
+  };
+  var headerFields = (lines) => {
+    const out = [];
+    for (const [index, c] of plainLines(lines, true)) {
+      const m = matchField(c);
+      if (m) out.push({ index, ...m });
+    }
+    return out;
+  };
+  var headingIndex = (lines) => {
+    for (const [i, c] of plainLines(lines, false)) if (HEADING.test(c)) return i;
+    return -1;
+  };
+  var TAIL = /^## (?:Comments|Answer)\s*$/i;
+  var splitParts = (text3) => {
+    const lines = splitLines(text3).map(content);
+    const tailAt = plainLines(lines, false).find(([, c]) => TAIL.test(c))?.[0] ?? lines.length;
+    const head = headingIndex(lines);
+    const fieldAt = new Set(headerFields(lines).filter((f) => f.index < tailAt).map((f) => f.index));
+    const kept = [];
+    let removed = false;
+    for (let i = 0; i < tailAt; i++) {
+      if (i === head || fieldAt.has(i)) {
+        removed = true;
+        continue;
+      }
+      const blank = lines[i].trim() === "";
+      if (blank && (kept.length === 0 || removed && kept[kept.length - 1].trim() === "")) continue;
+      kept.push(lines[i]);
+      if (!blank) removed = false;
+    }
+    return {
+      heading: head >= 0 && head < tailAt ? lines[head] : null,
+      fields: [...fieldAt].sort((a, b) => a - b).map((i) => lines[i]),
+      description: kept.join("\n").replace(/\s+$/, ""),
+      tail: tailAt < lines.length ? lines.slice(tailAt).join("\n").replace(/\s+$/, "") : null
+    };
+  };
+  var issueDescription = (text3) => splitParts(text3).description;
+
+  // src/panel/taskEdit.ts
+  var editableText = (tracker, task) => ({
+    title: task.title,
+    body: tracker === "local" ? issueDescription(task.body) : task.body
+  });
+  var editChanges = (from, draft) => {
+    const title = draft.title.trim();
+    if (title === "") return { error: "A title is required" };
+    const changes = {};
+    if (title !== from.title.trim()) changes.title = title;
+    if (draft.body !== from.body) changes.body = draft.body;
+    return { changes: Object.keys(changes).length === 0 ? null : changes };
+  };
+  var editDirty = (from, draft) => draft.title !== from.title || draft.body !== from.body;
+  var editConflict = (tracker, stored2, from, changes) => {
+    const now = editableText(tracker, stored2);
+    const changed = [];
+    if (changes.title !== void 0 && now.title.trim() !== from.title.trim()) changed.push("title");
+    if (changes.body !== void 0 && now.body !== from.body) changed.push("description");
+    if (changed.length === 0) return null;
+    return `The ${changed.join(" and ")} changed since you opened the form (an agent may have edited the task); copy your text, cancel and edit again.`;
+  };
+
   // src/panel/ui/editForm.ts
   var div2 = (className) => {
     const d = document.createElement("div");
@@ -11667,13 +11767,16 @@ ${ref}`,
       e.preventDefault();
       submit();
     });
-    return () => {
-      disposed = true;
-      errorDispose?.();
-      titleField.dispose();
-      bodyField.dispose();
-      save.dispose();
-      cancel.dispose();
+    return {
+      dirty: () => editDirty(initial, draft),
+      dispose: () => {
+        disposed = true;
+        errorDispose?.();
+        titleField.dispose();
+        bodyField.dispose();
+        save.dispose();
+        cancel.dispose();
+      }
     };
   };
 
@@ -11689,7 +11792,19 @@ ${ref}`,
     return node;
   };
   var openDetail = (initial, callbacks, options) => {
-    const shell = openModalShell({ label: initial.task.title, onDismiss: () => callbacks.onDismiss() });
+    let asking = false;
+    const dismiss = () => {
+      if (asking) return;
+      if (editing === null || !editing.dirty()) return callbacks.onDismiss();
+      asking = true;
+      void askChoice("Discard changes?", "The title or description you edited has not been saved.", [
+        { id: "discard", label: "Discard", variant: "destructive" }
+      ]).then((answer) => {
+        asking = false;
+        if (answer === "discard") callbacks.onDismiss();
+      });
+    };
+    const shell = openModalShell({ label: initial.task.title, onDismiss: dismiss });
     const { modal } = shell;
     const head = el5("header", "kb-modal-head");
     const quick = el5("div", "kb-quick");
@@ -11764,7 +11879,7 @@ ${ref}`,
       titles.append(el5("h2", "kb-sheet-title", task.title), el5("div", "kb-card-id", task.id));
       const closeSlot = el5("div", "kb-sheet-x");
       top.append(titles, closeSlot);
-      disposers.push(mountCloseButton(closeSlot, callbacks.onDismiss));
+      disposers.push(mountCloseButton(closeSlot, dismiss));
       head.append(top);
       const row = el5("div", "kb-modal-bar");
       const badges = el5("div", "kb-badges");
@@ -11836,13 +11951,11 @@ ${ref}`,
       const box = taskSec.content;
       box.replaceChildren();
       taskKey = null;
-      editing = {
-        taskId: m.task.id,
-        dispose: mountEditForm(box, m.text, (draft) => callbacks.onEdit(m.text, draft), () => {
-          stopEdit();
-          if (current !== null) draw2(current);
-        })
-      };
+      const form = mountEditForm(box, m.text, (draft) => callbacks.onEdit(m.text, draft), () => {
+        stopEdit();
+        if (current !== null) draw2(current);
+      });
+      editing = { taskId: m.task.id, ...form };
       taskSec.box.open = true;
       if (current !== null) draw2(current);
       box.querySelector("input")?.focus();
@@ -12524,117 +12637,8 @@ ${ref}`,
     };
   };
 
-  // src/core/localFormat.ts
-  var BOLD_FIELD = /^\*\*(Status|Type|Blocked by):\*\*\s*(.*)$/;
-  var BARE_FIELD = /^(Status|Type|Blocked by):\s*(.*)$/;
-  var HEADING = /^# (.*)$/;
-  var splitLines = (text3) => text3.split("\n");
-  var content = (line) => line.endsWith("\r") ? line.slice(0, -1) : line;
-  var matchField = (line) => {
-    const c = content(line);
-    const bold = BOLD_FIELD.exec(c);
-    if (bold) return { field: bold[1], value: bold[2].trim(), bare: false };
-    const bare = BARE_FIELD.exec(c);
-    if (bare) return { field: bare[1], value: bare[2].trim(), bare: true };
-    return null;
-  };
-  var FENCE2 = /^\s{0,3}(```|~~~)/;
-  var SECTION = /^## /;
-  var plainLines = (lines, headerOnly) => {
-    const out = [];
-    let fence2 = null;
-    for (let i = 0; i < lines.length; i++) {
-      const c = content(lines[i]);
-      const f = FENCE2.exec(c);
-      if (fence2 !== null) {
-        if (f && f[1] === fence2) fence2 = null;
-        continue;
-      }
-      if (f) {
-        fence2 = f[1];
-        continue;
-      }
-      if (headerOnly && SECTION.test(c)) break;
-      out.push([i, c]);
-    }
-    return out;
-  };
-  var headerFields = (lines) => {
-    const out = [];
-    for (const [index, c] of plainLines(lines, true)) {
-      const m = matchField(c);
-      if (m) out.push({ index, ...m });
-    }
-    return out;
-  };
-  var headingIndex = (lines) => {
-    for (const [i, c] of plainLines(lines, false)) if (HEADING.test(c)) return i;
-    return -1;
-  };
-  var TAIL = /^## (?:Comments|Answer)\s*$/i;
-  var splitParts = (text3) => {
-    const lines = splitLines(text3).map(content);
-    const tailAt = plainLines(lines, false).find(([, c]) => TAIL.test(c))?.[0] ?? lines.length;
-    const head = headingIndex(lines);
-    const fieldAt = new Set(headerFields(lines).filter((f) => f.index < tailAt).map((f) => f.index));
-    const kept = [];
-    let removed = false;
-    for (let i = 0; i < tailAt; i++) {
-      if (i === head || fieldAt.has(i)) {
-        removed = true;
-        continue;
-      }
-      const blank = lines[i].trim() === "";
-      if (blank && (kept.length === 0 || removed && kept[kept.length - 1].trim() === "")) continue;
-      kept.push(lines[i]);
-      if (!blank) removed = false;
-    }
-    return {
-      heading: head >= 0 && head < tailAt ? lines[head] : null,
-      fields: [...fieldAt].sort((a, b) => a - b).map((i) => lines[i]),
-      description: kept.join("\n").replace(/\s+$/, ""),
-      tail: tailAt < lines.length ? lines.slice(tailAt).join("\n").replace(/\s+$/, "") : null
-    };
-  };
-  var issueDescription = (text3) => splitParts(text3).description;
-
-  // src/panel/taskEdit.ts
-  var editableText = (tracker, task) => ({
-    title: task.title,
-    body: tracker === "local" ? issueDescription(task.body) : task.body
-  });
-  var editChanges = (from, draft) => {
-    const title = draft.title.trim();
-    if (title === "") return { error: "A title is required" };
-    const changes = {};
-    if (title !== from.title.trim()) changes.title = title;
-    if (draft.body !== from.body) changes.body = draft.body;
-    return { changes: Object.keys(changes).length === 0 ? null : changes };
-  };
-  var editConflict = (tracker, stored2, from, changes) => {
-    const now = editableText(tracker, stored2);
-    const changed = [];
-    if (changes.title !== void 0 && now.title.trim() !== from.title.trim()) changed.push("title");
-    if (changes.body !== void 0 && now.body !== from.body) changed.push("description");
-    if (changed.length === 0) return null;
-    return `The ${changed.join(" and ")} changed since you opened the form (an agent may have edited the task); copy your text, cancel and edit again.`;
-  };
-
   // src/panel/edit.ts
   var errorText2 = (e) => e instanceof Error ? e.message : String(e);
-  var NEW_TASK = {
-    id: "",
-    kind: "ticket",
-    title: "",
-    body: "",
-    state: "needs-triage",
-    type: null,
-    parentId: null,
-    blockedBy: [],
-    url: null,
-    updatedAt: 0,
-    claimed: false
-  };
   var createEditor = (deps) => {
     const moving = /* @__PURE__ */ new Set();
     let detail = null;
@@ -12703,7 +12707,7 @@ ${ref}`,
         start: ctx === null || task.state === "done" ? null : {
           presets: ctx.presets,
           card: mine?.options ?? {},
-          inherited: resolveStart(ctx.settings, task, {}, ctx.presets),
+          inherited: resolveStart(ctx.settings, { type: task.type, subtasks: tasks.some((t) => t.parentId === task.id) }, {}, ctx.presets),
           summaryLanguage: ctx.settings.summary.language,
           version: mine?.version ?? -1
         },
@@ -13035,7 +13039,7 @@ ${ref}`,
       return ctx === null ? null : {
         projectId: ctx.projectId,
         presets: ctx.presets,
-        inherited: (type, kind) => resolveStart(ctx.settings, { ...NEW_TASK, type, kind }, {}, ctx.presets),
+        inherited: (type, subtasks) => resolveStart(ctx.settings, { type, subtasks }, {}, ctx.presets),
         summaryLanguage: ctx.settings.summary.language
       };
     };
@@ -13594,7 +13598,8 @@ ${note}` : note;
         fail2(`Could not read the card's start options: ${errorText3(e)}`);
         return;
       }
-      let opts = resolveStart(ctx.settings, task, card, ctx.presets);
+      const subtasks = (deps.tasks() ?? []).some((t) => t.parentId === task.id);
+      let opts = resolveStart(ctx.settings, { type: task.type, subtasks }, card, ctx.presets);
       if (!ctx.settings.autoStart) {
         const picked = await askStart(task.title, opts, ctx.presets, deps.lists);
         if (picked === null) return;
