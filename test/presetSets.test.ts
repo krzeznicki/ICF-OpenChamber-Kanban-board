@@ -1,6 +1,5 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import type { Task } from '../src/core/types.ts';
 import { MATT_SKILLS, SUPERPOWERS_SKILLS } from '../src/core/skills.ts';
 import {
   BUILTIN_PRESETS,
@@ -45,20 +44,6 @@ const MATT: string[] = [...MATT_SKILLS];
 const SP: string[] = [...SUPERPOWERS_SKILLS];
 const set = (id: string) => BUILTIN_SETS.find((s) => s.id === id)!;
 const inSet = (setId: string, presetId: string) => set(setId).presets.find((p) => p.id === presetId)!;
-
-const task = (type: string | null, kind: Task['kind'] = 'ticket'): Task => ({
-  id: '.scratch/f/issues/01-a.md',
-  kind,
-  title: 'A',
-  body: '',
-  state: 'ready-for-agent',
-  type,
-  parentId: null,
-  blockedBy: [],
-  url: null,
-  updatedAt: 0,
-  claimed: false,
-});
 
 // --- the built-in sets ---
 
@@ -207,9 +192,9 @@ test('the 0.2 toggle migrates: off becomes the Plain set, on (or unset) the defa
 test('bug defaults to Diagnose in every set that has it, else Implement', () => {
   const s = resolveSettings({}, {});
   assert.equal(s.presetByType.bug, 'diagnose');
-  for (const b of BUILTIN_SETS) assert.equal(resolveStart(s, task('bug'), {}, listPresets(EMPTY_SETS, b.id)).presetId, 'diagnose', b.id);
+  for (const b of BUILTIN_SETS) assert.equal(resolveStart(s, { type: 'bug', subtasks: false }, {}, listPresets(EMPTY_SETS, b.id)).presetId, 'diagnose', b.id);
   const { stored, id } = addSet(EMPTY_SETS, 'Empty', null);
-  assert.equal(resolveStart(s, task('bug'), {}, listPresets(stored, id)).presetId, 'implement');
+  assert.equal(resolveStart(s, { type: 'bug', subtasks: false }, {}, listPresets(stored, id)).presetId, 'implement');
   // The user's choice for bug still wins.
   assert.equal(resolveSettings({ presetByType: { bug: 'plan' } }, {}).presetByType.bug, 'plan');
 });

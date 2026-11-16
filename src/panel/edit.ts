@@ -95,21 +95,6 @@ export type EditorDeps = {
 
 const errorText = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
-/** The fields resolveStart reads for a task not created yet (type and kind are filled in). */
-const NEW_TASK: Task = {
-  id: '',
-  kind: 'ticket',
-  title: '',
-  body: '',
-  state: 'needs-triage',
-  type: null,
-  parentId: null,
-  blockedBy: [],
-  url: null,
-  updatedAt: 0,
-  claimed: false,
-};
-
 export const createEditor = (deps: EditorDeps) => {
   const moving = new Set<string>();
   /** `onFollow`: the open task got a new id (a local link moved it); its handlers use that one. */
@@ -200,7 +185,7 @@ export const createEditor = (deps: EditorDeps) => {
           : {
               presets: ctx.presets,
               card: mine?.options ?? {},
-              inherited: resolveStart(ctx.settings, task, {}, ctx.presets),
+              inherited: resolveStart(ctx.settings, { type: task.type, subtasks: tasks.some((t) => t.parentId === task.id) }, {}, ctx.presets),
               summaryLanguage: ctx.settings.summary.language,
               version: mine?.version ?? -1,
             },
@@ -600,7 +585,7 @@ export const createEditor = (deps: EditorDeps) => {
       : {
           projectId: ctx.projectId,
           presets: ctx.presets,
-          inherited: (type, kind) => resolveStart(ctx.settings, { ...NEW_TASK, type, kind }, {}, ctx.presets),
+          inherited: (type, subtasks) => resolveStart(ctx.settings, { type, subtasks }, {}, ctx.presets),
           summaryLanguage: ctx.settings.summary.language,
         };
   };

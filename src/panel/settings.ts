@@ -1,7 +1,6 @@
 // Layered settings: global defaults (per user) → project override (per user) → choice on the card.
 // All of it lives in the extension's instance storage, never in the repo. The resolvers are pure
 // so they run under node:test; createSettingsStore is the only part that touches storage.
-import type { Task } from '../core/types.ts';
 import { parseArchivedTasks, serializeArchived, type ArchivedTasks } from './archive.ts';
 import { ORDER_MAX, parseOrder } from './order.ts';
 import { BUILTIN_PRESETS, defaultSetId, effectiveSetId, EMPTY_SETS, isPristineSets, migrateStoredPresets, parseStoredSets, type Preset, type StoredSets } from './presets.ts';
@@ -55,7 +54,7 @@ export { DEFAULT_SUMMARY_PROMPT };
 export const MAX_PARALLEL_MIN = 1;
 export const MAX_PARALLEL_MAX = 10;
 export const FALLBACK_PRESET_ID = 'implement';
-/** A parent (feature) starts one orchestrator session with this preset unless its card says otherwise. */
+/** A task with sub-tasks starts one orchestrator session with this preset unless its card says otherwise. */
 export const ORCHESTRATE_PRESET_ID = 'orchestrate';
 /** A bug defaults to this preset (unless the user set the bug type); a set without it falls back to Implement (resolveStart). */
 export const DIAGNOSE_PRESET_ID = 'diagnose';
@@ -205,24 +204,29 @@ export const resolveSettings = (global: SettingsLayer, project: SettingsLayer, f
 export const suggestEnabled = (globalLoaded: boolean, global: SettingsLayer): boolean =>
   globalLoaded && resolveSettings(global, {}).suggestFields;
 
+/** What the start preset depends on: the task's type, and whether it has sub-tasks on the board. */
+export type StartSubject = { type: string | null; subtasks: boolean };
+
 /**
  * The options a session starts with: the card's choice, else the settings. The preset is the
- * card's, else 'orchestrate' for a parent (a feature) that is not a bug, else the default for the task's type, else defaults.presetId; whichever id is chosen,
- * one that is not among `presets` (a deleted preset, or one the project's set does not have) becomes
- * 'implement'. `presets` defaults to the Plain set; pass the project's set (listPresets) so its own count.
+ * card's, else 'orchestrate' for a task with sub-tasks, else the default for the task's type, else
+ * defaults.presetId; whichever id is chosen, one that is not among `presets` (a deleted preset, or
+ * one the project's set does not have) becomes 'implement'. `presets` defaults to the Plain set;
+ * pass the project's set (listPresets) so its own count.
  */
 export const resolveStart = (
   s: Settings,
-  task: Task,
+  task: StartSubject,
   card: Partial<StartOptions>,
   presets: readonly Preset[] = BUILTIN_PRESETS,
 ): StartOptions => {
   const c = parseCardOptions(card);
+  // Sub-tasks, not the kind: locally every top-level task is a spec.md parent, and one without
+  // sub-tasks (a bug, a research task) should start with its type's preset. Once research adds
+  // sub-tasks, the default turns to orchestrate by itself.
+  const bySubtasks = task.subtasks ? ORCHESTRATE_PRESET_ID : undefined;
   const byType = task.type !== null ? s.presetByType[task.type] : undefined;
-  // A bug is diagnosed, not broken down: its type preset beats the parent default. Locally every
-  // top-level task is a spec.md parent, so a new bug would otherwise always orchestrate.
-  const byKind = task.kind === 'parent' && !(task.type === 'bug' && byType !== undefined) ? ORCHESTRATE_PRESET_ID : undefined;
-  const wanted = c.presetId ?? byKind ?? byType ?? s.defaults.presetId;
+  const wanted = c.presetId ?? bySubtasks ?? byType ?? s.defaults.presetId;
   const model = c.model ?? s.defaults.model;
   return {
     presetId: presets.some((p) => p.id === wanted) ? wanted : FALLBACK_PRESET_ID,

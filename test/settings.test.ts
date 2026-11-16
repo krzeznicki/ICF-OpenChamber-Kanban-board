@@ -1,6 +1,5 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import type { Task } from '../src/core/types.ts';
 import {
   DEFAULT_SETTINGS,
   DEFAULT_SUMMARY_PROMPT,
@@ -17,19 +16,8 @@ import {
 } from '../src/panel/settings.ts';
 import { BUILTIN_PRESETS } from '../src/panel/presets.ts';
 
-const task = (type: string | null, kind: Task['kind'] = 'ticket'): Task => ({
-  id: '.scratch/f/issues/01-a.md',
-  kind,
-  title: 'A',
-  body: '',
-  state: 'ready-for-agent',
-  type,
-  parentId: null,
-  blockedBy: [],
-  url: null,
-  updatedAt: 0,
-  claimed: false,
-});
+/** What resolveStart reads: the type, and whether the task has sub-tasks on the board. */
+const task = (type: string | null, subtasks = false) => ({ type, subtasks });
 
 // --- resolveSettings ---
 
@@ -203,20 +191,23 @@ test('preset order: card, then the type default, then defaults.presetId', () => 
   assert.equal(resolveStart(s, task('research'), { presetId: 'orchestrate' }).presetId, 'orchestrate');
 });
 
-test('a parent defaults to orchestrate; the card choice still wins', () => {
+test('a task with sub-tasks defaults to orchestrate; the card choice still wins', () => {
   const s = resolveSettings({ defaults: { presetId: 'prototype' }, presetByType: { enhancement: 'plan' } }, {});
-  assert.equal(resolveStart(s, task('enhancement', 'parent'), {}).presetId, 'orchestrate');
-  assert.equal(resolveStart(s, task(null, 'parent'), {}).presetId, 'orchestrate');
-  assert.equal(resolveStart(s, task('enhancement', 'parent'), { presetId: 'implement' }).presetId, 'implement');
-  assert.equal(resolveStart(s, task('enhancement'), {}).presetId, 'plan');
+  assert.equal(resolveStart(s, task('enhancement', true), {}).presetId, 'orchestrate');
+  assert.equal(resolveStart(s, task('bug', true), {}).presetId, 'orchestrate');
+  assert.equal(resolveStart(s, task(null, true), {}).presetId, 'orchestrate');
+  assert.equal(resolveStart(s, task('enhancement', true), { presetId: 'implement' }).presetId, 'implement');
 });
 
-test('a bug keeps its type preset even as a parent (a local top-level task is a spec.md parent)', () => {
+test('a task without sub-tasks (a local spec.md too) takes its type preset; research that adds sub-tasks then orchestrates', () => {
   const s = resolveSettings({}, {});
-  assert.equal(resolveStart(s, task('bug', 'parent'), {}).presetId, 'diagnose');
+  assert.equal(resolveStart(s, task('bug'), {}).presetId, 'diagnose');
+  assert.equal(resolveStart(s, task('enhancement'), {}).presetId, 'implement');
+  assert.equal(resolveStart(s, task('research'), {}).presetId, 'plan');
+  assert.equal(resolveStart(s, task('research', true), {}).presetId, 'orchestrate');
   const mine = resolveSettings({ presetByType: { bug: 'triage' } }, {});
-  assert.equal(resolveStart(mine, task('bug', 'parent'), {}).presetId, 'triage');
-  assert.equal(resolveStart(s, task('bug', 'parent'), { presetId: 'orchestrate' }).presetId, 'orchestrate');
+  assert.equal(resolveStart(mine, task('bug'), {}).presetId, 'triage');
+  assert.equal(resolveStart(s, task('bug'), { presetId: 'orchestrate' }).presetId, 'orchestrate');
 });
 
 test('an unknown preset id falls back to implement', () => {

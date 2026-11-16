@@ -7,12 +7,12 @@
 // suggestions on, Type and State start on "Let the model pick" (suggest.ts fills those in after
 // the create).
 import { filterSelectOptions, mountBanner, mountButton, mountCheckbox, mountSearchField, mountSelect, mountTextField } from '@openchamber/sdk/ui';
-import type { Task, TaskKind, TaskState } from '../../core/types.ts';
+import type { Task, TaskState } from '../../core/types.ts';
 import {
   CREATE_STATES,
   blockerChoices,
   canHaveSubtasks,
-  draftKind,
+  draftSubtasks,
   draftType,
   emptyDraft,
   existingSubtaskChoices,
@@ -52,8 +52,8 @@ export type AddModalModel = {
 export type AddModalStart = {
   projectId: string;
   presets: Preset[];
-  /** What a new task of this type and kind would start with. */
-  inherited: (type: string | null, kind: TaskKind) => StartOptions;
+  /** What a new task of this type would start with, with or without sub-tasks. */
+  inherited: (type: string | null, subtasks: boolean) => StartOptions;
   summaryLanguage: string;
 };
 
@@ -419,7 +419,7 @@ export const openAddModal = (
   };
   const drawStart = (): void => {
     const s = start;
-    const inherited = s === null ? null : s.inherited(draftType(d), draftKind(d, model.tracker));
+    const inherited = s === null ? null : s.inherited(draftType(d), draftSubtasks(d, model.tracker));
     const key =
       s === null ? 'loading' : JSON.stringify([s.projectId, inherited, s.summaryLanguage, s.presets.map((p) => [p.id, p.name])]);
     lockStart();

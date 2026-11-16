@@ -8,7 +8,7 @@ import {
   subtaskModes,
   canHaveSubtasks,
   createWithSubtasks,
-  draftKind,
+  draftSubtasks,
   draftType,
   emptyDraft,
   existingSubtaskChoices,
@@ -130,14 +130,16 @@ test('canAddSubtask: local only on an open feature; github on any open issue', (
   assert.equal(canAddSubtask(GITHUB[3]!, 'github'), false); // closed
 });
 
-test('draftKind: what the new task will be, for the inherited start preset', () => {
-  assert.equal(draftKind(draft(), 'local'), 'parent');
-  assert.equal(draftKind(draft({ parentId: '.scratch/f/spec.md' }), 'local'), 'ticket');
-  assert.equal(draftKind(draft(), 'github'), 'ticket');
-  assert.equal(draftKind(draft({ subtasks: ['  ', 'x'] }), 'github'), 'parent');
-  assert.equal(draftKind(draft({ subtasks: ['  '] }), 'github'), 'ticket');
-  assert.equal(draftKind(draft({ existing: ['#3'] }), 'github'), 'parent');
-  assert.equal(draftKind(draft({ parentId: '.scratch/f/spec.md', existing: ['x'] }), 'local'), 'ticket');
+test('draftSubtasks: whether the new task will have sub-tasks, for the inherited start preset', () => {
+  assert.equal(draftSubtasks(draft(), 'local'), false);
+  assert.equal(draftSubtasks(draft({ subtasks: ['x'] }), 'local'), true);
+  assert.equal(draftSubtasks(draft({ existing: ['.scratch/g/spec.md'] }), 'local'), true);
+  assert.equal(draftSubtasks(draft({ parentId: '.scratch/f/spec.md', subtasks: ['x'] }), 'local'), false);
+  assert.equal(draftSubtasks(draft({ parentId: '.scratch/f/spec.md', existing: ['x'] }), 'local'), false);
+  assert.equal(draftSubtasks(draft(), 'github'), false);
+  assert.equal(draftSubtasks(draft({ subtasks: ['  ', 'x'] }), 'github'), true);
+  assert.equal(draftSubtasks(draft({ subtasks: ['  '] }), 'github'), false);
+  assert.equal(draftSubtasks(draft({ existing: ['#3'] }), 'github'), true);
 });
 
 test('existingSubtaskChoices local: a new feature takes open tickets and features without tickets', () => {
