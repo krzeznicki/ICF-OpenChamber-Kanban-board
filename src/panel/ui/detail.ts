@@ -17,6 +17,7 @@ import type { CardOptions, Sections, StartOptions } from '../settings.ts';
 import type { SummaryStatus } from '../summaries.ts';
 import type { EditText } from '../taskEdit.ts';
 import { mountCloseButton } from './closeButton.ts';
+import { askChoice } from './confirm.ts';
 import { renderMarkdown } from './markdownView.ts';
 import { FILTER_OVER, openModalShell } from './modal.ts';
 import { mountEditForm } from './editForm.ts';
@@ -141,7 +142,21 @@ const el = <K extends keyof HTMLElementTagNameMap>(tag: K, className: string, te
 };
 
 export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, options: DetailOptions): DetailHandle => {
-  const shell = openModalShell({ label: initial.task.title, onDismiss: () => callbacks.onDismiss() });
+  // Escape, a backdrop click and the close button: an Edit form with typed text asks first, so a
+  // stray key does not throw the draft away.
+  let asking = false;
+  const dismiss = (): void => {
+    if (asking) return;
+    if (editing === null || !editing.dirty()) return callbacks.onDismiss();
+    asking = true;
+    void askChoice('Discard changes?', 'The title or description you edited has not been saved.', [
+      { id: 'discard', label: 'Discard', variant: 'destructive' },
+    ]).then((answer) => {
+      asking = false;
+      if (answer === 'discard') callbacks.onDismiss();
+    });
+  };
+  const shell = openModalShell({ label: initial.task.title, onDismiss: dismiss });
   const { modal } = shell;
   const head = el('header', 'kb-modal-head');
   // State, Type and Move to: above the task text, outside the collapsible sections.
@@ -229,7 +244,7 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
     titles.append(el('h2', 'kb-sheet-title', task.title), el('div', 'kb-card-id', task.id));
     const closeSlot = el('div', 'kb-sheet-x');
     top.append(titles, closeSlot);
-    disposers.push(mountCloseButton(closeSlot, callbacks.onDismiss));
+    disposers.push(mountCloseButton(closeSlot, dismiss));
     head.append(top);
 
     const row = el('div', 'kb-modal-bar');
@@ -302,7 +317,7 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
   /** The Task section redraws only when what it shows changes, so a reload keeps a text selection. */
   let taskKey: string | null = null;
   /** The open Edit form: it stays in place across updates (what is typed survives a poll). */
-  let editing: { taskId: string; dispose: () => void } | null = null;
+  let editing: { taskId: string; dispose: () => void; dirty: () => boolean } | null = null;
   const stopEdit = (): void => {
     editing?.dispose();
     editing = null;
@@ -313,13 +328,11 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
     const box = taskSec.content;
     box.replaceChildren();
     taskKey = null;
-    editing = {
-      taskId: m.task.id,
-      dispose: mountEditForm(box, m.text, (draft) => callbacks.onEdit(m.text, draft), () => {
-        stopEdit();
-        if (current !== null) draw(current);
-      }),
-    };
+    const form = mountEditForm(box, m.text, (draft) => callbacks.onEdit(m.text, draft), () => {
+      stopEdit();
+      if (current !== null) draw(current);
+    });
+    editing = { taskId: m.task.id, ...form };
     taskSec.box.open = true;
     if (current !== null) draw(current); // the header drops its Edit button
     box.querySelector('input')?.focus();

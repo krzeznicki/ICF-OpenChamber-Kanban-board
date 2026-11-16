@@ -23,6 +23,9 @@ export const editChanges = (from: EditText, draft: EditText): { changes: TaskEdi
   return { changes: Object.keys(changes).length === 0 ? null : changes };
 };
 
+/** Whether closing the form would throw typed text away (the modal asks "Discard changes?" first). */
+export const editDirty = (from: EditText, draft: EditText): boolean => draft.title !== from.title || draft.body !== from.body;
+
 /**
  * Checked against the task as stored right before saving: a field about to be saved that changed
  * since the form opened (an agent edited it meanwhile) would be overwritten, so the save is refused

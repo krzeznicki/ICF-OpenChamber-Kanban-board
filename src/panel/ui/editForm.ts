@@ -2,7 +2,7 @@
 // description (markdown). Split out of detail.ts like startOptions.ts; what it starts with and what
 // it sends are taskEdit.ts.
 import { mountBanner, mountButton, mountTextField } from '@openchamber/sdk/ui';
-import type { EditText } from '../taskEdit.ts';
+import { editDirty, type EditText } from '../taskEdit.ts';
 
 const div = (className: string): HTMLDivElement => {
   const d = document.createElement('div');
@@ -13,13 +13,14 @@ const div = (className: string): HTMLDivElement => {
 /**
  * The Task section's Edit form: title, description (markdown), Save and Cancel. The service's
  * error shows in it; `onDone` runs after a successful save or Cancel (the section redraws).
+ * `dirty` says whether closing the modal now would lose typed text.
  */
 export const mountEditForm = (
   box: HTMLElement,
   initial: EditText,
   onSave: (draft: EditText) => Promise<string | null>,
   onDone: () => void,
-): (() => void) => {
+): { dispose: () => void; dirty: () => boolean } => {
   const titleSlot = div('kb-field');
   const bodySlot = div('kb-field');
   const errorSlot = div('kb-add-error');
@@ -86,12 +87,15 @@ export const mountEditForm = (
     submit();
   });
 
-  return () => {
-    disposed = true;
-    errorDispose?.();
-    titleField.dispose();
-    bodyField.dispose();
-    save.dispose();
-    cancel.dispose();
+  return {
+    dirty: () => editDirty(initial, draft),
+    dispose: () => {
+      disposed = true;
+      errorDispose?.();
+      titleField.dispose();
+      bodyField.dispose();
+      save.dispose();
+      cancel.dispose();
+    },
   };
 };

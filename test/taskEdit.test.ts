@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Task } from '../src/core/types.ts';
-import { editChanges, editConflict, editableText } from '../src/panel/taskEdit.ts';
+import { editChanges, editConflict, editDirty, editableText } from '../src/panel/taskEdit.ts';
 
 const task = (id: string, over: Partial<Task> = {}): Task => ({
   id,
@@ -50,4 +50,11 @@ test('editConflict: a field being saved that changed since the form opened (an a
   const renamed = { ...opened, title: 'Fix it soon' };
   assert.match(editConflict('github', renamed, { title: 'Fix it', body }, { title: 'Fix it now' }) ?? '', /title changed since you opened the form/);
   assert.equal(editConflict('github', renamed, { title: 'Fix it', body }, { body: 'x' }), null);
+});
+
+test('editDirty: only a draft that differs from what the form opened with asks before it is discarded', () => {
+  const from = { title: 'A', body: 'x' };
+  assert.equal(editDirty(from, { title: 'A', body: 'x' }), false);
+  assert.equal(editDirty(from, { title: 'B', body: 'x' }), true);
+  assert.equal(editDirty(from, { title: 'A', body: 'x\n' }), true);
 });
