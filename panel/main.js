@@ -2882,8 +2882,11 @@ ${GUEST_UI_LOOK_CSS}`;
       /** Unlinks a sub-task from its parent; like setParent the returned task can have a new id (local: it became a feature). */
       removeParent: (id) => call("POST", "/tasks/unparent", { id }).then((r) => r.task),
       close: (id, withChildren = false) => call("POST", "/tasks/close", { id, withChildren }).then((r) => r.tasks),
-      /** The main checkout `directory` is a git worktree of (itself for a main checkout), or null outside git. */
-      mainCheckout: () => call("POST", "/project/root").then((r) => r.root),
+      /**
+       * Which of `candidates` (project directories) the git worktree `directory` was made from, or
+       * null. Here `directory` is a session's worktree, not a project.
+       */
+      projectOfWorktree: (candidates) => call("POST", "/project/of", { candidates }).then((r) => r.project),
       cliPath: () => call("GET", "/cli").then((r) => r.path),
       /** Path B: the service makes the worktree (if asked) and starts the session with this model, agent and thinking level. */
       startSession: (input) => call("POST", "/sessions/start", input),
@@ -13888,6 +13891,8 @@ ${body}`);
   };
 
   // src/panel/projectFollow.ts
+  var LOOKUP_TRIES = 3;
+  var LOOKUP_RETRY_MS = 2e3;
   var projectContaining = (dir, projects) => {
     if (dir === null) return null;
     let best = null;
@@ -13897,40 +13902,57 @@ ${body}`);
     }
     return best;
   };
+  var listKey = (projects) => projects.map((p) => `${p.id}
+${p.directory}`).join("\n");
   var createProjectFollow = (deps) => {
-    const found = /* @__PURE__ */ new Map();
+    const wait = deps.wait ?? ((ms) => new Promise((done) => setTimeout(done, ms)));
+    const answered = /* @__PURE__ */ new Map();
     const running = /* @__PURE__ */ new Map();
+    const lookedUp = (dir, projects) => {
+      const a = answered.get(dir);
+      if (a === void 0 || a.list !== listKey(projects)) return void 0;
+      return projects.find((p) => p.id === a.projectId) ?? null;
+    };
     const find = async (dir, projects, sessionId) => {
       const lists2 = await Promise.allSettled(projects.map((p) => deps.listSessions(p.id)));
       const records = lists2.flatMap((r) => r.status === "fulfilled" ? r.value.sessions : []);
       const record4 = records.find((s) => s.id === sessionId) ?? records.find((s) => s.directory === dir);
       if (record4 !== void 0 && projects.some((p) => p.id === record4.projectId)) return record4.projectId;
-      return projectContaining(await deps.mainCheckout(dir), projects)?.id ?? null;
+      const directory = await deps.projectOfWorktree(dir, projects.map((p) => p.directory));
+      return projects.find((p) => p.directory === directory)?.id ?? null;
+    };
+    const findWithRetries = async (dir, projects, sessionId) => {
+      for (let n = 1; ; n++) {
+        try {
+          const projectId = await find(dir, projects, sessionId);
+          answered.set(dir, { projectId, list: listKey(projects) });
+          return projectId;
+        } catch {
+          if (n >= LOOKUP_TRIES) return null;
+          await wait(LOOKUP_RETRY_MS);
+        }
+      }
     };
     return {
       /**
        * The project to show: the one containing the host's directory, else the one looked up for it,
        * else the one shown now, else the first.
        */
-      choose: (dir, projects, current) => {
-        const looked = dir === null ? void 0 : found.get(dir);
-        return projectContaining(dir, projects) ?? projects.find((p) => p.id === looked) ?? current ?? projects[0] ?? null;
-      },
-      /** `dir` lies outside every project and has not been looked up with success yet. */
-      unknown: (dir, projects) => dir !== null && projectContaining(dir, projects) === null && !projects.some((p) => p.id === found.get(dir)),
+      choose: (dir, projects, current) => projectContaining(dir, projects) ?? (dir === null ? null : lookedUp(dir, projects)) ?? current ?? projects[0] ?? null,
+      /** `dir` lies outside every project and no lookup has answered for it (and this project list) yet. */
+      unknown: (dir, projects) => dir !== null && projectContaining(dir, projects) === null && lookedUp(dir, projects) === void 0,
       /**
        * Looks up the project of a directory outside every project; `sessionId` is the chat open there,
-       * when known. Resolves to its id (then `choose` answers it) or null; one lookup per directory at a time.
+       * when known. Resolves to its id (then `choose` answers it) or null; one lookup per directory
+       * and project list at a time.
        */
       lookup: (dir, projects, sessionId) => {
-        const busy = running.get(dir);
+        const key = `${dir}
+${listKey(projects)}`;
+        const busy = running.get(key);
         if (busy !== void 0) return busy;
-        const job = find(dir, projects, sessionId).catch(() => null).then((id) => {
-          running.delete(dir);
-          if (id !== null) found.set(dir, id);
-          return id;
-        });
-        running.set(dir, job);
+        const job = findWithRetries(dir, projects, sessionId).finally(() => running.delete(key));
+        running.set(key, job);
         return job;
       }
     };
@@ -14792,7 +14814,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
   };
   var follow = createProjectFollow({
     listSessions: (id) => host.listSessions(id),
-    mainCheckout: (dir) => createApi(host, dir).mainCheckout()
+    projectOfWorktree: (dir, directories) => createApi(host, dir).projectOfWorktree(directories)
   });
   var draw = () => {
     board.setCanAdd(state.view === "board" && state.config !== null);
@@ -15022,7 +15044,8 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
   var followHost = (lookUp = true) => {
     const current = project();
     if (state.pinned && current !== null) return;
-    if (lookUp && findHostProject() && current === null) return;
+    if (lookUp && lookUpHostProject() && current === null) return;
+    if (current === null && !projectsSettled && follow.unknown(state.hostDirectory, state.projects)) return;
     void selectProject(follow.choose(state.hostDirectory, state.projects, current)?.id ?? null);
   };
   var summaryRedraw = false;
@@ -15199,7 +15222,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
   var panelSession = null;
   var projectsSettled = false;
   var projectLookups = 0;
-  var findHostProject = () => {
+  var lookUpHostProject = () => {
     const directory = state.hostDirectory;
     if (!projectsSettled || !follow.unknown(directory, state.projects)) return false;
     projectLookups++;

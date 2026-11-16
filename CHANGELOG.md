@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Fixed: the full-screen board opened from a chat in a worktree (a session started from a card, in OpenChamber's In work) showed the first project of the list instead of the session's. Only the rail panel looked the project up, by its session id; the page has no session, so nothing placed the worktree's directory. Now both look it up by directory (`projectFollow.ts`): a session of that directory in the projects' session lists, else the worktree's main checkout from the service's new `/project/root` (`git rev-parse --path-format=absolute --git-common-dir`). The lookup runs for each such directory, not once per frame, and a fresh board waits for it instead of flashing the first project.
+- Fixed: the full-screen board opened from a chat in a worktree (a session started from a card, in OpenChamber's In work) showed the first project of the list instead of the session's. Only the rail panel looked the project up, by its session id; the page has no session, so nothing placed the worktree's directory. Now both look it up by directory (`projectFollow.ts`): a session of that directory in the projects' session lists, else the project of the worktree's main checkout, from the service's new `/project/of` (`git rev-parse --git-common-dir`; symlinked projects and a project registered as a folder of the repository match too). The lookup runs for each such directory, not once per frame, tries again when the service is not up yet, and a fresh board waits for it instead of flashing the first project.
 
 ## 0.3.7
 

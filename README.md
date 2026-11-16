@@ -140,7 +140,7 @@ Opened from the **Kanban Board** icon beside a chat, the board shows what that c
 - several tasks: a **Tasks in this session** list with each task's column (or state); a click opens the task;
 - none: an info banner above the board, **No task on this board is being worked on in this session**, with **Dismiss**.
 
-A task counts when the session was started from its card (OpenChamber's start, or the service's in `links.json`), unless the card was dragged away from it to Backlog or Ready afterwards. It happens once per opening of the panel; switching chats while the panel stays open changes nothing. The full-screen page and a panel with no session open the board as before. When the chat runs in a worktree outside every registered project, the board (the rail panel and the full-screen page alike) shows the project the session belongs to: the one the host lists a session of that directory under, else the worktree's main checkout (`git rev-parse --git-common-dir`).
+A task counts when the session was started from its card (OpenChamber's start, or the service's in `links.json`), unless the card was dragged away from it to Backlog or Ready afterwards. It happens once per opening of the panel; switching chats while the panel stays open changes nothing. The full-screen page and a panel with no session open the board as before. When the chat runs in a worktree outside every registered project, the board (the rail panel and the full-screen page alike) shows the project the session belongs to: the one the host lists a session of that directory under, else the project the worktree's main checkout (`git rev-parse --git-common-dir`) lies in.
 
 ## Parents and orchestration
 

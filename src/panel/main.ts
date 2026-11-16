@@ -324,7 +324,7 @@ const showSettings = (): void => {
 /** The project of the host's directory, also when that is a worktree outside every project (projectFollow.ts). */
 const follow = createProjectFollow({
   listSessions: (id) => host.listSessions(id),
-  mainCheckout: (dir) => createApi(host, dir).mainCheckout(),
+  projectOfWorktree: (dir, directories) => createApi(host, dir).projectOfWorktree(directories),
 });
 
 const draw = (): void => {
@@ -588,7 +588,9 @@ const followHost = (lookUp = true): void => {
   const current = project();
   if (state.pinned && current !== null) return;
   // Nothing shown yet and the answer is on its way: wait for it rather than flash the first project.
-  if (lookUp && findHostProject() && current === null) return;
+  if (lookUp && lookUpHostProject() && current === null) return;
+  // Nor on a project list still loading, where the directory's project may only be missing yet.
+  if (current === null && !projectsSettled && follow.unknown(state.hostDirectory, state.projects)) return;
   void selectProject(follow.choose(state.hostDirectory, state.projects, current)?.id ?? null);
 };
 
@@ -843,7 +845,7 @@ let projectLookups = 0;
  * and then followed. On the board page too, which has no session of its own to ask about. True
  * when a lookup is in flight.
  */
-const findHostProject = (): boolean => {
+const lookUpHostProject = (): boolean => {
   const directory = state.hostDirectory;
   if (!projectsSettled || !follow.unknown(directory, state.projects)) return false;
   projectLookups++;

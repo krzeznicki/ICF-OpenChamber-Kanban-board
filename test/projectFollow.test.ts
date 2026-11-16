@@ -26,7 +26,8 @@ const record = (id: string, extra: Partial<GuestSessionRecord> = {}): GuestSessi
 
 const deps = (over: Partial<FollowDeps> = {}): FollowDeps => ({
   listSessions: async () => ({ sessions: [] }),
-  mainCheckout: async () => null,
+  projectOfWorktree: async () => null,
+  wait: async () => {},
   ...over,
 });
 
@@ -49,7 +50,9 @@ test('a chat inside a project shows that project', async () => {
 
 test('the board page opened from a worktree session shows the project the worktree was made from', async () => {
   // The page has no session of its own, and the host lists the session under no project.
-  const d = deps({ mainCheckout: async (dir) => (dir === WORKTREE ? '/projects/kanban' : null) });
+  const d = deps({
+    projectOfWorktree: async (dir, directories) => (dir === WORKTREE && directories.includes('/projects/kanban') ? '/projects/kanban' : null),
+  });
   assert.equal(await shown(d, WORKTREE), 'kanban');
 });
 
@@ -70,22 +73,48 @@ test('a directory no lookup can place keeps the shown project, else the first', 
   assert.equal(follow.choose(WORKTREE, projects, null)?.name, 'first');
 });
 
-test('a failed lookup is tried again; a found project is not asked for twice', async () => {
+test('a lookup that cannot ask the service tries again by itself, so a starting service does not leave the first project', async () => {
   let calls = 0;
-  let root: string | null = null;
+  const d = deps({
+    projectOfWorktree: async () => {
+      if (++calls < 3) throw new Error('service is starting');
+      return '/projects/kanban';
+    },
+  });
+  assert.equal(await shown(d, WORKTREE), 'kanban');
+});
+
+test('a lookup that never reaches the service gives up, and the next one asks again', async () => {
+  let calls = 0;
   const follow = createProjectFollow(
     deps({
-      mainCheckout: async () => {
+      projectOfWorktree: async () => {
         calls++;
-        if (root === null) throw new Error('service is starting');
-        return root;
+        throw new Error('no service');
       },
     }),
   );
   assert.equal(await follow.lookup(WORKTREE, projects, null), null);
+  assert.equal(calls, 3);
   assert.equal(follow.unknown(WORKTREE, projects), true);
-  root = '/projects/kanban';
-  assert.equal(await follow.lookup(WORKTREE, projects, null), 'id-kanban');
+});
+
+test('an answer is remembered, also "no project", until the project list changes', async () => {
+  let calls = 0;
+  const follow = createProjectFollow(
+    deps({
+      projectOfWorktree: async (_dir, directories) => {
+        calls++;
+        return directories.includes('/projects/late') ? '/projects/late' : null;
+      },
+    }),
+  );
+  assert.equal(await follow.lookup(WORKTREE, projects, null), null);
   assert.equal(follow.unknown(WORKTREE, projects), false);
+  const more = [...projects, project('late')];
+  assert.equal(follow.unknown(WORKTREE, more), true);
+  assert.equal(await follow.lookup(WORKTREE, more, null), 'id-late');
+  assert.equal(follow.unknown(WORKTREE, more), false);
+  assert.equal(follow.choose(WORKTREE, more, null)?.name, 'late');
   assert.equal(calls, 2);
 });

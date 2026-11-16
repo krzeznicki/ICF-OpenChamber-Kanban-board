@@ -318,7 +318,7 @@ var publishInstructions = async (host2, cliPath, log = console.error) => {
 };
 
 // src/service/routes.ts
-import { stat as stat3 } from "node:fs/promises";
+import { realpath, stat as stat3 } from "node:fs/promises";
 import { basename as basename2, dirname as dirname3, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -2176,9 +2176,34 @@ var mainCheckout = async (dir, exec) => {
   const common = r.code === 0 ? r.stdout.trim() : "";
   return isAbsolute(common) && basename2(common) === ".git" ? dirname3(common) : null;
 };
+var real = async (path) => {
+  try {
+    return await realpath(path);
+  } catch {
+    return null;
+  }
+};
+var projectOf = async (dir, candidates, exec) => {
+  const checkout = await mainCheckout(dir, exec);
+  const root = checkout === null ? null : await real(checkout);
+  if (root === null) return null;
+  const resolved = (await Promise.all(candidates.map(async (c) => ({ given: c, path: await real(c) })))).flatMap(
+    (c) => c.path === null ? [] : [{ given: c.given, path: c.path }]
+  );
+  const holding = resolved.filter((c) => isInside(root, c.path)).sort((a, b) => b.path.length - a.path.length);
+  if (holding[0] !== void 0) return holding[0].given;
+  const within = resolved.filter((c) => isInside(c.path, root));
+  return within.length === 1 ? within[0].given : null;
+};
 var POST = {
   /** `directory` here is any directory (a session's worktree), not a project's. */
-  "/project/root": async (_body, dir, deps2) => ({ root: await mainCheckout(dir, deps2.exec) }),
+  "/project/of": async (body, dir, deps2) => {
+    const candidates = body.candidates;
+    if (!Array.isArray(candidates) || !candidates.every((c) => typeof c === "string" && isAbsolute(c))) {
+      return invalid('"candidates" must be an array of absolute paths');
+    }
+    return { project: await projectOf(dir, candidates, deps2.exec) };
+  },
   "/config/read": async (_body, dir) => {
     try {
       return { config: await readConfig(dir) };
