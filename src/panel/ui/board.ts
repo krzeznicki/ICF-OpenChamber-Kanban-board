@@ -9,6 +9,7 @@ import type { Task } from '../../core/types.ts';
 import { VARIANT } from '../../core/variant.ts';
 import { COLUMNS, type BoardModel } from '../columns.ts';
 import type { Suggestion } from '../search.ts';
+import { hintLastChild, hintShortcut } from './shortcutHints.ts';
 import { renderCard } from './card.ts';
 import { mountSearchSuggest } from './searchSuggest.ts';
 
@@ -109,6 +110,12 @@ export const createBoard = (root: HTMLElement, callbacks: BoardCallbacks) => {
   const add = mountButton(addSlot, { label: 'Add task', size: 'sm', disabled: true, onClick: callbacks.onAdd });
   mountButton(settingsSlot, { label: 'Settings', variant: 'outline', size: 'sm', onClick: callbacks.onSettings });
   const refresh = mountButton(refreshSlot, { label: 'Refresh', variant: 'outline', size: 'sm', onClick: callbacks.onRefresh });
+  // Key hints in the tooltips (shortcutHints.ts); they follow a rebinding.
+  hintShortcut(projectSlot, 'board.projects', 'Switch project');
+  hintShortcut(switchSlot, 'board.toggleSubtasks', 'Hide or show sub-tasks');
+  hintLastChild(addSlot, 'board.addTask', 'Add task');
+  hintLastChild(settingsSlot, 'board.settings', 'Settings');
+  hintLastChild(refreshSlot, 'board.refresh', 'Refresh');
   let refreshBusy = false;
 
   let statusDispose: (() => void) | null = null;

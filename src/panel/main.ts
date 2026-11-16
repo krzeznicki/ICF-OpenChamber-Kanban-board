@@ -48,12 +48,13 @@ import { askChoice } from './ui/confirm.ts';
 import { mountNotice } from './ui/notice.ts';
 import { stateTone } from './ui/detail.ts';
 import { openSessionTasks } from './ui/sessionTasks.ts';
-import { bindingOf, sameBinding } from './keymap.ts';
+import { bindingOf, createKeymap, sameBinding } from './keymap.ts';
 import { createShortcuts, type Shortcuts } from './shortcuts.ts';
 import { cheatSheetGroups } from './cheatSheet.ts';
 import { openCheatSheet } from './ui/cheatSheet.ts';
 import { layoutOf } from './navigation.ts';
 import { createSelection, type Selection } from './ui/selection.ts';
+import { setHintKeymap } from './ui/shortcutHints.ts';
 import { openSettings } from './ui/settingsView.ts';
 import { injectStyles } from './ui/styles.ts';
 import { mountWizard } from './ui/wizard.ts';
@@ -237,6 +238,7 @@ const presets = (): Preset[] => {
 
 /** After any settings change: the hide switch follows, the board and an open detail redraw. */
 const applySettings = (): void => {
+  applyKeymap();
   const hide = settings().hideChildren;
   if (hide !== state.hideSubtasks) {
     state.hideSubtasks = hide;
@@ -1011,6 +1013,22 @@ const installBoardNavigation = (): void => {
   });
 };
 
+/** The bindings last applied (their stored text), so an unrelated settings change does not rebuild the Keymap. */
+let appliedKeys: string | null = null;
+
+/** The user's bindings (global settings) into the dispatcher and every button tooltip, at once. */
+const applyKeymap = (): void => {
+  // Before installShortcuts the dispatcher does not exist yet; it applies the bindings itself.
+  if (typeof shortcuts === 'undefined') return;
+  const overrides = state.globalSettings.shortcuts ?? {};
+  const text = JSON.stringify(overrides);
+  if (text === appliedKeys) return;
+  appliedKeys = text;
+  const keymap = createKeymap(overrides);
+  shortcuts.setKeymap(keymap);
+  setHintKeymap(keymap, shortcuts.platform);
+};
+
 const installShortcuts = (): void => {
   shortcuts = createShortcuts();
   shortcuts.addLayer(() => (document.querySelector('.kb-confirm-backdrop') !== null ? 'none' : null));
@@ -1026,6 +1044,7 @@ const installShortcuts = (): void => {
   installBoardNavigation();
   installToolbarShortcuts(shortcuts);
   installCheatSheet(shortcuts);
+  applyKeymap();
 };
 
 /**
