@@ -1919,6 +1919,21 @@ var worktreeSlug = (taskId, title, suffix = randomBytes2(3).toString("hex")) => 
 };
 var worktreesRoot = (directory) => join6(dirname2(directory), `${basename(directory)}-worktrees`);
 var message2 = (e) => e instanceof Error ? e.message : String(e);
+var START_RETRY_MS = [1e3, 3e3, 6e3];
+var notReadyYet = (e) => e?.status === 503;
+var realSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+var startRetrying = async (deps2, input) => {
+  const sleep = deps2.sleep ?? realSleep;
+  for (let attempt2 = 0; ; attempt2++) {
+    try {
+      return await deps2.sessions.start(input);
+    } catch (e) {
+      const ms = START_RETRY_MS[attempt2];
+      if (ms === void 0 || !notReadyYet(e)) throw e;
+      await sleep(ms);
+    }
+  }
+};
 var removeWorktree = async (deps2, directory, path, branch) => {
   const log = deps2.log ?? ((m) => console.error(m));
   const run = async (args, what) => {
@@ -1951,7 +1966,7 @@ var startSession = async (input, deps2) => {
   const cwd = worktree ?? input.directory;
   let started;
   try {
-    started = await deps2.sessions.start({
+    started = await startRetrying(deps2, {
       prompt: input.prompt,
       directory: cwd,
       title: input.title,
@@ -2055,7 +2070,8 @@ var start = async (dir, input, deps2) => {
           sessions,
           linksFile: linksFile(deps2),
           ...deps2.suffix ? { suffix: deps2.suffix } : {},
-          ...deps2.log ? { log: deps2.log } : {}
+          ...deps2.log ? { log: deps2.log } : {},
+          ...deps2.sleep ? { sleep: deps2.sleep } : {}
         }
       )
     );
