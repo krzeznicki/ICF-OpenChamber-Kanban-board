@@ -6,8 +6,10 @@
 //   they read "Mod+Shift+ArrowLeft" (the form overrides are stored in).
 // - Action ids are stable: settings store overrides under them and later code registers handlers
 //   for them, so an id is never renamed.
-// - Fixed keys (arrows, Enter and `?` on the Board) are in the table so the cheat sheet can list
-//   them, but they cannot be rebound and never fire in a text field.
+// - Fixed keys (arrows, Enter, Esc and `?` on the Board) are in the table so the cheat sheet and
+//   Settings can list them, but they cannot be rebound and never fire in a text field. Esc is listed
+//   only: resolve never returns it, so the search field's, the modal's and a confirm's own Escape
+//   handling stays as it is.
 
 export type Platform = 'mac' | 'other';
 /** Where a Shortcut applies: the Board, an Open task (the task modal) or Add task. */
@@ -27,6 +29,7 @@ export type ActionId =
   | 'board.selectLeft'
   | 'board.selectRight'
   | 'board.openSelected'
+  | 'board.escape'
   | 'board.cheatSheet'
   | 'task.prev'
   | 'task.next'
@@ -58,6 +61,8 @@ export type ShortcutDef = {
   binding: Binding;
   /** Not rebindable and not listed as such; fires only outside text fields. */
   fixed: boolean;
+  /** Listed for the user only: resolve never returns it (Esc keeps its own handling). */
+  listedOnly?: boolean;
 };
 
 /** A key press as the dispatcher reports it. `context` null: no Shortcuts (a confirm or Settings is open). */
@@ -90,6 +95,11 @@ const def = (id: ActionId, context: ShortcutContext, label: string, binding: Bin
   binding,
   fixed,
 });
+/** A fixed key the table lists but never resolves. */
+const listed = (id: ActionId, context: ShortcutContext, label: string, binding: Binding): ShortcutDef => ({
+  ...def(id, context, label, binding, true),
+  listedOnly: true,
+});
 
 /** The default table, in the order Settings and the cheat sheet list it. */
 export const DEFAULT_SHORTCUTS: readonly ShortcutDef[] = [
@@ -106,6 +116,7 @@ export const DEFAULT_SHORTCUTS: readonly ShortcutDef[] = [
   def('board.selectLeft', 'board', 'Select card in previous column', plain('ArrowLeft'), true),
   def('board.selectRight', 'board', 'Select card in next column', plain('ArrowRight'), true),
   def('board.openSelected', 'board', 'Open selected card', plain('Enter'), true),
+  listed('board.escape', 'board', 'Leave search / close dialog', plain('Escape')),
   def('board.cheatSheet', 'board', 'Show keyboard shortcuts', plain('?'), true),
   def('task.prev', 'task', 'Previous task', mod('ArrowUp')),
   def('task.next', 'task', 'Next task', mod('ArrowDown')),
@@ -123,14 +134,22 @@ export const DEFAULT_SHORTCUTS: readonly ShortcutDef[] = [
   def('add.create', 'add', 'Create task', mod('Enter')),
 ];
 
-export const CONTEXT_LABELS: Record<ShortcutContext, string> = { board: 'Board', task: 'Open task', add: 'Add task' };
+/** The Shortcut contexts in the order Settings and the cheat sheet list them, with their names. */
+export const SHORTCUT_CONTEXTS: readonly { context: ShortcutContext; label: string }[] = [
+  { context: 'board', label: 'Board' },
+  { context: 'task', label: 'Open task' },
+  { context: 'add', label: 'Add task' },
+];
 
-/** Keys the app (or the OS) may take before the panel sees them: recording one warns. */
+export const CONTEXT_LABELS = Object.fromEntries(SHORTCUT_CONTEXTS.map((c) => [c.context, c.label])) as Record<ShortcutContext, string>;
+
+/** Mod+<key> the app (or the OS) may take before the panel sees them: recording one warns. */
 export const RESERVED_KEYS: readonly string[] = ['w', 'q', 'r', 't', 'n'];
 
 /**
  * Mod+<key> the browser owns in a text field (select all, clipboard, undo): never a Shortcut there,
- * whatever it is bound to. The spec names Mod+A; the clipboard and undo keys follow the same reason.
+ * whatever it is bound to, and refused when recording (except Add task's own default Mod+A). The
+ * spec names Mod+A; the clipboard and undo keys follow the same reason.
  */
 const TEXT_FIELD_KEYS: readonly string[] = ['a', 'c', 'v', 'x', 'z'];
 
@@ -157,6 +176,23 @@ export const bindingOf = (input: Pick<KeyInput, 'key' | 'code' | 'meta' | 'ctrl'
   pressOf(input)?.binding ?? null;
 
 type PressInput = Pick<KeyInput, 'key' | 'code' | 'meta' | 'ctrl' | 'shift' | 'alt' | 'platform'>;
+
+/** The fields of a KeyboardEvent the Keymap reads. */
+export type KeyEventLike = { key: string; code?: string; metaKey: boolean; ctrlKey: boolean; shiftKey: boolean; altKey: boolean };
+
+/** A keydown read into a press (resolve adds the context; bindingOf takes it as is). */
+export const pressFromEvent = (e: KeyEventLike, platform: Platform): PressInput => ({
+  key: e.key,
+  code: e.code,
+  meta: e.metaKey,
+  ctrl: e.ctrlKey,
+  shift: e.shiftKey,
+  alt: e.altKey,
+  platform,
+});
+
+/** Plain Mod+<key>: no Shift, no Alt. */
+const plainMod = (b: Binding): boolean => b.mod && !b.shift && !b.alt;
 
 /** The binding of a press; `foreign`: the non-Mod one of Cmd/Ctrl is held, so no Shortcut matches. */
 const pressOf = (input: PressInput): { binding: Binding; foreign: boolean } | null => {
@@ -257,6 +293,8 @@ export type Validation =
   | { ok: true; warning: 'reserved' | null }
   | { ok: false; reason: 'fixed' }
   | { ok: false; reason: 'no-modifier' }
+  /** One of the keys a text field keeps (select all, copy, paste, cut, undo). */
+  | { ok: false; reason: 'text-field' }
   | { ok: false; reason: 'duplicate'; holder: ShortcutDef };
 
 // --- the Keymap ---
@@ -298,9 +336,9 @@ export const createKeymap = (overrides: Overrides = {}): Keymap => {
     const press = pressOf(input);
     if (press === null || press.foreign) return null;
     const pressed = press.binding;
-    if (input.inTextField && pressed.mod && !pressed.alt && !pressed.shift && TEXT_FIELD_KEYS.includes(pressed.key)) return null;
+    if (input.inTextField && plainMod(pressed) && TEXT_FIELD_KEYS.includes(pressed.key)) return null;
     for (const s of table) {
-      if (s.context !== input.context || !sameBinding(s.binding, pressed)) continue;
+      if (s.listedOnly === true || s.context !== input.context || !sameBinding(s.binding, pressed)) continue;
       if (s.fixed && input.inTextField) return null;
       return s.id;
     }
@@ -313,7 +351,10 @@ export const createKeymap = (overrides: Overrides = {}): Keymap => {
     if (!binding.mod) return { ok: false, reason: 'no-modifier' };
     const holder = table.find((s) => s.id !== id && s.context === self.context && sameBinding(s.binding, binding));
     if (holder !== undefined) return { ok: false, reason: 'duplicate', holder: { ...holder, binding: { ...holder.binding } } };
-    const reserved = !binding.alt && RESERVED_KEYS.includes(binding.key);
+    if (plainMod(binding) && TEXT_FIELD_KEYS.includes(binding.key) && !sameBinding(DEFAULTS.get(id)!.binding, binding)) {
+      return { ok: false, reason: 'text-field' };
+    }
+    const reserved = plainMod(binding) && RESERVED_KEYS.includes(binding.key);
     return { ok: true, warning: reserved ? 'reserved' : null };
   };
 
