@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.7
+
+- The task modal's **Add sub-task** → **Existing tasks** shows the open tasks it may link as a list with checkboxes (and a **Filter** field over 8 of them), as Add task's existing sub-tasks do, instead of a search select; **Link selected** links the checked tasks one after another and names any that could not be linked (`link.ts` `linkChildren`). The checkbox list is shared by both modals (`ui/checkList.ts`).
+
 ## 0.3.6
 
 - Fixed: a queued card the service started in a new worktree without a model or an agent set never started and ended as **Couldn't start: … OpenChamber could not reach the session. (failed 3 times …)**. OpenCode answers an empty agent list on the first call for a folder it has not loaded, which every new worktree is; OpenChamber then refuses the start with 503. The service used to remove the worktree and try again in another new one on the next drain, so every try failed the same way. It now keeps the worktree and tries `sessions.start` again after 1, 3 and 6 seconds while the answer is 503 (a refusal made before the session exists); any other failure is handled as before.

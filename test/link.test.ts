@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Task } from '../src/core/types.ts';
-import { canLinkUnder, canLinkUnderNew, childCandidates, followingMove, linkChoices, linkConfirm, newChildCandidates, parentTargets, unlinkConfirm } from '../src/panel/link.ts';
+import { canLinkUnder, canLinkUnderNew, childCandidates, followingMove, linkChildren, linkChoices, linkConfirm, newChildCandidates, parentTargets, unlinkConfirm } from '../src/panel/link.ts';
 
 const task = (id: string, over: Partial<Task> = {}): Task => ({
   id,
@@ -212,4 +212,26 @@ test('unlinkConfirm names both tasks; locally it says the task becomes a feature
   assert.equal(gh.title, 'Remove “Fix X” from “Epic”?');
   assert.doesNotMatch(gh.body, /new id|blockers/);
   assert.match(gh.body, /#2/);
+});
+
+test('linkChildren links the picked tasks one after another and names the ones that failed', async () => {
+  const calls: string[] = [];
+  let running = 0;
+  const link = async (id: string): Promise<string | null> => {
+    assert.equal(running, 0, 'one link at a time');
+    running++;
+    calls.push(id);
+    await Promise.resolve();
+    running--;
+    return id === 'b' ? 'refused' : id === 'c' ? 'gone' : null;
+  };
+  const picked = [
+    { id: 'a', label: 'Alpha' },
+    { id: 'b', label: 'Beta' },
+    { id: 'c', label: 'Gamma' },
+  ];
+  assert.equal(await linkChildren(picked, link), '2 tasks were not linked: “Beta” (refused); “Gamma” (gone)');
+  assert.deepEqual(calls, ['a', 'b', 'c']);
+  assert.equal(await linkChildren([{ id: 'b', label: 'Beta' }], link), '1 task was not linked: “Beta” (refused)');
+  assert.equal(await linkChildren(picked.slice(0, 1), link), null);
 });
