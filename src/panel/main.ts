@@ -48,7 +48,8 @@ import { askChoice } from './ui/confirm.ts';
 import { mountNotice } from './ui/notice.ts';
 import { stateTone } from './ui/detail.ts';
 import { openSessionTasks } from './ui/sessionTasks.ts';
-import { createShortcuts } from './shortcuts.ts';
+import { bindingOf, sameBinding } from './keymap.ts';
+import { createShortcuts, type Shortcuts } from './shortcuts.ts';
 import { openSettings } from './ui/settingsView.ts';
 import { injectStyles } from './ui/styles.ts';
 import { mountWizard } from './ui/wizard.ts';
@@ -968,6 +969,24 @@ const installShortcuts = (): void => {
     editor.showAdd();
   });
   shortcuts.on('add.create', () => editor.submitAddForm());
+  installToolbarShortcuts(shortcuts);
+};
+
+/**
+ * The toolbar's Shortcuts: each does what its control does. Refresh always takes the key, even
+ * while a load runs (its button is disabled then), so Mod+Shift+R never reloads the iframe; outside
+ * the Board (a dialog open) its key is swallowed too.
+ */
+const installToolbarShortcuts = (shortcuts: Shortcuts): void => {
+  shortcuts.on('board.projects', () => board.openProjects());
+  shortcuts.on('board.settings', () => showSettings());
+  shortcuts.on('board.refresh', () => {
+    if (!board.busy()) void load();
+  });
+  document.addEventListener('keydown', (e) => {
+    const pressed = bindingOf({ key: e.key, code: e.code, meta: e.metaKey, ctrl: e.ctrlKey, shift: e.shiftKey, alt: e.altKey, platform: shortcuts.platform });
+    if (pressed !== null && sameBinding(pressed, shortcuts.keymap().get('board.refresh').binding)) e.preventDefault();
+  });
 };
 
 const start = (ctx: HostReadyContext): void => {
