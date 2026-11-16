@@ -34,7 +34,9 @@ import { defaultChoice, loadNotice, setupOutcome, type ApiFailure, type NoticeMo
 import { createAgentLoader, createModelLoader, type StartLists } from './models.ts';
 import { createStarter } from './starter.ts';
 import { MODEL_NOTICES, createLimiter, createModelAvailability } from './limiter.ts';
-import { createSuggester } from './suggest.ts';
+import { createSuggester, createTypeClassifier } from './suggest.ts';
+import { taskTypes } from './moves.ts';
+import { MODEL_PICK } from './addTask.ts';
 import { createSummaries } from './summaries.ts';
 import { createBoard, type Board } from './ui/board.ts';
 import { askChoice } from './ui/confirm.ts';
@@ -601,6 +603,8 @@ const summaries = createSummaries({
   },
   loadLanguage: async (projectId, taskId) => (await store.loadCard(projectId, taskId)).summaryLanguage,
   onChange: summaryChanged,
+  // A summary generated now: a task without a type gets one picked too (classifier below).
+  onGenerated: (projectId, task) => void classifier.onSummary(projectId, task),
   availability: smallModel,
 });
 
@@ -614,6 +618,27 @@ const suggester = createSuggester({
   // The suggestion was written: show it (load refreshes an open task modal too).
   onApplied: () => void load(),
   onNotice: (message) => void host.toast({ kind: 'info', message }).catch(() => {}),
+});
+
+/**
+ * The type of a task without one (CLI, agents, GitHub, sub-tasks), picked when its summary is
+ * generated. Only for the shown project (its types and tracker); never for a task the user created
+ * with "No type".
+ */
+const classifier = createTypeClassifier({
+  suggester,
+  enabled: () => suggestEnabled(globalLoaded, state.globalSettings),
+  types: (projectId) =>
+    projectId !== state.projectId || state.settingsFor !== projectId || state.tasks === null
+      ? []
+      : taskTypes(state.tasks, settings().types).filter((t) => t !== MODEL_PICK),
+  explicitNoType: (projectId, taskId) => store.hasNoType(projectId, taskId),
+  target: (projectId) => {
+    const p = state.projects.find((x) => x.id === projectId);
+    if (p === undefined) return null;
+    const api = createApi(host, p.directory);
+    return { get: api.get, setType: api.setType, setState: api.setState };
+  },
 });
 
 /**
@@ -897,11 +922,14 @@ const start = (ctx: HostReadyContext): void => {
       move: async (projectId, from, to) => {
         await saver.idle();
         await store.moveCard(projectId, from, to);
+        await store.moveNoType(projectId, from, to);
       },
       forget: async (projectId, taskId) => {
         await saver.idle();
         await store.forgetCard(projectId, taskId);
+        await store.forgetNoType(projectId, taskId);
       },
+      markNoType: (projectId, taskId) => store.markNoType(projectId, taskId),
     },
     summary: {
       model: (task) =>

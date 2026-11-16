@@ -295,6 +295,26 @@ test('moveCard: a task that got a new id keeps its start options under it; the o
   assert.equal(data.has('card:p1:#2'), false);
 });
 
+test('"No type" marks: kept per project and task, follow a new id, go with the task', async () => {
+  const { data, storage } = fakeStorage();
+  const store = createSettingsStore(storage);
+  assert.equal(STORAGE_KEYS.noType('p1', '#1'), 'noType:p1:#1');
+  assert.equal(await store.hasNoType('p1', '#1'), false);
+  await store.markNoType('p1', '#1');
+  assert.equal(await store.hasNoType('p1', '#1'), true);
+  assert.equal(await store.hasNoType('p2', '#1'), false, 'per project');
+  await store.moveNoType('p1', '#1', '#9');
+  assert.equal(await store.hasNoType('p1', '#1'), false);
+  assert.equal(await store.hasNoType('p1', '#9'), true);
+  await store.moveNoType('p1', '#2', '#3'); // nothing marked: nothing written
+  assert.equal(data.has('noType:p1:#3'), false);
+  await store.forgetNoType('p1', '#9');
+  assert.equal(await store.hasNoType('p1', '#9'), false);
+  assert.equal(data.size, 0);
+  data.set('noType:p1:#5', 'garbage');
+  assert.equal(await store.hasNoType('p1', '#5'), false, 'only a stored true counts');
+});
+
 test('latest saver: one save per key at a time, the newest waiting value next', async () => {
   const saved: string[] = [];
   const errors: unknown[] = [];
