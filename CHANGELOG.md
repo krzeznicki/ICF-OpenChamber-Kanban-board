@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.5
 
 - **Search tasks** filters by field too: `type:research`, `state:needs-info` (the tracker state), `column:backlog` (the column the card is in) and `status:` (the column or the state); `=` works like `:`. A value matches from its start or the start of one of its words (`state:info` finds `needs-info`, `column:prog` In Progress), case and accents ignored. The same key twice means either (`type:bug type:research`); different keys and plain words must all hold. An unknown key (`foo:bar`) is a plain word. `status:` naming a column (`status:ready`, `status:backlog`) means that column only, otherwise the state (`status:info`). While typing, a list under the field completes the word at the caret with keys and values (the board's types, the states, the columns): arrows select a row, then Enter or Tab picks it (with nothing selected they work as usual); Escape closes the list.
 
