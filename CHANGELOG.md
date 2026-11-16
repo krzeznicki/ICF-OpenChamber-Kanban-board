@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.4
 
 - The rail panel, opened beside a chat, shows that chat's session's task once the board has loaded: its modal when there is one, a **Tasks in this session** list (column or state per task, a click opens it) when there are several, and a dismissible info banner when no task on the board is worked on in it. A task counts when the session carries it as an item (path A) or `links.json` names it (path B), unless its card was dragged away after the session started (`sessionFocus.ts`). Once per panel opening; the page and panels without a session are unchanged. A chat in a worktree outside every registered project now shows the project its session belongs to (looked up in the projects' session lists) instead of the first project.
 
