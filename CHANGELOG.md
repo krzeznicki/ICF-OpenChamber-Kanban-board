@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Fixed: a queued card the service started in a new worktree without a model or an agent set never started and ended as **Couldn't start: … OpenChamber could not reach the session. (failed 3 times …)**. OpenCode answers an empty agent list on the first call for a folder it has not loaded, which every new worktree is; OpenChamber then refuses the start with 503. The service used to remove the worktree and try again in another new one on the next drain, so every try failed the same way. It now keeps the worktree and tries `sessions.start` again after 1, 3 and 6 seconds while the answer is 503 (a refusal made before the session exists); any other failure is handled as before.
+
 ## 0.3.5
 
 - **Search tasks** filters by field too: `type:research`, `state:needs-info` (the tracker state), `column:backlog` (the column the card is in) and `status:` (the column or the state); `=` works like `:`. A value matches from its start or the start of one of its words (`state:info` finds `needs-info`, `column:prog` In Progress), case and accents ignored. The same key twice means either (`type:bug type:research`); different keys and plain words must all hold. An unknown key (`foo:bar`) is a plain word. `status:` naming a column (`status:ready`, `status:backlog`) means that column only, otherwise the state (`status:info`). While typing, a list under the field completes the word at the caret with keys and values (the board's types, the states, the columns): arrows select a row, then Enter or Tab picks it (with nothing selected they work as usual); Escape closes the list.

@@ -208,6 +208,39 @@ export type StartDeps = {
   suffix?: () => string;
   /** Where a failed cleanup or an unsaved link is reported; defaults to stderr. */
   log?: (message: string) => void;
+  /** Waits between start attempts (START_RETRY_MS); tests pass one that does not wait. */
+  sleep?: (ms: number) => Promise<void>;
+};
+
+/**
+ * The waits before sessions.start is tried again in the same folder after the host answered 503.
+ * OpenCode answers an empty agent list on the first call for a folder it has not loaded yet, which
+ * every new worktree is; the host then refuses the start with 503 ("Session selection is not
+ * ready", shown to a service as "OpenChamber could not reach the session") when the start names no
+ * model or no agent. The refused call itself loads the folder, so the next one goes through.
+ */
+export const START_RETRY_MS: readonly number[] = [1_000, 3_000, 6_000];
+
+/**
+ * The host's "not ready yet": every 503 it answers to sessions.start is thrown before the session
+ * exists, so trying again cannot start a second one. Other failures (500 included) are not retried.
+ */
+export const notReadyYet = (e: unknown): boolean => (e as { status?: unknown } | null)?.status === 503;
+
+const wait = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** sessions.start, tried again after each START_RETRY_MS wait while the host says it is not ready. */
+const startWhenReady = async (deps: StartDeps, input: Parameters<SessionHost['start']>[0]): Promise<{ sessionId: string; directory: string | null }> => {
+  const sleep = deps.sleep ?? wait;
+  for (const ms of START_RETRY_MS) {
+    try {
+      return await deps.sessions.start(input);
+    } catch (e) {
+      if (!notReadyYet(e)) throw e;
+    }
+    await sleep(ms);
+  }
+  return deps.sessions.start(input);
 };
 
 /**
@@ -250,7 +283,7 @@ export const startSession = async (
   const cwd = worktree ?? input.directory;
   let started: { sessionId: string; directory: string | null };
   try {
-    started = await deps.sessions.start({
+    started = await startWhenReady(deps, {
       prompt: input.prompt,
       directory: cwd,
       title: input.title,

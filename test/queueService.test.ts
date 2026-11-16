@@ -274,6 +274,38 @@ test('a failed queued start goes back to the front with lastError, unreserved, a
   assert.deepEqual(ids((await post(deps, '/queue/list', { directory })).queue), ['b']);
 });
 
+test('a queued worktree start the host refuses with 503 (a new folder is not ready yet) is retried in the same worktree and starts', async (t) => {
+  const { directory, deps, starts } = await setup(t);
+  // The host as it behaves: the first sessions.start in a folder it has not seen answers 503.
+  const seen = new Set<string>();
+  const git: string[][] = [];
+  let n = 0;
+  const cold: Deps = {
+    ...deps,
+    exec: async (_cmd, args) => (git.push([...args]), { code: 0, stdout: '', stderr: '' }),
+    suffix: () => `s${++n}`,
+    sleep: async () => {},
+    sessions: {
+      ...deps.sessions!,
+      start: async (input) => {
+        const dir = input.directory ?? '';
+        if (!seen.has(dir)) {
+          seen.add(dir);
+          throw Object.assign(new Error('OpenChamber could not reach the session.'), { code: 'SESSION_FAILED', status: 503 });
+        }
+        return deps.sessions!.start(input);
+      },
+    },
+  };
+  await post(cold, '/queue/add', { directory, entry: entry('a', { location: 'worktree' }), maxParallel: 1 });
+  await deliver(cold, event('turn-finished', 'ses_x', directory));
+  assert.equal(starts.length, 1);
+  assert.deepEqual((await post(deps, '/queue/list', { directory })).queue, []);
+  // One worktree, kept: not removed and made again for the retry.
+  assert.equal(git.filter((a) => a.includes('add')).length, 1);
+  assert.equal(git.filter((a) => a.includes('remove')).length, 0);
+});
+
 test('after 3 failed starts an entry stays queued with lastError and is not taken again automatically', async (t) => {
   const { directory, deps, logs } = await setup(t);
   let tries = 0;

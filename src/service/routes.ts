@@ -53,6 +53,8 @@ export type Deps = {
   suffix?: () => string;
   /** Where background failures (a queued start after a session event) are reported. */
   log?: (message: string) => void;
+  /** Waits between the attempts of a start the host is not ready for (sessions.ts START_RETRY_MS); tests pass one that does not wait. */
+  sleep?: (ms: number) => Promise<void>;
   /** The project's models (`opencode api GET /api/model`, else `opencode models`), cached; defaults to one cache per `exec` (one per running service). */
   models?: ModelList;
   /** `opencode api GET /api/agent`, cached; defaults to one cache per `exec`, like `models`. */
@@ -172,6 +174,7 @@ const start = async (dir: string, input: Omit<Parameters<typeof startSession>[0]
           linksFile: linksFile(deps),
           ...(deps.suffix ? { suffix: deps.suffix } : {}),
           ...(deps.log ? { log: deps.log } : {}),
+          ...(deps.sleep ? { sleep: deps.sleep } : {}),
         },
       ),
     );
