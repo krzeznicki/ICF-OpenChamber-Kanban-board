@@ -303,7 +303,7 @@ Not done yet; each needs the extension installed in OpenChamber:
 10. The task modal: a Review card whose path B session was archived shows **Session archived** and opens nothing; **Open session** on a live path B session in a worktree opens that session.
 11. Archive done: the confirm counts the done tasks; after it Done is empty in both the rail panel and the full-screen page; **Show archived** and **Unarchive** work; reopening an archived task (CLI or GitHub) brings it back without a click.
 12. Type and state suggested: a task added with both on **Let the model pick** gets a type and state from the Small Model a moment later; one with a type picked keeps it; with no Small Model set, one notice and the form stops offering it.
-13. Search tasks: typing filters the cards in both the rail panel and the page, a sub-task match shows its parent, Escape clears it, and dragging still works while filtered.
+13. Search tasks: typing filters the cards in both the rail panel and the page, a sub-task match shows its parent, Escape clears it, and dragging still works while filtered (a card dropped at the end of a filtered column goes after the hidden cards too).
 
 ## Development
 

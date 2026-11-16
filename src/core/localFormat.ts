@@ -349,12 +349,16 @@ const fieldsTight = (text: string): boolean => {
   return f.length > 1 && f.every((x, i) => i === 0 || x.index === f[i - 1]!.index + 1);
 };
 
-const slugify = (title: string): string => {
-  const slug = title
+/** Lower case without accents (`ł` has no decomposition of its own): "Żądanie" reads "zadanie". Also used by the board's search. */
+export const foldText = (text: string): string =>
+  text
     .replace(/[łŁ]/g, 'l')
     .normalize('NFKD')
     .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase()
+    .toLowerCase();
+
+const slugify = (title: string): string => {
+  const slug = foldText(title)
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
     .slice(0, 60)

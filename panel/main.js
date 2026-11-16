@@ -11734,6 +11734,7 @@ ${ref}`,
     };
   };
   var issueDescription = (text3) => splitParts(text3).description;
+  var foldText = (text3) => text3.replace(/[łŁ]/g, "l").normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 
   // src/panel/taskEdit.ts
   var editableText = (tracker, task) => ({
@@ -13737,14 +13738,13 @@ ${note}` : note;
   };
 
   // src/panel/search.ts
-  var fold = (text3) => text3.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().replace(/ł/g, "l");
   var COLUMN_IDS = COLUMNS.map((c) => c.id);
-  var words = (query) => fold(query).split(/\s+/).filter((w) => w !== "");
+  var words = (query) => foldText(query).split(/\s+/).filter((w) => w !== "");
   var matchesQuery = (task, query, tracker) => {
     const wanted = words(query);
     if (wanted.length === 0) return true;
     const { title, body } = editableText(tracker, task);
-    const text3 = fold(`${title}
+    const text3 = foldText(`${title}
 ${body}`);
     return wanted.every((w) => text3.includes(w));
   };
@@ -14466,13 +14466,13 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
       showArchived: state.showArchived
     });
     auditLinks();
-    if (shown !== model && Object.values(shown).every((cards) => cards.length === 0)) {
+    if (state.tasks.length > 0 && state.query.trim() !== "" && Object.values(shown).every((cards) => cards.length === 0)) {
       board.setStatus({ kind: "empty", title: "No tasks match", body: `Nothing has "${state.query.trim()}" in its title or description.` });
     } else if (state.tasks.length === 0) {
       board.setStatus({
         kind: "empty",
         title: "No tasks yet",
-        body: state.config.tracker === "github" ? "Open issues of this repository show up here. Create one on GitHub or with the task-board CLI, then press Refresh." : "Issues under .scratch/<feature>/issues/ show up here. Create one with the task-board CLI or an agent skill, then press Refresh."
+        body: tracker === "github" ? "Open issues of this repository show up here. Create one on GitHub or with the task-board CLI, then press Refresh." : "Issues under .scratch/<feature>/issues/ show up here. Create one with the task-board CLI or an agent skill, then press Refresh."
       });
     } else {
       board.setStatus({ kind: "none" });

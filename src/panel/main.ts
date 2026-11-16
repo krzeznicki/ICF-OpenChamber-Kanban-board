@@ -355,14 +355,14 @@ const draw = (): void => {
     showArchived: state.showArchived,
   });
   auditLinks();
-  if (shown !== model && Object.values(shown).every((cards) => cards.length === 0)) {
+  if (state.tasks.length > 0 && state.query.trim() !== '' && Object.values(shown).every((cards) => cards.length === 0)) {
     board.setStatus({ kind: 'empty', title: 'No tasks match', body: `Nothing has "${state.query.trim()}" in its title or description.` });
   } else if (state.tasks.length === 0) {
     board.setStatus({
       kind: 'empty',
       title: 'No tasks yet',
       body:
-        state.config.tracker === 'github'
+        tracker === 'github'
           ? 'Open issues of this repository show up here. Create one on GitHub or with the task-board CLI, then press Refresh.'
           : 'Issues under .scratch/<feature>/issues/ show up here. Create one with the task-board CLI or an agent skill, then press Refresh.',
     });

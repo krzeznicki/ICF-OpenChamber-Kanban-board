@@ -1,6 +1,5 @@
-// The board shell: a toolbar (a TEST badge in the test build, project switcher, "Hide sub-tasks", a search field, Add task,
-// Settings, Refresh), a
-// status slot for banners, spinner and empty states, and the five columns. The Done header carries
+// The board shell: a toolbar (a TEST badge in the test build, project switcher, "Hide sub-tasks", a search field,
+// Add task, Settings, Refresh), a status slot for banners, spinner and empty states, and the five columns. The Done header carries
 // "Archive done" and "Show archived (N)" (archive.ts).
 // It draws what main.ts hands it and reports clicks back; it holds no data of its own. Dragging
 // is attached to `columns` by the editor (ui/dnd.ts).
