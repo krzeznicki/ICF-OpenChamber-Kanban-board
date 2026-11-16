@@ -3,7 +3,8 @@
 // user left on "Let the model pick", only for tasks created in this panel's modal, and only where the
 // task still has what it was created with (needs-triage, no type) right before the write: anything
 // the user changed meanwhile stays theirs. A late answer (the panel closed before it came) is dropped
-// on purpose: by then the task may have been changed elsewhere. Pure apart from the injected
+// on purpose: by then the task may have been changed elsewhere. createTypeClassifier (at the end)
+// reuses the same request for the type of any task without one, when its summary is generated. Pure apart from the injected
 // generate, limiter and tracker calls, so it runs under node:test.
 import type { Task, TaskState } from '../core/types.ts';
 import { CREATE_STATES, MODEL_PICK, type AddDraft } from './addTask.ts';
@@ -143,6 +144,11 @@ export type SuggestJob = {
   types: readonly string[];
   asked: Asked;
   target: SuggestTarget;
+  /**
+   * Asked in the background (createTypeClassifier), not from the Add task modal: no notice when the
+   * answer is unusable, and nothing asked while another request for the task is still running.
+   */
+  quiet?: boolean;
 };
 
 export type SuggestOutcome =
@@ -193,9 +199,28 @@ export const createSuggester = (deps: SuggesterDeps) => {
   const model =
     deps.availability ?? createModelAvailability((code) => notice(code === 'NOT_GRANTED' ? NOTICES.NOT_GRANTED : NOTICES.NO_MODEL));
 
+  /** Task ids with a request running, and how many. */
+  const running = new Map<string, number>();
+
   const suggest = async (job: SuggestJob): Promise<SuggestOutcome> => {
     if (!job.asked.type && !job.asked.state) return { kind: 'kept' };
     if (!model.available()) return { kind: 'unavailable' };
+    if (job.quiet === true && running.has(job.taskId)) return { kind: 'kept' };
+    running.set(job.taskId, (running.get(job.taskId) ?? 0) + 1);
+    try {
+      return await ask(job);
+    } finally {
+      const n = (running.get(job.taskId) ?? 1) - 1;
+      if (n === 0) running.delete(job.taskId);
+      else running.set(job.taskId, n);
+    }
+  };
+
+  const ask = async (job: SuggestJob): Promise<SuggestOutcome> => {
+    const failed = (): SuggestOutcome => {
+      if (job.quiet !== true) notice(NOTICES.failed(job.taskId));
+      return { kind: 'failed' };
+    };
     let suggestion: Suggestion | null;
     try {
       const answer = await deps.limit.run(() => {
@@ -218,10 +243,7 @@ export const createSuggester = (deps: SuggesterDeps) => {
       }
       suggestion = null;
     }
-    if (suggestion === null) {
-      notice(NOTICES.failed(job.taskId));
-      return { kind: 'failed' };
-    }
+    if (suggestion === null) return failed();
     if (deps.busy?.(job.taskId) === true) return { kind: 'kept' };
     const written: { type?: string; state?: TaskState } = {};
     try {
@@ -245,8 +267,7 @@ export const createSuggester = (deps: SuggesterDeps) => {
       }
       return { kind: 'applied', ...written };
     } catch {
-      notice(NOTICES.failed(job.taskId));
-      return { kind: 'failed' };
+      return failed();
     } finally {
       if (written.type !== undefined || written.state !== undefined) deps.onApplied?.(job.taskId, written);
     }
@@ -260,3 +281,58 @@ export const createSuggester = (deps: SuggesterDeps) => {
 };
 
 export type Suggester = ReturnType<typeof createSuggester>;
+
+export type TypeClassifierDeps = {
+  /** The panel's suggester: same prompt, parse, generate limit and "Small Model available" flag. */
+  suggester: Suggester;
+  /** "Suggest type and state for new tasks" (settings.ts suggestFields). */
+  enabled: () => boolean;
+  /** The board's types for the project (empty: nothing to pick from). */
+  types: (projectId: string) => readonly string[];
+  /** The user created the task with "No type" in the Add task modal (settings.ts markNoType). */
+  explicitNoType: (projectId: string, taskId: string) => Promise<boolean>;
+  /** The tracker calls for the project; null when it is not available any more. */
+  target: (projectId: string) => SuggestTarget | null;
+};
+
+/**
+ * The type of a task that has none (made by the CLI, an agent, on GitHub, or as a sub-task), asked
+ * of the Small Model when the task's summary was just generated (summaries.ts onGenerated): a
+ * separate request, the same one Add task's "Let the model pick" makes, asking the type only.
+ * Quiet: no notice when the answer is unusable; the task just keeps no type.
+ */
+export const createTypeClassifier = (deps: TypeClassifierDeps) => {
+  /** `projectId\0taskId\0body` already asked this session: once per body, whatever its summaries. */
+  const asked = new Set<string>();
+  const onSummary = async (projectId: string, task: Task): Promise<SuggestOutcome> => {
+    const kept: SuggestOutcome = { kind: 'kept' };
+    if (task.type !== null || task.state === 'done' || task.state === 'wontfix') return kept;
+    if (!deps.enabled()) return kept;
+    const types = deps.types(projectId);
+    if (types.length === 0) return kept;
+    const key = `${projectId}\0${task.id}\0${task.body}`;
+    if (asked.has(key)) return kept;
+    asked.add(key);
+    let noType: boolean;
+    try {
+      noType = await deps.explicitNoType(projectId, task.id);
+    } catch {
+      return kept; // unknown: the user may have chosen "No type"
+    }
+    if (noType) return kept;
+    const target = deps.target(projectId);
+    if (target === null) return kept;
+    return deps.suggester.suggest({
+      taskId: task.id,
+      title: task.title,
+      body: task.body,
+      types,
+      asked: { type: true, state: false },
+      target,
+      quiet: true,
+    });
+  };
+  return { onSummary };
+};
+
+export type TypeClassifier = ReturnType<typeof createTypeClassifier>;

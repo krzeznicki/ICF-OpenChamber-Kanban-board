@@ -273,6 +273,8 @@ export const STORAGE_KEYS = {
   /** The preset sets: edits of the built-in sets and the user's own sets (presets.ts StoredSets). */
   presetSets: 'presetSets',
   card: (projectId: string, taskId: string): string => fit(`card:${projectId}:${taskId}`),
+  /** `true`: the user created the task with "No type" in the Add task modal (suggest.ts createTypeClassifier). */
+  noType: (projectId: string, taskId: string): string => fit(`noType:${projectId}:${taskId}`),
   /** Per project: task id -> when the user dragged the card away from its session (columns.ts Detached). */
   detached: (projectId: string): string => fit(`detached:${projectId}`),
   /** Per project: session ids a host lookup found archived (columns.ts markArchived). */
@@ -383,6 +385,18 @@ export const createSettingsStore = (storage: SettingsStorage) => {
     },
     /** The task was deleted: its start options go. */
     forgetCard: (projectId: string, taskId: string): Promise<void> => storage.delete(STORAGE_KEYS.card(projectId, taskId)),
+    /** The user created the task with "No type" in the Add task modal: the Small Model never picks its type. */
+    markNoType: (projectId: string, taskId: string): Promise<void> => storage.set(STORAGE_KEYS.noType(projectId, taskId), true as never),
+    hasNoType: async (projectId: string, taskId: string): Promise<boolean> =>
+      (await storage.get(STORAGE_KEYS.noType(projectId, taskId))) === true,
+    /** The task got a new id: its "No type" mark follows it. */
+    moveNoType: async (projectId: string, from: string, to: string): Promise<void> => {
+      if ((await storage.get(STORAGE_KEYS.noType(projectId, from))) !== true) return;
+      await storage.set(STORAGE_KEYS.noType(projectId, to), true as never);
+      await storage.delete(STORAGE_KEYS.noType(projectId, from));
+    },
+    /** The task was deleted: its "No type" mark goes. */
+    forgetNoType: (projectId: string, taskId: string): Promise<void> => storage.delete(STORAGE_KEYS.noType(projectId, taskId)),
     loadDetached: async (projectId: string): Promise<Map<string, number>> => parseDetached(await storage.get(STORAGE_KEYS.detached(projectId))),
     saveDetached: (projectId: string, marks: ReadonlyMap<string, number>): Promise<void> =>
       put(STORAGE_KEYS.detached(projectId), Object.fromEntries(marks), marks.size === 0),

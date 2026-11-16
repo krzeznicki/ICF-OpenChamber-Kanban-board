@@ -77,6 +77,11 @@ export type EditorDeps = {
     move: (projectId: string, from: string, to: string) => Promise<void>;
     /** A task was deleted: its stored options go. */
     forget: (projectId: string, taskId: string) => Promise<void>;
+    /**
+     * The task was created with "No type" in the Add task modal: the Small Model never picks its
+     * type (suggest.ts createTypeClassifier). `move` and `forget` take this mark along.
+     */
+    markNoType: (projectId: string, taskId: string) => Promise<void>;
   };
   /** The personal summary in the task modal (summaries.ts). */
   summary: {
@@ -542,6 +547,9 @@ export const createEditor = (deps: EditorDeps) => {
           if (first) {
             first = false;
             saveStart(task.id);
+            if (ctx !== null && draft.type === '') {
+              void deps.start.markNoType(ctx.projectId, task.id).catch((e: unknown) => fail(`Could not keep "No type" for ${task.id}: ${errorText(e)}`));
+            }
           }
           return task;
         },
