@@ -14,7 +14,7 @@ import type { Task } from '../core/types.ts';
 import { archivableIds, archivedShown, archiveTasks, archiveWriteJob, createStorageSync, createPendingMarks, isArchived, mergeArchived, reconcileArchived, unarchiveTask } from './archive.ts';
 import { ApiError, createApi, type Api, type ConfigResult, type ProjectConfig } from './api.ts';
 import { applyOrder, forgetInOrder, pruneOrder, renameInOrder, reorder } from './order.ts';
-import { groupTasks, pruneArchived, resolveSession, sessionForTask, sessionTarget, type Column, type SessionLookup } from './columns.ts';
+import { COLUMNS, groupTasks, pruneArchived, resolveSession, sessionForTask, sessionTarget, type Column, type SessionLookup } from './columns.ts';
 import { createEditor, type Editor } from './edit.ts';
 import { EMPTY_SETS, listPresets, type Preset, type StoredSets } from './presets.ts';
 import {
@@ -39,9 +39,12 @@ import { taskTypes } from './moves.ts';
 import { MODEL_PICK } from './addTask.ts';
 import { filterBoard } from './search.ts';
 import { createSummaries } from './summaries.ts';
+import { createSessionFocus } from './sessionFocus.ts';
 import { createBoard, type Board } from './ui/board.ts';
 import { askChoice } from './ui/confirm.ts';
 import { mountNotice } from './ui/notice.ts';
+import { stateTone } from './ui/detail.ts';
+import { openSessionTasks } from './ui/sessionTasks.ts';
 import { openSettings } from './ui/settingsView.ts';
 import { injectStyles } from './ui/styles.ts';
 import { mountWizard } from './ui/wizard.ts';
@@ -58,7 +61,14 @@ type State = {
   /** The user picked a project in the switcher; stop following the host's directory. */
   pinned: boolean;
   hostDirectory: string | null;
+  /**
+   * The project of the rail panel's session when its directory lies in no registered project (an
+   * OpenChamber worktree): found once in the projects' session lists, used while the host stays there.
+   */
+  sessionProject: { directory: string | null; projectId: string } | null;
   sessions: GuestSessionRecord[];
+  /** The shown project's session snapshot has loaded (or cannot: no sessions grant). */
+  sessionsReady: boolean;
   config: ProjectConfig | null;
   tasks: Task[] | null;
   hideSubtasks: boolean;
@@ -99,7 +109,9 @@ const state: State = {
   projectId: null,
   pinned: false,
   hostDirectory: null,
+  sessionProject: null,
   sessions: [],
+  sessionsReady: false,
   config: null,
   tasks: null,
   hideSubtasks: false,
@@ -355,6 +367,7 @@ const draw = (): void => {
     showArchived: state.showArchived,
   });
   auditLinks();
+  focusSession();
   if (state.tasks.length > 0 && state.query.trim() !== '' && Object.values(shown).every((cards) => cards.length === 0)) {
     board.setStatus({ kind: 'empty', title: 'No tasks match', body: `Nothing has "${state.query.trim()}" in its title or description.` });
   } else if (state.tasks.length === 0) {
@@ -534,6 +547,7 @@ const selectProject = async (id: string | null): Promise<void> => {
   state.projectSettings = {};
   if (id !== null) void loadProjectSettings(id);
   state.sessions = [];
+  state.sessionsReady = false;
   state.detached = new Map();
   state.detachedFor = null;
   state.archived = new Set();
@@ -556,6 +570,7 @@ const selectProject = async (id: string | null): Promise<void> => {
     const unsubscribe = await host.onSessions(id, (snapshot) => {
       if (snapshot.projectId !== state.projectId) return;
       state.sessions = snapshot.sessions;
+      if (snapshot.state !== 'loading') state.sessionsReady = true;
       starter.onSnapshot();
       draw();
     });
@@ -564,6 +579,10 @@ const selectProject = async (id: string | null): Promise<void> => {
     else unsubscribe();
   } catch {
     // Without the sessions grant the board still works; In Progress and Review stay empty.
+    if (state.projectId === id) {
+      state.sessionsReady = true;
+      draw();
+    }
   }
 };
 
@@ -572,7 +591,8 @@ const projectOptions = () => state.projects.map((p) => ({ id: p.id, label: p.nam
 const followHost = (): void => {
   const current = project();
   if (state.pinned && current !== null) return;
-  const next = projectFor(state.hostDirectory) ?? current ?? state.projects[0] ?? null;
+  const bySession = state.sessionProject !== null && state.sessionProject.directory === state.hostDirectory ? state.sessionProject.projectId : null;
+  const next = projectFor(state.hostDirectory) ?? state.projects.find((p) => p.id === bySession) ?? current ?? state.projects[0] ?? null;
   void selectProject(next?.id ?? null);
 };
 
@@ -811,6 +831,60 @@ const unarchive = (taskId: string): void => {
   setArchivedTasks(id, unarchiveTask(archivedTasks(), taskId));
 };
 
+// --- The rail panel opened in a chat: that session's task (sessionFocus.ts) ---
+
+/** Set in start(): the rail panel decides once, for the chat it was opened in; other surfaces never. */
+let sessionFocus = createSessionFocus(null);
+/** The rail panel's session id (set in start()), for finding its project once. */
+let panelSession: string | null = null;
+let sessionProjectAsked = false;
+/** The panel's project is still being settled: projects loading, or the session's project looked up. */
+let projectsSettled = false;
+let sessionProjectPending = false;
+
+/** The panel's chat lies outside every project (a worktree): its session record names the project. */
+const findSessionProject = async (): Promise<void> => {
+  const sessionId = panelSession;
+  if (sessionId === null || sessionProjectAsked || projectFor(state.hostDirectory) !== null) return;
+  sessionProjectAsked = true;
+  sessionProjectPending = true;
+  const directory = state.hostDirectory;
+  const lists = await Promise.allSettled(state.projects.map((p) => host.listSessions(p.id)));
+  sessionProjectPending = false;
+  for (const r of lists) {
+    const record = r.status === 'fulfilled' ? r.value.sessions.find((s) => s.id === sessionId) : undefined;
+    if (record === undefined) continue;
+    state.sessionProject = { directory, projectId: record.projectId };
+    if (!state.pinned && state.hostDirectory === directory && projectFor(directory) === null && state.projectId !== record.projectId) {
+      followHost();
+      return;
+    }
+    break;
+  }
+  draw(); // the shown project stays: the focus may decide now
+};
+
+const focusSession = (): void => {
+  const tasks = state.tasks ?? [];
+  const focus = sessionFocus.next({
+    ready: projectsSettled && !sessionProjectPending && state.view === 'board' && state.tasks !== null && state.sessionsReady,
+    tasks,
+    sessions: state.sessions,
+    links: starter.links(),
+    detached: detached(),
+  });
+  // After the board has drawn: the modal opens over it.
+  if (focus.kind === 'open') queueMicrotask(() => editor.showDetail(focus.taskId));
+  else if (focus.kind === 'none') board.setSessionNote('No task on this board is being worked on in this session.');
+  else if (focus.kind === 'list') {
+    const rows = focus.tasks.map((t) => {
+      const column = state.columns.get(t.id);
+      return { id: t.id, title: t.title, status: COLUMNS.find((c) => c.id === column)?.title ?? t.state, tone: stateTone(t.state) };
+    });
+    queueMicrotask(() => openSessionTasks(rows, (id) => editor.showDetail(id)));
+  }
+};
+
 /**
  * A session known only from a link: looked up in every project's snapshot, so that
  * host.openSession only ever gets an id the host lists, not archived (columns.ts SessionTarget).
@@ -875,6 +949,10 @@ const start = (ctx: HostReadyContext): void => {
     .catch(() => {});
   const root = document.getElementById('root') ?? document.body;
   state.hostDirectory = ctx.directory;
+  if (ctx.surface === 'panel') {
+    panelSession = ctx.session?.id ?? null;
+    sessionFocus = createSessionFocus(panelSession);
+  }
   board = createBoard(root, {
     onProject: (id) => {
       state.pinned = true;
@@ -970,6 +1048,12 @@ const start = (ctx: HostReadyContext): void => {
       if (snapshot.state === 'loading' && snapshot.projects.length === 0) return;
       if (state.projectId !== null && project() === null) state.pinned = false; // the project went away
       followHost();
+      if (snapshot.state !== 'loading') {
+        // Before the lookup starts, so no draw in between decides on the fallback project.
+        projectsSettled = true;
+        void findSessionProject();
+        draw();
+      }
     })
     .catch((e: unknown) => {
       board.setStatus({
