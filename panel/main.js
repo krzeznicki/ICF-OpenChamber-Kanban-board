@@ -2882,6 +2882,8 @@ ${GUEST_UI_LOOK_CSS}`;
       /** Unlinks a sub-task from its parent; like setParent the returned task can have a new id (local: it became a feature). */
       removeParent: (id) => call("POST", "/tasks/unparent", { id }).then((r) => r.task),
       close: (id, withChildren = false) => call("POST", "/tasks/close", { id, withChildren }).then((r) => r.tasks),
+      /** The main checkout `directory` is a git worktree of (itself for a main checkout), or null outside git. */
+      mainCheckout: () => call("POST", "/project/root").then((r) => r.root),
       cliPath: () => call("GET", "/cli").then((r) => r.path),
       /** Path B: the service makes the worktree (if asked) and starts the session with this model, agent and thinking level. */
       startSession: (input) => call("POST", "/sessions/start", input),
@@ -12623,9 +12625,9 @@ ${ref}`,
       dom.card.classList.add("is-dragging");
       document.documentElement.classList.add("kb-dragging");
       container.setPointerCapture(p.pointerId);
-      follow(x, y);
+      follow2(x, y);
     };
-    const follow = (x, y) => {
+    const follow2 = (x, y) => {
       if (dom?.ghost == null) return;
       dom.ghost.style.transform = `translate(${x - dom.dx}px, ${y - dom.dy}px)`;
       const hit = document.elementFromPoint(x, y);
@@ -12643,7 +12645,7 @@ ${ref}`,
       press = next;
       if (before !== null && (next === null || input.type === "down")) cleanup(before.pointerId, before.taskId);
       if (effect.kind === "start" && next !== null && at !== void 0) startGhost(next, at.x, at.y);
-      else if (effect.kind === "follow" && at !== void 0) follow(at.x, at.y);
+      else if (effect.kind === "follow" && at !== void 0) follow2(at.x, at.y);
       else if (effect.kind === "open") callbacks.onOpen(effect.taskId);
       else if (effect.kind === "drop") callbacks.onDrop(effect.taskId, effect.from, effect.to);
       else if (effect.kind === "link") callbacks.onLink(effect.taskId, effect.parentId);
@@ -12893,7 +12895,7 @@ ${ref}`,
     const following = (op) => followingMove(
       op,
       async (from, to) => {
-        follow(from, to);
+        follow2(from, to);
         deps.order.rename(from, to);
         const ctx = deps.start.context();
         if (ctx !== null) await deps.start.move(ctx.projectId, from, to);
@@ -12917,7 +12919,7 @@ ${ref}`,
         followed = null;
       });
     };
-    const follow = (from, to) => {
+    const follow2 = (from, to) => {
       if (detail === null || detail.id !== from) return;
       detail.id = to;
       followed = to;
@@ -13885,6 +13887,55 @@ ${body}`);
     return values.map((v2) => replace2(`${m[1]}${m[2]}${v2}`, true));
   };
 
+  // src/panel/projectFollow.ts
+  var projectContaining = (dir, projects) => {
+    if (dir === null) return null;
+    let best = null;
+    for (const p of projects) {
+      const inside = dir === p.directory || dir.startsWith(p.directory.endsWith("/") ? p.directory : `${p.directory}/`);
+      if (inside && (best === null || p.directory.length > best.directory.length)) best = p;
+    }
+    return best;
+  };
+  var createProjectFollow = (deps) => {
+    const found = /* @__PURE__ */ new Map();
+    const running = /* @__PURE__ */ new Map();
+    const find = async (dir, projects, sessionId) => {
+      const lists2 = await Promise.allSettled(projects.map((p) => deps.listSessions(p.id)));
+      const records = lists2.flatMap((r) => r.status === "fulfilled" ? r.value.sessions : []);
+      const record4 = records.find((s) => s.id === sessionId) ?? records.find((s) => s.directory === dir);
+      if (record4 !== void 0 && projects.some((p) => p.id === record4.projectId)) return record4.projectId;
+      return projectContaining(await deps.mainCheckout(dir), projects)?.id ?? null;
+    };
+    return {
+      /**
+       * The project to show: the one containing the host's directory, else the one looked up for it,
+       * else the one shown now, else the first.
+       */
+      choose: (dir, projects, current) => {
+        const looked = dir === null ? void 0 : found.get(dir);
+        return projectContaining(dir, projects) ?? projects.find((p) => p.id === looked) ?? current ?? projects[0] ?? null;
+      },
+      /** `dir` lies outside every project and has not been looked up with success yet. */
+      unknown: (dir, projects) => dir !== null && projectContaining(dir, projects) === null && !projects.some((p) => p.id === found.get(dir)),
+      /**
+       * Looks up the project of a directory outside every project; `sessionId` is the chat open there,
+       * when known. Resolves to its id (then `choose` answers it) or null; one lookup per directory at a time.
+       */
+      lookup: (dir, projects, sessionId) => {
+        const busy = running.get(dir);
+        if (busy !== void 0) return busy;
+        const job = find(dir, projects, sessionId).catch(() => null).then((id) => {
+          running.delete(dir);
+          if (id !== null) found.set(dir, id);
+          return id;
+        });
+        running.set(dir, job);
+        return job;
+      }
+    };
+  };
+
   // src/panel/sessionFocus.ts
   var tasksForSession = (sessionId, tasks, sessions, links = [], detached2 = /* @__PURE__ */ new Map()) => {
     const since = /* @__PURE__ */ new Map();
@@ -14562,7 +14613,6 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     projectId: null,
     pinned: false,
     hostDirectory: null,
-    sessionProject: null,
     sessions: [],
     sessionsReady: false,
     config: null,
@@ -14740,15 +14790,10 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
       }
     );
   };
-  var projectFor = (dir) => {
-    if (dir === null) return null;
-    let best = null;
-    for (const p of state.projects) {
-      const inside = dir === p.directory || dir.startsWith(p.directory.endsWith("/") ? p.directory : `${p.directory}/`);
-      if (inside && (best === null || p.directory.length > best.directory.length)) best = p;
-    }
-    return best;
-  };
+  var follow = createProjectFollow({
+    listSessions: (id) => host.listSessions(id),
+    mainCheckout: (dir) => createApi(host, dir).mainCheckout()
+  });
   var draw = () => {
     board.setCanAdd(state.view === "board" && state.config !== null);
     state.columns = /* @__PURE__ */ new Map();
@@ -14974,12 +15019,11 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     }
   };
   var projectOptions = () => state.projects.map((p) => ({ id: p.id, label: p.name, hint: p.directory }));
-  var followHost = () => {
+  var followHost = (lookUp = true) => {
     const current = project();
     if (state.pinned && current !== null) return;
-    const bySession = state.sessionProject !== null && state.sessionProject.directory === state.hostDirectory ? state.sessionProject.projectId : null;
-    const next = projectFor(state.hostDirectory) ?? state.projects.find((p) => p.id === bySession) ?? current ?? state.projects[0] ?? null;
-    void selectProject(next?.id ?? null);
+    if (lookUp && findHostProject() && current === null) return;
+    void selectProject(follow.choose(state.hostDirectory, state.projects, current)?.id ?? null);
   };
   var summaryRedraw = false;
   var summaryChanged = () => {
@@ -15153,33 +15197,23 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
   };
   var sessionFocus = createSessionFocus(null);
   var panelSession = null;
-  var sessionProjectAsked = false;
   var projectsSettled = false;
-  var sessionProjectPending = false;
-  var findSessionProject = async () => {
-    const sessionId = panelSession;
-    if (sessionId === null || sessionProjectAsked || projectFor(state.hostDirectory) !== null) return;
-    sessionProjectAsked = true;
-    sessionProjectPending = true;
+  var projectLookups = 0;
+  var findHostProject = () => {
     const directory = state.hostDirectory;
-    const lists2 = await Promise.allSettled(state.projects.map((p) => host.listSessions(p.id)));
-    sessionProjectPending = false;
-    for (const r of lists2) {
-      const record4 = r.status === "fulfilled" ? r.value.sessions.find((s) => s.id === sessionId) : void 0;
-      if (record4 === void 0) continue;
-      state.sessionProject = { directory, projectId: record4.projectId };
-      if (!state.pinned && state.hostDirectory === directory && projectFor(directory) === null && state.projectId !== record4.projectId) {
-        followHost();
-        return;
-      }
-      break;
-    }
-    draw();
+    if (!projectsSettled || !follow.unknown(directory, state.projects)) return false;
+    projectLookups++;
+    void follow.lookup(directory, state.projects, panelSession?.directory === directory ? panelSession.id : null).then(() => {
+      projectLookups--;
+      if (state.hostDirectory === directory) followHost(false);
+      draw();
+    });
+    return true;
   };
   var focusSession = () => {
     const tasks = state.tasks ?? [];
     const focus = sessionFocus.next({
-      ready: projectsSettled && !sessionProjectPending && state.view === "board" && state.tasks !== null && state.sessionsReady,
+      ready: projectsSettled && projectLookups === 0 && state.view === "board" && state.tasks !== null && state.sessionsReady,
       tasks,
       sessions: state.sessions,
       links: starter.links(),
@@ -15239,8 +15273,9 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     const root = document.getElementById("root") ?? document.body;
     state.hostDirectory = ctx.directory;
     if (ctx.surface === "panel") {
-      panelSession = ctx.session?.id ?? null;
-      sessionFocus = createSessionFocus(panelSession);
+      const id = ctx.session?.id ?? null;
+      panelSession = id === null ? null : { id, directory: ctx.directory };
+      sessionFocus = createSessionFocus(id);
     }
     board = createBoard(root, {
       onProject: (id) => {
@@ -15331,12 +15366,10 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
       board.setProjects(projectOptions(), state.projectId);
       if (snapshot.state === "loading" && snapshot.projects.length === 0) return;
       if (state.projectId !== null && project() === null) state.pinned = false;
+      const settled = snapshot.state !== "loading";
+      if (settled) projectsSettled = true;
       followHost();
-      if (snapshot.state !== "loading") {
-        projectsSettled = true;
-        void findSessionProject();
-        draw();
-      }
+      if (settled) draw();
     }).catch((e) => {
       board.setStatus({
         kind: "banner",

@@ -319,7 +319,7 @@ var publishInstructions = async (host2, cliPath, log = console.error) => {
 
 // src/service/routes.ts
 import { stat as stat3 } from "node:fs/promises";
-import { isAbsolute } from "node:path";
+import { basename as basename2, dirname as dirname3, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // src/core/config.ts
@@ -2171,7 +2171,14 @@ var detectRemote = async (dir, exec) => {
   const r = await exec("git", ["remote", "-v"], { cwd: dir });
   return r.code === 0 ? githubRemote(r.stdout) : null;
 };
+var mainCheckout = async (dir, exec) => {
+  const r = await exec("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], { cwd: dir, timeoutMs: 1e4 });
+  const common = r.code === 0 ? r.stdout.trim() : "";
+  return isAbsolute(common) && basename2(common) === ".git" ? dirname3(common) : null;
+};
 var POST = {
+  /** `directory` here is any directory (a session's worktree), not a project's. */
+  "/project/root": async (_body, dir, deps2) => ({ root: await mainCheckout(dir, deps2.exec) }),
   "/config/read": async (_body, dir) => {
     try {
       return { config: await readConfig(dir) };

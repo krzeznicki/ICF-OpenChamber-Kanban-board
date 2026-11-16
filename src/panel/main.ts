@@ -39,6 +39,7 @@ import { taskTypes } from './moves.ts';
 import { MODEL_PICK } from './addTask.ts';
 import { filterBoard, searchSuggestions } from './search.ts';
 import { createSummaries } from './summaries.ts';
+import { createProjectFollow } from './projectFollow.ts';
 import { createSessionFocus } from './sessionFocus.ts';
 import { createBoard, type Board } from './ui/board.ts';
 import { askChoice } from './ui/confirm.ts';
@@ -61,11 +62,6 @@ type State = {
   /** The user picked a project in the switcher; stop following the host's directory. */
   pinned: boolean;
   hostDirectory: string | null;
-  /**
-   * The project of the rail panel's session when its directory lies in no registered project (an
-   * OpenChamber worktree): found once in the projects' session lists, used while the host stays there.
-   */
-  sessionProject: { directory: string | null; projectId: string } | null;
   sessions: GuestSessionRecord[];
   /** The shown project's session snapshot has loaded (or cannot: no sessions grant). */
   sessionsReady: boolean;
@@ -109,7 +105,6 @@ const state: State = {
   projectId: null,
   pinned: false,
   hostDirectory: null,
-  sessionProject: null,
   sessions: [],
   sessionsReady: false,
   config: null,
@@ -326,16 +321,11 @@ const showSettings = (): void => {
   );
 };
 
-/** The registered project that contains `dir`, the longest match winning (worktrees sit inside projects). */
-const projectFor = (dir: string | null): GuestProject | null => {
-  if (dir === null) return null;
-  let best: GuestProject | null = null;
-  for (const p of state.projects) {
-    const inside = dir === p.directory || dir.startsWith(p.directory.endsWith('/') ? p.directory : `${p.directory}/`);
-    if (inside && (best === null || p.directory.length > best.directory.length)) best = p;
-  }
-  return best;
-};
+/** The project of the host's directory, also when that is a worktree outside every project (projectFollow.ts). */
+const follow = createProjectFollow({
+  listSessions: (id) => host.listSessions(id),
+  mainCheckout: (dir) => createApi(host, dir).mainCheckout(),
+});
 
 const draw = (): void => {
   board.setCanAdd(state.view === 'board' && state.config !== null);
@@ -593,12 +583,13 @@ const selectProject = async (id: string | null): Promise<void> => {
 
 const projectOptions = () => state.projects.map((p) => ({ id: p.id, label: p.name, hint: p.directory }));
 
-const followHost = (): void => {
+/** `lookUp` false: the lookup for the host's directory just ended, so it is not started again. */
+const followHost = (lookUp = true): void => {
   const current = project();
   if (state.pinned && current !== null) return;
-  const bySession = state.sessionProject !== null && state.sessionProject.directory === state.hostDirectory ? state.sessionProject.projectId : null;
-  const next = projectFor(state.hostDirectory) ?? state.projects.find((p) => p.id === bySession) ?? current ?? state.projects[0] ?? null;
-  void selectProject(next?.id ?? null);
+  // Nothing shown yet and the answer is on its way: wait for it rather than flash the first project.
+  if (lookUp && findHostProject() && current === null) return;
+  void selectProject(follow.choose(state.hostDirectory, state.projects, current)?.id ?? null);
 };
 
 // --- summaries (summaries.ts) ---
@@ -840,41 +831,35 @@ const unarchive = (taskId: string): void => {
 
 /** Set in start(): the rail panel decides once, for the chat it was opened in; other surfaces never. */
 let sessionFocus = createSessionFocus(null);
-/** The rail panel's session id (set in start()), for finding its project once. */
-let panelSession: string | null = null;
-/** The session's project was looked up already (findSessionProject runs once per frame). */
-let sessionProjectAsked = false;
+/** The rail panel's session id and the directory of its chat (set in start()), for finding its project. */
+let panelSession: { id: string; directory: string | null } | null = null;
 /** The host's project list has loaded: until then the shown project may be a fallback. */
 let projectsSettled = false;
-/** The session's project is being looked up: the focus waits, the shown project may still change. */
-let sessionProjectPending = false;
+/** Lookups of the host directory's project in flight: the focus waits, the shown project may still change. */
+let projectLookups = 0;
 
-/** The panel's chat lies outside every project (a worktree): its session record names the project. */
-const findSessionProject = async (): Promise<void> => {
-  const sessionId = panelSession;
-  if (sessionId === null || sessionProjectAsked || projectFor(state.hostDirectory) !== null) return;
-  sessionProjectAsked = true;
-  sessionProjectPending = true;
+/**
+ * The host's directory lies outside every project (a session's worktree): its project is looked up
+ * and then followed. On the board page too, which has no session of its own to ask about. True
+ * when a lookup is in flight.
+ */
+const findHostProject = (): boolean => {
   const directory = state.hostDirectory;
-  const lists = await Promise.allSettled(state.projects.map((p) => host.listSessions(p.id)));
-  sessionProjectPending = false;
-  for (const r of lists) {
-    const record = r.status === 'fulfilled' ? r.value.sessions.find((s) => s.id === sessionId) : undefined;
-    if (record === undefined) continue;
-    state.sessionProject = { directory, projectId: record.projectId };
-    if (!state.pinned && state.hostDirectory === directory && projectFor(directory) === null && state.projectId !== record.projectId) {
-      followHost();
-      return;
-    }
-    break;
-  }
-  draw(); // the shown project stays: the focus may decide now
+  if (!projectsSettled || !follow.unknown(directory, state.projects)) return false;
+  projectLookups++;
+  void follow.lookup(directory, state.projects, panelSession?.directory === directory ? panelSession.id : null).then(() => {
+    projectLookups--;
+    // followHost keeps a project the user picked; the host moved on meanwhile: its own lookup answers.
+    if (state.hostDirectory === directory) followHost(false);
+    draw(); // the focus may decide now
+  });
+  return true;
 };
 
 const focusSession = (): void => {
   const tasks = state.tasks ?? [];
   const focus = sessionFocus.next({
-    ready: projectsSettled && !sessionProjectPending && state.view === 'board' && state.tasks !== null && state.sessionsReady,
+    ready: projectsSettled && projectLookups === 0 && state.view === 'board' && state.tasks !== null && state.sessionsReady,
     tasks,
     sessions: state.sessions,
     links: starter.links(),
@@ -957,8 +942,9 @@ const start = (ctx: HostReadyContext): void => {
   const root = document.getElementById('root') ?? document.body;
   state.hostDirectory = ctx.directory;
   if (ctx.surface === 'panel') {
-    panelSession = ctx.session?.id ?? null;
-    sessionFocus = createSessionFocus(panelSession);
+    const id = ctx.session?.id ?? null;
+    panelSession = id === null ? null : { id, directory: ctx.directory };
+    sessionFocus = createSessionFocus(id);
   }
   board = createBoard(root, {
     onProject: (id) => {
@@ -1058,13 +1044,11 @@ const start = (ctx: HostReadyContext): void => {
       board.setProjects(projectOptions(), state.projectId);
       if (snapshot.state === 'loading' && snapshot.projects.length === 0) return;
       if (state.projectId !== null && project() === null) state.pinned = false; // the project went away
+      // Before followHost, which starts the lookup of a worktree's project only on a settled list.
+      const settled = snapshot.state !== 'loading';
+      if (settled) projectsSettled = true;
       followHost();
-      if (snapshot.state !== 'loading') {
-        // Before the lookup starts, so no draw in between decides on the fallback project.
-        projectsSettled = true;
-        void findSessionProject();
-        draw();
-      }
+      if (settled) draw();
     })
     .catch((e: unknown) => {
       board.setStatus({

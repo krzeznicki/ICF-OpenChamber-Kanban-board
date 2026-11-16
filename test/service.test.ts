@@ -241,6 +241,30 @@ test('/config/detect on a real repo with and without a remote', async (t) => {
   });
 });
 
+test('/project/root: the main checkout of a worktree, of the checkout itself, and null outside git', async (t) => {
+  const { realExec } = await import('../src/core/exec.ts');
+  const { realpath } = await import('node:fs/promises');
+  const real = { exec: realExec };
+  const root = await realpath(await tmp(t));
+  const repo = join(root, 'repo');
+  const worktree = join(root, 'elsewhere', 'wt');
+  await mkdir(repo);
+  const git = async (...args: string[]): Promise<void> => {
+    const r = await realExec('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', ...args], { cwd: repo });
+    assert.equal(r.code, 0, r.stderr);
+  };
+  await git('init', '-q');
+  await git('commit', '-q', '--allow-empty', '-m', 'init');
+  await git('worktree', 'add', '-q', '-b', 'side', worktree);
+  await mkdir(join(worktree, 'src'));
+
+  assert.deepEqual((await handle('POST', '/project/root', { directory: worktree }, real)).json, { root: repo });
+  assert.deepEqual((await handle('POST', '/project/root', { directory: join(worktree, 'src') }, real)).json, { root: repo });
+  assert.deepEqual((await handle('POST', '/project/root', { directory: repo }, real)).json, { root: repo });
+  const plain = await tmp(t);
+  assert.deepEqual((await handle('POST', '/project/root', { directory: plain }, real)).json, { root: null });
+});
+
 test('/config/init github: a failed gh preflight is 422 and writes nothing', async (t) => {
   const { fakeGh } = await import('./fakeGh.ts');
   const cases: Array<[Parameters<typeof fakeGh>[1], string, RegExp]> = [

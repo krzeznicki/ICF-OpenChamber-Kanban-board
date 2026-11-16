@@ -85,6 +85,8 @@ export const createApi = (host: HostClient, directory: string) => {
     removeParent: (id: string) => call<{ task: Task }>('POST', '/tasks/unparent', { id }).then((r) => r.task),
     close: (id: string, withChildren = false) =>
       call<{ tasks: Task[] }>('POST', '/tasks/close', { id, withChildren }).then((r) => r.tasks),
+    /** The main checkout `directory` is a git worktree of (itself for a main checkout), or null outside git. */
+    mainCheckout: () => call<{ root: string | null }>('POST', '/project/root').then((r) => r.root),
     cliPath: () => call<{ path: string }>('GET', '/cli').then((r) => r.path),
     /** Path B: the service makes the worktree (if asked) and starts the session with this model, agent and thinking level. */
     startSession: (input: {

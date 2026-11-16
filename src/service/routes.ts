@@ -1,7 +1,7 @@
 // The service's routes, free of HTTP: `main.ts` reads the request and writes `{status, json}` back.
 // Every POST body carries `directory`, the project root as an absolute path.
 import { stat } from 'node:fs/promises';
-import { isAbsolute } from 'node:path';
+import { basename, dirname, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readSessionEventRequest, SESSION_EVENTS_PATH, type GuestSessionEventRequest } from '@openchamber/sdk';
 import { readConfig, readLabels, writeConfig, type ProjectConfig } from '../core/config.ts';
@@ -323,7 +323,19 @@ const detectRemote = async (dir: string, exec: Exec): Promise<string | null> => 
   return r.code === 0 ? githubRemote(r.stdout) : null;
 };
 
+/**
+ * The main checkout of the repository `dir` is in: for a worktree (OpenChamber's, or one made with
+ * git) the directory it was made from. Null outside git and for a bare repository.
+ */
+const mainCheckout = async (dir: string, exec: Exec): Promise<string | null> => {
+  const r = await exec('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: dir, timeoutMs: 10_000 });
+  const common = r.code === 0 ? r.stdout.trim() : '';
+  return isAbsolute(common) && basename(common) === '.git' ? dirname(common) : null;
+};
+
 const POST: Record<string, Route> = {
+  /** `directory` here is any directory (a session's worktree), not a project's. */
+  '/project/root': async (_body, dir, deps) => ({ root: await mainCheckout(dir, deps.exec) }),
   '/config/read': async (_body, dir) => {
     try {
       return { config: await readConfig(dir) };
