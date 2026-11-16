@@ -14,7 +14,7 @@ import { openChildren, planMove, taskTypes, type Move } from './moves.ts';
 import { openAddModal, type AddModalHandle, type AddModalStart, type AddResult } from './ui/addModal.ts';
 import type { Board } from './ui/board.ts';
 import { askChoice } from './ui/confirm.ts';
-import { openDetail, type DetailHandle, type DetailModel, type SessionView, type SummaryModel } from './ui/detail.ts';
+import { openDetail, type DetailHandle, type DetailModel, type DetailShortcuts, type SessionView, type SummaryModel } from './ui/detail.ts';
 import { attachDrag } from './ui/dnd.ts';
 import { canLinkUnder, followingMove, linkChoices, linkConfirm, unlinkConfirm } from './link.ts';
 import { deleteConfirm } from './taskDelete.ts';
@@ -83,6 +83,8 @@ export type EditorDeps = {
      */
     markNoType: (projectId: string, taskId: string) => Promise<void>;
   };
+  /** The user closed the task modal (Escape, ×, backdrop) on `taskId`, the task it showed last. */
+  onDetailClosed?: (taskId: string) => void;
   /** The personal summary in the task modal (summaries.ts). */
   summary: {
     model: (task: Task) => SummaryModel | null;
@@ -508,7 +510,10 @@ export const createEditor = (deps: EditorDeps) => {
       },
       onType: (type) => void run(id, (api) => api.setType(id, type)),
       onOpenUrl: (url) => void deps.host.openUrl(url).catch((e: unknown) => fail(errorText(e))),
-      onDismiss: closeDetail,
+      onDismiss: () => {
+        closeDetail();
+        deps.onDetailClosed?.(id);
+      },
     }, { sections: deps.sections.get() });
     detail = { id, handle, onFollow: (next) => (id = next) };
   };
@@ -643,6 +648,18 @@ export const createEditor = (deps: EditorDeps) => {
     openModal: (): 'task' | 'add' | null => (detail !== null ? 'task' : addModal !== null ? 'add' : null),
     /** The task modal (also what a click or Enter on a card opens). */
     showDetail,
+    /** The Open task: its task id now and its Shortcuts (ui/detail.ts), or null when no task modal is open. */
+    openTask: (): { id: string; shortcuts: DetailShortcuts } | null => (detail === null ? null : { id: detail.id, shortcuts: detail.handle.shortcuts }),
+    /**
+     * Mod+↑/↓: the open modal shows `id` instead, once a changed Edit form is discarded. Resolves
+     * false when it stays (kept, or the modal closed meanwhile).
+     */
+    switchDetail: async (id: string): Promise<boolean> => {
+      const from = detail;
+      if (from === null || find(id) === null || !(await from.handle.shortcuts.leave()) || detail !== from) return false;
+      showDetail(id);
+      return true;
+    },
     /** Moves a card to another column through the same path as a drop (Mod+Shift+←/→). */
     moveCard: (id: string, to: Column): void => {
       const from = deps.columnOf(id);

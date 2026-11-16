@@ -13,14 +13,14 @@ const div = (className: string): HTMLDivElement => {
 /**
  * The Task section's Edit form: title, description (markdown), Save and Cancel. The service's
  * error shows in it; `onDone` runs after a successful save or Cancel (the section redraws).
- * `dirty` says whether closing the modal now would lose typed text.
+ * `dirty` says whether closing the modal now would lose typed text; `submit` is Save (Mod+Enter).
  */
 export const mountEditForm = (
   box: HTMLElement,
   initial: EditText,
   onSave: (draft: EditText) => Promise<string | null>,
   onDone: () => void,
-): { dispose: () => void; dirty: () => boolean } => {
+): { dispose: () => void; dirty: () => boolean; submit: () => boolean } => {
   const titleSlot = div('kb-field');
   const bodySlot = div('kb-field');
   const errorSlot = div('kb-add-error');
@@ -89,6 +89,12 @@ export const mountEditForm = (
 
   return {
     dirty: () => editDirty(initial, draft),
+    /** Save, as its button does (Mod+Enter); false while a save is running. */
+    submit: (): boolean => {
+      if (busy) return false;
+      submit();
+      return true;
+    },
     dispose: () => {
       disposed = true;
       errorDispose?.();

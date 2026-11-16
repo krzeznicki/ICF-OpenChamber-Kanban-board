@@ -46,13 +46,14 @@ import { createSessionFocus } from './sessionFocus.ts';
 import { createBoard, type Board } from './ui/board.ts';
 import { askChoice } from './ui/confirm.ts';
 import { mountNotice } from './ui/notice.ts';
-import { stateTone } from './ui/detail.ts';
+import { stateTone, type DetailShortcuts } from './ui/detail.ts';
 import { openSessionTasks } from './ui/sessionTasks.ts';
 import { bindingOf, createKeymap, sameBinding } from './keymap.ts';
-import { createShortcuts, type Shortcuts } from './shortcuts.ts';
+import { createShortcuts, isTextField, type Shortcuts } from './shortcuts.ts';
 import { cheatSheetGroups } from './cheatSheet.ts';
 import { openCheatSheet } from './ui/cheatSheet.ts';
-import { firstSelected, layoutOf } from './navigation.ts';
+import { firstSelected, layoutOf, locate } from './navigation.ts';
+import { columnNeighbour } from './openTask.ts';
 import { createSelection, type Selection } from './ui/selection.ts';
 import { setHintKeymap } from './ui/shortcutHints.ts';
 import { openSettings } from './ui/settingsView.ts';
@@ -1042,9 +1043,45 @@ const installShortcuts = (): void => {
   });
   shortcuts.on('add.create', () => editor.submitAddForm());
   installBoardNavigation();
+  installOpenTaskShortcuts(shortcuts);
   installToolbarShortcuts(shortcuts);
   installCheatSheet(shortcuts);
   applyKeymap();
+};
+
+/**
+ * The Open task's Shortcuts (ui/detail.ts DetailShortcuts): each does what its control does, and
+ * nothing when the control is not shown. The key is still taken then (Mod+S, P, O would save,
+ * print or open a file), except Mod+↑/↓ and Mod+Backspace in a text field, which keep moving the
+ * caret and deleting text there, and Mod+Enter with no Edit form open.
+ */
+const installOpenTaskShortcuts = (shortcuts: Shortcuts): void => {
+  const inText = (e: KeyboardEvent): boolean => {
+    const target = e.composedPath()[0];
+    return target instanceof Element && isTextField(target);
+  };
+  const act = (run: (s: DetailShortcuts) => boolean) => (): boolean => {
+    const open = editor.openTask();
+    if (open !== null) run(open.shortcuts);
+    return true;
+  };
+  const step = (direction: 'prev' | 'next') => (e: KeyboardEvent): boolean => {
+    if (inText(e)) return false;
+    const open = editor.openTask();
+    const id = open === null ? null : columnNeighbour(selection.layout(), open.id, direction);
+    if (id !== null) void editor.switchDetail(id);
+    return true;
+  };
+  shortcuts.on('task.prev', step('prev'));
+  shortcuts.on('task.next', step('next'));
+  shortcuts.on('task.edit', act((s) => s.edit()));
+  shortcuts.on('task.saveEdit', () => editor.openTask()?.shortcuts.saveEdit() ?? false);
+  shortcuts.on('task.addSubtask', act((s) => s.addSubtask()));
+  shortcuts.on('task.pickParent', act((s) => s.pickParent()));
+  const states = ['task.state1', 'task.state2', 'task.state3', 'task.state4', 'task.state5'] as const;
+  states.forEach((id, i) => shortcuts.on(id, act((s) => s.setColumn(i + 1))));
+  shortcuts.on('task.openSession', act((s) => s.openSession()));
+  shortcuts.on('task.delete', (e) => !inText(e) && act((s) => s.delete())());
 };
 
 /**
@@ -1160,6 +1197,10 @@ const start = (ctx: HostReadyContext): void => {
       open: (id) => void host.openSession(id).catch((e: unknown) => fail(`Could not open the session: ${errorText(e)}`)),
     },
     sections: { get: () => sections, save: saveSections },
+    // The task last shown becomes the Selected card when it is drawn (a hidden sub-task is not).
+    onDetailClosed: (taskId) => {
+      if (locate(selection.layout(), taskId) !== null) selection.set(taskId, { focus: true });
+    },
     archive: { has: (task) => isArchived(task, archivedTasks()), unarchive },
     order: { reorder: reorderCard, rename: renameOrdered, forget: forgetOrdered },
     baseTypes: () => settings().types,

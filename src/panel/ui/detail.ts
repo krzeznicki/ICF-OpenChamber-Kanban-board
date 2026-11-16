@@ -11,6 +11,7 @@ import type { Task, TaskState } from '../../core/types.ts';
 import type { Column } from '../columns.ts';
 import { subtaskModes, type SubtaskMode } from '../addTask.ts';
 import { linkChildren, type LinkChoice } from '../link.ts';
+import { columnForDigit } from '../openTask.ts';
 import type { Preset } from '../presets.ts';
 import type { StartLists } from '../models.ts';
 import type { CardOptions, Sections, StartOptions } from '../settings.ts';
@@ -134,7 +135,30 @@ export type DetailOptions = { sections: Sections };
 export const stateTone = (state: TaskState): Tone =>
   state === 'done' ? 'success' : state === 'ready-for-agent' ? 'primary' : state === 'wontfix' ? 'neutral' : state === 'ready-for-human' ? 'info' : 'warning';
 
-export type DetailHandle = { update: (model: DetailModel) => void; dispose: () => void };
+/**
+ * The Open task's Shortcuts (main.ts binds the keys): each does what its control does, and only
+ * while that control is shown and enabled for this task; otherwise it returns false and does nothing.
+ */
+export type DetailShortcuts = {
+  /** The header's Edit. */
+  edit: () => boolean;
+  /** The Edit form's Save. */
+  saveEdit: () => boolean;
+  /** "Add sub-task" opened on its New task tab, with the title focused. */
+  addSubtask: () => boolean;
+  /** The Parent picker opened, with its search focused. */
+  pickParent: () => boolean;
+  /** The "Move to" button of Board column `n` (1-based). */
+  setColumn: (n: number) => boolean;
+  /** The header's "Open session". */
+  openSession: () => boolean;
+  /** The header's Delete (the editor confirms first). */
+  delete: () => boolean;
+  /** Whether the modal may show another task now: true, or after "Discard?" for a changed Edit form. */
+  leave: () => Promise<boolean>;
+};
+
+export type DetailHandle = { update: (model: DetailModel) => void; dispose: () => void; shortcuts: DetailShortcuts };
 
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, className: string, text?: string): HTMLElementTagNameMap[K] => {
   const node = document.createElement(tag);
@@ -147,15 +171,22 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
   // Escape, a backdrop click and the close button: an Edit form with typed text asks first, so a
   // stray key does not throw the draft away.
   let asking = false;
+  /** Whether the modal may close or show another task: true at once, or after "Discard" (false: kept, or already asking). */
+  const confirmLeave = async (): Promise<boolean> => {
+    if (asking) return false;
+    if (editing === null || !editing.dirty()) return true;
+    asking = true;
+    const answer = await askChoice('Discard changes?', 'The title or description you edited has not been saved.', [
+      { id: 'discard', label: 'Discard', variant: 'destructive' },
+    ]);
+    asking = false;
+    return answer === 'discard';
+  };
   const dismiss = (): void => {
     if (asking) return;
     if (editing === null || !editing.dirty()) return callbacks.onDismiss();
-    asking = true;
-    void askChoice('Discard changes?', 'The title or description you edited has not been saved.', [
-      { id: 'discard', label: 'Discard', variant: 'destructive' },
-    ]).then((answer) => {
-      asking = false;
-      if (answer === 'discard') callbacks.onDismiss();
+    void confirmLeave().then((ok) => {
+      if (ok) callbacks.onDismiss();
     });
   };
   const shell = openModalShell({ label: initial.task.title, onDismiss: dismiss });
@@ -322,7 +353,7 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
   /** The Task section redraws only when what it shows changes, so a reload keeps a text selection. */
   let taskKey: string | null = null;
   /** The open Edit form: it stays in place across updates (what is typed survives a poll). */
-  let editing: { taskId: string; dispose: () => void; dirty: () => boolean } | null = null;
+  let editing: { taskId: string; dispose: () => void; dirty: () => boolean; submit: () => boolean } | null = null;
   const stopEdit = (): void => {
     editing?.dispose();
     editing = null;
@@ -421,6 +452,8 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
   let quickKey: string | null = null;
   /** The Parent picker's last failure, shown until the task changes or another pick. */
   let parentError: { taskId: string; message: string } | null = null;
+  /** The Parent picker while it is shown (Pick parent, Mod+P, opens it). */
+  let parentPicker: { slot: HTMLElement; select: ReturnType<typeof mountSelect> } | null = null;
   let quickDisposers: Array<() => void> = [];
   const clearQuick = (): void => {
     for (const d of quickDisposers) d();
@@ -449,29 +482,32 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
       const listed = parent !== null && !parents.some((p) => p.id === parent.id) ? [parent, ...parents] : parents;
       // With a parent set, "No parent" unlinks it.
       const options = parent !== null ? [{ id: NO_PARENT, label: 'No parent', hint: 'Unlink from the parent' }, ...listed] : listed;
-      disposers.push(
-        mountSelect(parentSlot, {
-          label: 'Parent',
-          value: parent?.id ?? null,
-          placeholder: 'No parent',
-          options,
-          searchable: options.length > FILTER_OVER,
-          disabled: m.busy,
-          onChange: (id) => {
-            if (id === task.parentId) return;
-            const taskId = task.id;
-            quickKey = null; // snaps back until the reload shows the new parent
-            parentError = null;
-            const change = id === NO_PARENT ? callbacks.onRemoveParent() : callbacks.onSetParent(id);
-            void change.then((error) => {
-              if (disposed || error === null) return;
-              parentError = { taskId: current?.task.id ?? taskId, message: error };
-              quickKey = null;
-              if (current !== null) drawQuick(current);
-            });
-          },
-        }).dispose,
-      );
+      const select = mountSelect(parentSlot, {
+        label: 'Parent',
+        value: parent?.id ?? null,
+        placeholder: 'No parent',
+        options,
+        searchable: options.length > FILTER_OVER,
+        disabled: m.busy,
+        onChange: (id) => {
+          if (id === task.parentId) return;
+          const taskId = task.id;
+          quickKey = null; // snaps back until the reload shows the new parent
+          parentError = null;
+          const change = id === NO_PARENT ? callbacks.onRemoveParent() : callbacks.onSetParent(id);
+          void change.then((error) => {
+            if (disposed || error === null) return;
+            parentError = { taskId: current?.task.id ?? taskId, message: error };
+            quickKey = null;
+            if (current !== null) drawQuick(current);
+          });
+        },
+      });
+      const picker = { slot: parentSlot, select };
+      parentPicker = picker;
+      disposers.push(select.dispose, () => {
+        if (parentPicker === picker) parentPicker = null;
+      });
     }
     if (parentError !== null) {
       const errorSlot = el('div', 'kb-add-error');
@@ -751,7 +787,61 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
   draw(initial);
   modal.focus();
 
+  /** The model while the header's Edit and Delete are shown and enabled. */
+  const idle = (): DetailModel | null => (current !== null && editing === null && !current.busy ? current : null);
+  const shortcuts: DetailShortcuts = {
+    edit: () => {
+      const m = idle();
+      if (m === null) return false;
+      startEdit(m);
+      return true;
+    },
+    saveEdit: () => editing?.submit() ?? false,
+    addSubtask: () => {
+      const m = current;
+      if (m === null || subSec.box.hidden || !subtaskModes(m.addSubtask, m.links.children.length).includes('new')) return false;
+      adder = { taskId: m.task.id, mode: 'new' };
+      subSec.box.open = true;
+      drawAdder(m);
+      const input = addBox.querySelector('input');
+      input?.focus();
+      input?.scrollIntoView({ block: 'nearest' });
+      return true;
+    },
+    pickParent: () => {
+      const picker = parentPicker;
+      const trigger = picker?.slot.querySelector<HTMLButtonElement>('.oc-sdk-trigger') ?? null;
+      if (picker === null || trigger === null || trigger.disabled) return false;
+      // Searchable even when the list is short, so typing narrows it as the key promises.
+      if (trigger.getAttribute('aria-expanded') !== 'true') {
+        picker.select.update({ searchable: true });
+        trigger.click();
+      }
+      picker.slot.querySelector<HTMLInputElement>('.oc-sdk-popup-search input')?.focus();
+      return true;
+    },
+    setColumn: (n) => {
+      const m = current;
+      const to = m === null || m.busy ? null : columnForDigit(n, m.moves.map((move) => move.to));
+      if (to === null) return false;
+      callbacks.onMove(to);
+      return true;
+    },
+    openSession: () => {
+      if (current?.session !== 'open') return false;
+      callbacks.onOpenSession();
+      return true;
+    },
+    delete: () => {
+      if (idle() === null) return false;
+      callbacks.onDelete();
+      return true;
+    },
+    leave: confirmLeave,
+  };
+
   return {
+    shortcuts,
     update: draw,
     dispose: () => {
       disposed = true;
