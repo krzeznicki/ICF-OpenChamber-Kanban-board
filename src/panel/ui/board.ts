@@ -1,5 +1,5 @@
 // The board shell: a toolbar (a TEST badge in the test build, project switcher, "Hide sub-tasks", a search field,
-// Add task, Settings, Refresh), a status slot for banners, spinner and empty states, and the five columns. The Done header carries
+// Add task, Settings, Refresh; the search completes filters, ui/searchSuggest.ts), a status slot for banners, spinner and empty states, and the five columns. The Done header carries
 // "Archive done" and "Show archived (N)" (archive.ts).
 // It draws what main.ts hands it and reports clicks back; it holds no data of its own. Dragging
 // is attached to `columns` by the editor (ui/dnd.ts).
@@ -8,13 +8,17 @@ import type { BannerTone, SelectOption } from '@openchamber/sdk/ui';
 import type { Task } from '../../core/types.ts';
 import { VARIANT } from '../../core/variant.ts';
 import { COLUMNS, type BoardModel } from '../columns.ts';
+import type { Suggestion } from '../search.ts';
 import { renderCard } from './card.ts';
+import { mountSearchSuggest } from './searchSuggest.ts';
 
 export type BoardCallbacks = {
   onProject: (projectId: string) => void;
   onHideSubtasks: (hide: boolean) => void;
   /** The search field's text, on every keystroke (search.ts filters the cards). */
   onSearch: (query: string) => void;
+  /** The search field's completions for the text and caret (search.ts searchSuggestions). */
+  suggest: (text: string, caret: number) => Suggestion[];
   onRefresh: () => void;
   onAdd: () => void;
   onSettings: () => void;
@@ -92,13 +96,16 @@ export const createBoard = (root: HTMLElement, callbacks: BoardCallbacks) => {
   // The kit's field clears itself on Escape and with its clear button.
   const search = mountSearchField(searchSlot, {
     value: '',
-    placeholder: 'Search tasks',
-    label: 'Search tasks by title or description',
-    onChange: (query) => {
-      search.update({ value: query });
-      callbacks.onSearch(query);
-    },
+    placeholder: 'Search tasks, type:, status:…',
+    label: 'Search tasks by title or description, or filter with type:, state:, status: and column:',
+    onChange: (query) => setQuery(query),
   });
+  const setQuery = (query: string): void => {
+    search.update({ value: query });
+    callbacks.onSearch(query);
+  };
+  // The field's completion list lives as long as the board, like the field itself.
+  mountSearchSuggest(searchSlot, { suggest: callbacks.suggest, apply: setQuery });
   const add = mountButton(addSlot, { label: 'Add task', size: 'sm', disabled: true, onClick: callbacks.onAdd });
   mountButton(settingsSlot, { label: 'Settings', variant: 'outline', size: 'sm', onClick: callbacks.onSettings });
   const refresh = mountButton(refreshSlot, { label: 'Refresh', variant: 'outline', size: 'sm', onClick: callbacks.onRefresh });

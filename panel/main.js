@@ -13270,9 +13270,12 @@ ${ref}`,
     return { launch, settle, reset, starting };
   };
 
+  // src/core/types.ts
+  var TASK_STATES = ["needs-triage", "needs-info", "ready-for-agent", "ready-for-human", "wontfix", "done"];
+
   // src/panel/prompt.ts
   var PROMPT_MAX2 = GUEST_ATTACH_TEXT_MAX;
-  var STATES2 = "needs-triage, needs-info, ready-for-agent, ready-for-human, wontfix, done";
+  var STATES2 = TASK_STATES.join(", ");
   var shellWord = (s) => /^[A-Za-z0-9_./:@%+=,-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`;
   var isGithub = (task) => task.url !== null || /^#\d+$/.test(task.id);
   var rootOf = (projectDir) => projectDir.replace(/\/+$/, "") || "/";
@@ -13738,27 +13741,92 @@ ${note}` : note;
   };
 
   // src/panel/search.ts
-  var COLUMN_IDS = COLUMNS.map((c) => c.id);
-  var words = (query) => foldText(query).split(/\s+/).filter((w) => w !== "");
-  var matchesQuery = (task, query, tracker) => {
-    const wanted = words(query);
-    if (wanted.length === 0) return true;
+  var FILTER_KEYS = ["type", "state", "status", "column"];
+  var FILTER = /^([a-z]+)[:=](.*)$/;
+  var isFilterKey = (key) => FILTER_KEYS.includes(key);
+  var parseQuery = (query) => {
+    const parsed = { words: [], filters: /* @__PURE__ */ new Map() };
+    for (const token of foldText(query).split(/\s+/)) {
+      if (token === "") continue;
+      const m = FILTER.exec(token);
+      const key = m?.[1] ?? "";
+      if (m === null || !isFilterKey(key)) {
+        parsed.words.push(token);
+        continue;
+      }
+      if (m[2] === "") continue;
+      parsed.filters.set(key, [...parsed.filters.get(key) ?? [], m[2]]);
+    }
+    return parsed;
+  };
+  var isBlank = (q) => q.words.length === 0 && q.filters.size === 0;
+  var valueMatches = (value, wanted) => {
+    const v2 = foldText(value);
+    return v2.startsWith(wanted) || v2.split(/[-_\s]+/).some((part) => part.startsWith(wanted));
+  };
+  var anyMatches = (values, wanted) => values.some((v2) => valueMatches(v2, wanted));
+  var columnNames = (column) => {
+    const c = COLUMNS.find((x) => x.id === column);
+    return c === void 0 ? [] : [c.id, c.title];
+  };
+  var namesColumn = (wanted) => COLUMNS.some((c) => anyMatches(columnNames(c.id), wanted));
+  var typeFilter = { holds: (t, _c, w) => t.type !== null && valueMatches(t.type, w), offers: (types) => [...types] };
+  var stateFilter = { holds: (t, _c, w) => valueMatches(t.state, w), offers: () => [...TASK_STATES] };
+  var columnFilter = { holds: (_t, c, w) => anyMatches(columnNames(c), w), offers: () => COLUMNS.map((c) => c.id) };
+  var FILTERS = {
+    type: typeFilter,
+    state: stateFilter,
+    column: columnFilter,
+    status: {
+      holds: (t, c, w) => (namesColumn(w) ? columnFilter : stateFilter).holds(t, c, w),
+      offers: (types) => [.../* @__PURE__ */ new Set([...columnFilter.offers(types), ...stateFilter.offers(types)])]
+    }
+  };
+  var matchesParsed = (task, q, tracker, column) => {
+    for (const [key, wanted] of q.filters) if (!wanted.some((w) => FILTERS[key].holds(task, column, w))) return false;
+    if (q.words.length === 0) return true;
     const { title, body } = editableText(tracker, task);
     const text3 = foldText(`${title}
 ${body}`);
-    return wanted.every((w) => text3.includes(w));
+    return q.words.every((w) => text3.includes(w));
   };
   var filterBoard = (board2, tasks, query, tracker) => {
-    if (words(query).length === 0) return board2;
+    const q = parseQuery(query);
+    if (isBlank(q)) return board2;
+    const drawnIn = /* @__PURE__ */ new Map();
+    for (const { id } of COLUMNS) for (const card of board2[id]) drawnIn.set(card.task.id, id);
     const keep = /* @__PURE__ */ new Set();
     for (const t of tasks) {
-      if (!matchesQuery(t, query, tracker)) continue;
+      if (!matchesParsed(t, q, tracker, drawnIn.get(t.id) ?? null)) continue;
       keep.add(t.id);
       if (t.parentId !== null) keep.add(t.parentId);
     }
     const out = { ...board2 };
-    for (const column of COLUMN_IDS) out[column] = board2[column].filter((c) => keep.has(c.task.id));
+    for (const { id: column } of COLUMNS) out[column] = board2[column].filter((c) => keep.has(c.task.id));
     return out;
+  };
+  var searchSuggestions = (text3, caret, types) => {
+    if (/^\S/.test(text3.slice(caret))) return [];
+    const start2 = text3.slice(0, caret).search(/\S*$/);
+    const word = text3.slice(start2, caret);
+    if (word === "") return [];
+    const replace2 = (label, closed) => {
+      const after = text3.slice(caret);
+      if (!closed) return { label, text: text3.slice(0, start2) + label + after, caret: start2 + label.length };
+      const spaced = /^\s/.test(after) ? after : ` ${after}`;
+      return { label, text: text3.slice(0, start2) + label + spaced, caret: start2 + label.length + 1 };
+    };
+    const m = /^([a-zA-Z]+)([:=])(.*)$/.exec(word);
+    if (m === null) {
+      const typed2 = foldText(word);
+      return FILTER_KEYS.filter((k) => k.startsWith(typed2)).map((k) => replace2(`${k}:`, false));
+    }
+    const key = foldText(m[1]);
+    if (!isFilterKey(key)) return [];
+    const typed = foldText(m[3]);
+    const values = FILTERS[key].offers(types).filter((v2) => typed === "" || valueMatches(v2, typed));
+    if (values.every((v2) => foldText(v2) === typed)) return [];
+    return values.map((v2) => replace2(`${m[1]}${m[2]}${v2}`, true));
   };
 
   // src/panel/sessionFocus.ts
@@ -13884,6 +13952,95 @@ ${body}`);
     };
   };
 
+  // src/panel/ui/searchSuggest.ts
+  var mountSearchSuggest = (slot, deps) => {
+    const input = slot.querySelector("input");
+    if (input === null) return () => {
+    };
+    const list2 = document.createElement("div");
+    list2.className = "kb-search-suggest";
+    list2.id = "kb-search-suggest";
+    list2.setAttribute("role", "listbox");
+    list2.hidden = true;
+    slot.append(list2);
+    input.setAttribute("aria-controls", list2.id);
+    input.setAttribute("aria-autocomplete", "list");
+    let items = [];
+    let active2 = -1;
+    const paint = () => {
+      list2.replaceChildren();
+      list2.hidden = items.length === 0;
+      input.setAttribute("aria-expanded", String(items.length > 0));
+      if (active2 >= 0) input.setAttribute("aria-activedescendant", `kb-search-option-${active2}`);
+      else input.removeAttribute("aria-activedescendant");
+      items.forEach((s, i) => {
+        const row = document.createElement("div");
+        row.className = "kb-search-option";
+        row.id = `kb-search-option-${i}`;
+        row.setAttribute("role", "option");
+        row.setAttribute("aria-selected", String(i === active2));
+        row.textContent = s.label;
+        row.addEventListener("mousedown", (e) => e.preventDefault());
+        row.addEventListener("click", () => pick(s));
+        list2.append(row);
+      });
+    };
+    const close = () => {
+      items = [];
+      active2 = -1;
+      paint();
+    };
+    const refresh = () => {
+      if (document.activeElement !== input) return close();
+      items = deps.suggest(input.value, input.selectionStart ?? input.value.length);
+      active2 = -1;
+      paint();
+    };
+    const pick = (s) => {
+      deps.apply(s.text);
+      input.setSelectionRange(s.caret, s.caret);
+      active2 = -1;
+      refresh();
+    };
+    const onKey = (e) => {
+      if (items.length === 0 || e.isComposing) return;
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        const step2 = e.key === "ArrowDown" ? 1 : -1;
+        active2 = active2 < 0 ? step2 > 0 ? 0 : items.length - 1 : (active2 + step2 + items.length) % items.length;
+        paint();
+      } else if (e.key === "Enter" || e.key === "Tab") {
+        const s = items[active2];
+        if (s === void 0) return;
+        e.preventDefault();
+        pick(s);
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        close();
+      }
+    };
+    const later = () => void requestAnimationFrame(refresh);
+    const onKeyUp = (e) => {
+      if (!["ArrowDown", "ArrowUp", "Enter", "Tab", "Escape"].includes(e.key)) later();
+    };
+    slot.addEventListener("keydown", onKey, true);
+    input.addEventListener("input", later);
+    input.addEventListener("keyup", onKeyUp);
+    input.addEventListener("click", later);
+    input.addEventListener("focus", later);
+    input.addEventListener("blur", close);
+    return () => {
+      slot.removeEventListener("keydown", onKey, true);
+      input.removeEventListener("input", later);
+      input.removeEventListener("keyup", onKeyUp);
+      input.removeEventListener("click", later);
+      input.removeEventListener("focus", later);
+      input.removeEventListener("blur", close);
+      list2.remove();
+    };
+  };
+
   // src/panel/ui/board.ts
   var NO_TOOLS = { archivable: 0, archived: 0, showArchived: false };
   var div3 = (className) => {
@@ -13935,13 +14092,15 @@ ${body}`);
     });
     const search = mountSearchField(searchSlot, {
       value: "",
-      placeholder: "Search tasks",
-      label: "Search tasks by title or description",
-      onChange: (query) => {
-        search.update({ value: query });
-        callbacks.onSearch(query);
-      }
+      placeholder: "Search tasks, type:, status:\u2026",
+      label: "Search tasks by title or description, or filter with type:, state:, status: and column:",
+      onChange: (query) => setQuery(query)
     });
+    const setQuery = (query) => {
+      search.update({ value: query });
+      callbacks.onSearch(query);
+    };
+    mountSearchSuggest(searchSlot, { suggest: callbacks.suggest, apply: setQuery });
     const add2 = mountButton(addSlot, { label: "Add task", size: "sm", disabled: true, onClick: callbacks.onAdd });
     mountButton(settingsSlot, { label: "Settings", variant: "outline", size: "sm", onClick: callbacks.onSettings });
     const refresh = mountButton(refreshSlot, { label: "Refresh", variant: "outline", size: "sm", onClick: callbacks.onRefresh });
@@ -14108,7 +14267,13 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
 .kb { display: flex; flex-direction: column; gap: 0.75rem; padding: 0.75rem; min-height: 100vh; }
 .kb-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 0.75rem; }
 .kb-project { flex: 1 1 12rem; min-width: 10rem; max-width: 22rem; }
-.kb-search { flex: 1 1 12rem; min-width: 9rem; max-width: 20rem; }
+.kb-search { position: relative; flex: 1 1 12rem; min-width: 9rem; max-width: 20rem; }
+.kb-search-suggest { position: absolute; left: 0; right: 0; top: calc(100% + 0.25rem); z-index: 30; display: flex; flex-direction: column;
+  padding: 0.25rem; max-height: 16rem; overflow-y: auto; background: var(--oc-elevated); color: var(--oc-elevated-fg);
+  border: 1px solid var(--oc-border); border-radius: var(--oc-radius); box-shadow: 0 4px 16px rgb(0 0 0 / 0.18); }
+.kb-search-suggest[hidden] { display: none; }
+.kb-search-option { padding: 0.25rem 0.5rem; border-radius: var(--oc-radius); font-family: var(--oc-mono); font-size: 0.85em; cursor: pointer; }
+.kb-search-option:hover, .kb-search-option[aria-selected="true"] { background: var(--oc-muted-surface); }
 .kb-spacer { flex: 1 1 auto; }
 .kb-test-badge { font-weight: 700; font-size: 0.75em; letter-spacing: 0.06em; padding: 0.125rem 0.5rem; border-radius: var(--oc-radius);
   border: 1px solid var(--oc-warning, #d97706); color: var(--oc-warning-text, var(--oc-fg)); }
@@ -14425,6 +14590,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     const loaded = state.settingsFor !== null && state.settingsFor === state.projectId;
     return resolveSettings(state.globalSettings, loaded ? state.projectSettings : {}, loaded ? state.skills?.found ?? [] : []);
   };
+  var boardTypes = () => state.tasks === null ? [] : taskTypes(state.tasks, settings().types).filter((t) => t !== MODEL_PICK);
   var presets = () => {
     const skills = state.settingsFor === state.projectId ? state.skills : null;
     const loaded = state.settingsFor !== null && state.settingsFor === state.projectId;
@@ -14561,7 +14727,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     auditLinks();
     focusSession();
     if (state.tasks.length > 0 && state.query.trim() !== "" && Object.values(shown).every((cards) => cards.length === 0)) {
-      board.setStatus({ kind: "empty", title: "No tasks match", body: `Nothing has "${state.query.trim()}" in its title or description.` });
+      board.setStatus({ kind: "empty", title: "No tasks match", body: `No task on the board matches "${state.query.trim()}".` });
     } else if (state.tasks.length === 0) {
       board.setStatus({
         kind: "empty",
@@ -15035,6 +15201,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
         state.query = query;
         draw();
       },
+      suggest: (text3, caret) => searchSuggestions(text3, caret, boardTypes()),
       onRefresh: () => void load(),
       onAdd: () => editor.showAdd(),
       onSettings: showSettings,

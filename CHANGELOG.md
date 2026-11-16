@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.5
+
+- **Search tasks** filters by field too: `type:research`, `state:needs-info` (the tracker state), `column:backlog` (the column the card is in) and `status:` (the column or the state); `=` works like `:`. A value matches from its start or the start of one of its words (`state:info` finds `needs-info`, `column:prog` In Progress), case and accents ignored. The same key twice means either (`type:bug type:research`); different keys and plain words must all hold. An unknown key (`foo:bar`) is a plain word. `status:` naming a column (`status:ready`, `status:backlog`) means that column only, otherwise the state (`status:info`). While typing, a list under the field completes the word at the caret with keys and values (the board's types, the states, the columns): arrows select a row, then Enter or Tab picks it (with nothing selected they work as usual); Escape closes the list.
+
 ## 0.3.4
 
 - The rail panel, opened beside a chat, shows that chat's session's task once the board has loaded: its modal when there is one, a **Tasks in this session** list (column or state per task, a click opens it) when there are several, and a dismissible info banner when no task on the board is worked on in it. A task counts when the session carries it as an item (path A) or `links.json` names it (path B), unless its card was dragged away after the session started (`sessionFocus.ts`). Once per panel opening; the page and panels without a session are unchanged. A chat in a worktree outside every registered project now shows the project its session belongs to (looked up in the projects' session lists) instead of the first project.
