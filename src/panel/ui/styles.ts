@@ -45,6 +45,8 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
 .kb-loading { display: flex; justify-content: center; padding: 2rem 0; }
 .kb-card { cursor: grab; user-select: none; -webkit-user-select: none; touch-action: none; }
 .kb-card:focus-visible { outline: 2px solid var(--oc-focus); outline-offset: 1px; }
+/* The Selected card (keyboard navigation): marked also while focus is elsewhere, e.g. in the search field. */
+.kb-card.is-selected { border-color: var(--oc-focus); }
 .kb-card.is-dragging { opacity: 0.4; }
 .kb-card.is-busy { opacity: 0.6; cursor: progress; }
 .kb-card.is-archived { opacity: 0.55; border-style: dashed; }
