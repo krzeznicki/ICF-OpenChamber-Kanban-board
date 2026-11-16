@@ -189,10 +189,6 @@ export const createBoard = (root: HTMLElement, callbacks: BoardCallbacks) => {
     },
     /** Refresh is running (its button is disabled), so the Refresh Shortcut does nothing either. */
     busy: () => refreshBusy,
-    /**
-     * Opens the project switcher with its search focused, as a click on it does (the Project
-     * switcher Shortcut). False when it is disabled (no projects); an open one gets its search focused.
-     */
     /** Focuses the search field with its text selected (the Search Shortcut). */
     focusSearch: (): boolean => {
       if (searchInput === null) return false;
@@ -200,6 +196,10 @@ export const createBoard = (root: HTMLElement, callbacks: BoardCallbacks) => {
       searchInput.select();
       return true;
     },
+    /**
+     * Opens the project switcher with its search focused, as a click on it does (the Project
+     * switcher Shortcut). False when it is disabled (no projects); an open one gets its search focused.
+     */
     openProjects: (): boolean => {
       const trigger = projectSlot.querySelector<HTMLButtonElement>('.oc-sdk-trigger');
       if (trigger === null || trigger.disabled) return false;

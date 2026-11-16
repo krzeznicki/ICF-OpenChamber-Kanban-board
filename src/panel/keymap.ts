@@ -203,6 +203,9 @@ const pressOf = (input: PressInput): { binding: Binding; foreign: boolean } | nu
   return { binding: { key, mod: isMod && !foreign, shift: isSymbol(key) ? false : input.shift, alt: input.alt }, foreign };
 };
 
+/** The browser's reload (Mod+R, Mod+Shift+R): it would reload the panel's frame. */
+export const isReloadKey = (b: Binding): boolean => b.mod && !b.alt && b.key === 'r';
+
 export const sameBinding = (a: Binding, b: Binding): boolean =>
   a.key === b.key && a.mod === b.mod && a.shift === b.shift && a.alt === b.alt;
 

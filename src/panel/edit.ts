@@ -14,7 +14,7 @@ import { openChildren, planMove, taskTypes, type Move } from './moves.ts';
 import { openAddModal, type AddModalHandle, type AddModalStart, type AddResult } from './ui/addModal.ts';
 import type { Board } from './ui/board.ts';
 import { askChoice } from './ui/confirm.ts';
-import { openDetail, type DetailHandle, type DetailModel, type DetailShortcuts, type SessionView, type SummaryModel } from './ui/detail.ts';
+import { openDetail, type DetailHandle, type DetailModel, type OpenTaskShortcuts, type SessionView, type SummaryModel } from './ui/detail.ts';
 import { attachDrag } from './ui/dnd.ts';
 import { canLinkUnder, followingMove, linkChoices, linkConfirm, unlinkConfirm } from './link.ts';
 import { deleteConfirm } from './taskDelete.ts';
@@ -83,8 +83,13 @@ export type EditorDeps = {
      */
     markNoType: (projectId: string, taskId: string) => Promise<void>;
   };
-  /** The user closed the task modal (Escape, ×, backdrop) on `taskId`, the task it showed last. */
-  onDetailClosed?: (taskId: string) => void;
+  /** The task modal shows `taskId` (opened, or switched to it). */
+  onOpenTaskShown?: (taskId: string) => void;
+  /**
+   * The task modal closed on `taskId`, the task it showed last: `dismissed` by the user (Escape, ×,
+   * backdrop) or `gone` because the task left the board (deleted, here or elsewhere).
+   */
+  onOpenTaskClosed?: (taskId: string, how: 'dismissed' | 'gone') => void;
   /** The personal summary in the task modal (summaries.ts). */
   summary: {
     model: (task: Task) => SummaryModel | null;
@@ -240,8 +245,11 @@ export const createEditor = (deps: EditorDeps) => {
     if (detail === null) return;
     const task = find(detail.id);
     if (task === null && detail.id === followed) return; // moved; the reload in flight lists it
-    if (task === null) closeDetail();
-    else detail.handle.update(detailModel(task));
+    if (task === null) {
+      const id = detail.id;
+      closeDetail();
+      deps.onOpenTaskClosed?.(id, 'gone');
+    } else detail.handle.update(detailModel(task));
   };
 
   /**
@@ -512,10 +520,11 @@ export const createEditor = (deps: EditorDeps) => {
       onOpenUrl: (url) => void deps.host.openUrl(url).catch((e: unknown) => fail(errorText(e))),
       onDismiss: () => {
         closeDetail();
-        deps.onDetailClosed?.(id);
+        deps.onOpenTaskClosed?.(id, 'dismissed');
       },
     }, { sections: deps.sections.get() });
     detail = { id, handle, onFollow: (next) => (id = next) };
+    deps.onOpenTaskShown?.(id);
   };
 
   const closeAdd = (): void => {
@@ -649,12 +658,12 @@ export const createEditor = (deps: EditorDeps) => {
     /** The task modal (also what a click or Enter on a card opens). */
     showDetail,
     /** The Open task: its task id now and its Shortcuts (ui/detail.ts), or null when no task modal is open. */
-    openTask: (): { id: string; shortcuts: DetailShortcuts } | null => (detail === null ? null : { id: detail.id, shortcuts: detail.handle.shortcuts }),
+    openTask: (): { id: string; shortcuts: OpenTaskShortcuts } | null => (detail === null ? null : { id: detail.id, shortcuts: detail.handle.shortcuts }),
     /**
      * Mod+↑/↓: the open modal shows `id` instead, once a changed Edit form is discarded. Resolves
      * false when it stays (kept, or the modal closed meanwhile).
      */
-    switchDetail: async (id: string): Promise<boolean> => {
+    switchOpenTask: async (id: string): Promise<boolean> => {
       const from = detail;
       if (from === null || find(id) === null || !(await from.handle.shortcuts.leave()) || detail !== from) return false;
       showDetail(id);

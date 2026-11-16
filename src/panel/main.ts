@@ -46,10 +46,10 @@ import { createSessionFocus } from './sessionFocus.ts';
 import { createBoard, type Board } from './ui/board.ts';
 import { askChoice } from './ui/confirm.ts';
 import { mountNotice } from './ui/notice.ts';
-import { stateTone, type DetailShortcuts } from './ui/detail.ts';
+import { stateTone, type OpenTaskShortcuts } from './ui/detail.ts';
 import { openSessionTasks } from './ui/sessionTasks.ts';
-import { bindingOf, createKeymap, sameBinding } from './keymap.ts';
-import { createShortcuts, isTextField, type Shortcuts } from './shortcuts.ts';
+import { createKeymap } from './keymap.ts';
+import { createShortcuts, focusInTextField, type Shortcuts } from './shortcuts.ts';
 import { cheatSheetGroups } from './cheatSheet.ts';
 import { openCheatSheet } from './ui/cheatSheet.ts';
 import { firstSelected, layoutOf, locate } from './navigation.ts';
@@ -968,11 +968,6 @@ const saveSections = (next: Sections): void => {
   saver.save(STORAGE_KEYS.detailSections, () => store.saveSections(next));
 };
 
-/**
- * The panel's Shortcuts (shortcuts.ts). Context, first answer wins: a confirm (askChoice, the start
- * form) or Settings means none, then the task modal, then Add task, then the Board when no other
- * dialog is open.
- */
 /** The "Hide sub-tasks" switch, or Mod+S: the project's "Hide sub-tasks" setting. */
 const setHideSubtasks = (hide: boolean): void => {
   state.hideSubtasks = hide;
@@ -996,6 +991,8 @@ const installBoardNavigation = (): void => {
     editor.showDetail(id);
   });
   const moveSelected = (by: -1 | 1) => (): boolean => {
+    // In a text field (the search) Mod+Shift+←/→ selects text.
+    if (focusInTextField()) return false;
     const id = selection.get();
     const from = id === null ? undefined : state.columns.get(id);
     if (id === null || from === undefined) return false;
@@ -1030,6 +1027,11 @@ const applyKeymap = (): void => {
   setHintKeymap(keymap, shortcuts.platform);
 };
 
+/**
+ * The panel's Shortcuts (shortcuts.ts). Context, first answer wins: the cheat sheet (in front), a
+ * confirm (askChoice, the start form) or Settings means none, then the task modal, then Add task,
+ * then the Board when no other dialog is open.
+ */
 const installShortcuts = (): void => {
   shortcuts = createShortcuts();
   shortcuts.addLayer(() => (document.querySelector('.kb-confirm-backdrop') !== null ? 'none' : null));
@@ -1050,26 +1052,22 @@ const installShortcuts = (): void => {
 };
 
 /**
- * The Open task's Shortcuts (ui/detail.ts DetailShortcuts): each does what its control does, and
+ * The Open task's Shortcuts (ui/detail.ts OpenTaskShortcuts): each does what its control does, and
  * nothing when the control is not shown. The key is still taken then (Mod+S, P, O would save,
  * print or open a file), except Mod+↑/↓ and Mod+Backspace in a text field, which keep moving the
  * caret and deleting text there, and Mod+Enter with no Edit form open.
  */
 const installOpenTaskShortcuts = (shortcuts: Shortcuts): void => {
-  const inText = (e: KeyboardEvent): boolean => {
-    const target = e.composedPath()[0];
-    return target instanceof Element && isTextField(target);
-  };
-  const act = (run: (s: DetailShortcuts) => boolean) => (): boolean => {
+  const act = (run: (s: OpenTaskShortcuts) => boolean) => (): boolean => {
     const open = editor.openTask();
     if (open !== null) run(open.shortcuts);
     return true;
   };
-  const step = (direction: 'prev' | 'next') => (e: KeyboardEvent): boolean => {
-    if (inText(e)) return false;
+  const step = (direction: 'prev' | 'next') => (): boolean => {
+    if (focusInTextField()) return false;
     const open = editor.openTask();
     const id = open === null ? null : columnNeighbour(selection.layout(), open.id, direction);
-    if (id !== null) void editor.switchDetail(id);
+    if (id !== null) void editor.switchOpenTask(id);
     return true;
   };
   shortcuts.on('task.prev', step('prev'));
@@ -1081,13 +1079,13 @@ const installOpenTaskShortcuts = (shortcuts: Shortcuts): void => {
   const states = ['task.state1', 'task.state2', 'task.state3', 'task.state4', 'task.state5'] as const;
   states.forEach((id, i) => shortcuts.on(id, act((s) => s.setColumn(i + 1))));
   shortcuts.on('task.openSession', act((s) => s.openSession()));
-  shortcuts.on('task.delete', (e) => !inText(e) && act((s) => s.delete())());
+  shortcuts.on('task.delete', () => !focusInTextField() && act((s) => s.delete())());
 };
 
 /**
- * The toolbar's Shortcuts: each does what its control does. Refresh always takes the key, even
- * while a load runs (its button is disabled then), so Mod+Shift+R never reloads the iframe; outside
- * the Board (a dialog open) its key is swallowed too.
+ * The toolbar's Shortcuts: each does what its control does. Refresh is reserved (shortcuts.ts): while
+ * its key is the browser's reload it is taken in every context, even while a load runs (its button
+ * is disabled then), so Mod+Shift+R never reloads the iframe.
  */
 const installToolbarShortcuts = (shortcuts: Shortcuts): void => {
   shortcuts.on('board.projects', () => board.openProjects());
@@ -1096,10 +1094,7 @@ const installToolbarShortcuts = (shortcuts: Shortcuts): void => {
   shortcuts.on('board.refresh', () => {
     if (!board.busy()) void load();
   });
-  document.addEventListener('keydown', (e) => {
-    const pressed = bindingOf({ key: e.key, code: e.code, meta: e.metaKey, ctrl: e.ctrlKey, shift: e.shiftKey, alt: e.altKey, platform: shortcuts.platform });
-    if (pressed !== null && sameBinding(pressed, shortcuts.keymap().get('board.refresh').binding)) e.preventDefault();
-  });
+  shortcuts.reserve('board.refresh');
 };
 
 /** `?` on the Board opens the cheat sheet, built from the Keymap now; no Shortcuts while it is open. */
@@ -1197,9 +1192,17 @@ const start = (ctx: HostReadyContext): void => {
       open: (id) => void host.openSession(id).catch((e: unknown) => fail(`Could not open the session: ${errorText(e)}`)),
     },
     sections: { get: () => sections, save: saveSections },
-    // The task last shown becomes the Selected card when it is drawn (a hidden sub-task is not).
-    onDetailClosed: (taskId) => {
-      if (locate(selection.layout(), taskId) !== null) selection.set(taskId, { focus: true });
+    // The Open task is the Selected card while it is drawn (a hidden sub-task is not), so a redraw
+    // that drops it (deleted) falls back to the nearest card in its column.
+    onOpenTaskShown: (taskId) => {
+      if (locate(selection.layout(), taskId) !== null) selection.set(taskId);
+    },
+    // Closed: the task last shown gets focus while it is drawn. When it left the board (deleted),
+    // the card the Selected card fell back to gets it instead (now if the board already redrew,
+    // else on the redraw, which keeps focus on the Selected card).
+    onOpenTaskClosed: (taskId, how) => {
+      const id = locate(selection.layout(), taskId) !== null ? taskId : how === 'gone' ? selection.get() : null;
+      if (id !== null) selection.set(id, { focus: true });
     },
     archive: { has: (task) => isArchived(task, archivedTasks()), unarchive },
     order: { reorder: reorderCard, rename: renameOrdered, forget: forgetOrdered },

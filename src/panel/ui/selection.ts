@@ -5,7 +5,9 @@
 // - After a render, focus returns to the Selected card only when focus was on a card (or lost to
 //   the body) before it and `canFocus` allows it (no dialog open), so a poll never pulls focus out
 //   of the search field, a modal or the host.
+// - dispose removes the focusin listener; the panel has no teardown today, so main.ts never calls it.
 import { keepSelected, locate, nextSelected, type Direction, type Layout, type Selected } from '../navigation.ts';
+import { activeElement } from '../shortcuts.ts';
 
 export type Selection = {
   /** The Selected card's task id, or null. */
@@ -24,8 +26,6 @@ export type Selection = {
   focusOnBoard: () => boolean;
   dispose: () => void;
 };
-
-const activeElement = (): Element | null => document.activeElement;
 
 export const createSelection = (container: HTMLElement, options: { canFocus: () => boolean }): Selection => {
   let selected: Selected | null = null;
@@ -48,6 +48,7 @@ export const createSelection = (container: HTMLElement, options: { canFocus: () 
     if (scroll) el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   };
 
+  /** Focus is on a card of this Board or nowhere (the body, the document). */
   const focusOnBoard = (): boolean => {
     const el = activeElement();
     return el === null || el === document.body || el === document.documentElement || (el instanceof HTMLElement && el.classList.contains('kb-card') && container.contains(el));
@@ -81,8 +82,7 @@ export const createSelection = (container: HTMLElement, options: { canFocus: () 
       return true;
     },
     beforeRender: () => {
-      const el = activeElement();
-      refocus = document.hasFocus() && (el === null || el === document.body || (el instanceof HTMLElement && el.classList.contains('kb-card') && container.contains(el)));
+      refocus = document.hasFocus() && focusOnBoard();
     },
     rendered: (next) => {
       layout = next;

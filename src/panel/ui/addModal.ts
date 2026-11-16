@@ -32,6 +32,7 @@ import { mountCheckList } from './checkList.ts';
 import { askChoice } from './confirm.ts';
 import { FILTER_OVER, openModalShell } from './modal.ts';
 import { mountStartOptions } from './startOptions.ts';
+import { hintLastChild } from './shortcutHints.ts';
 
 export type AddModalModel = {
   tracker: TrackerKind;
@@ -409,6 +410,7 @@ export const openAddModal = (
     if (tone !== null) errorSlot.scrollIntoView({ block: 'nearest' });
   };
   const create = mountButton(actions, { label: 'Create task', size: 'sm', onClick: () => void submit() });
+  hintLastChild(actions, 'add.create', 'Create task');
   let createDisposed = false;
   const cancel = mountButton(actions, { label: 'Cancel', variant: 'outline', size: 'sm', onClick: dismiss });
 
@@ -456,9 +458,10 @@ export const openAddModal = (
     e.preventDefault();
     submit();
   });
-  // Enter in the title creates the task (the kit's buttons are not submit buttons).
+  // Enter in the title creates the task (the kit's buttons are not submit buttons); Mod+Enter is
+  // left to the Create task Shortcut (shortcuts.ts).
   titleSlot.addEventListener('keydown', (e) => {
-    if (e.key !== 'Enter' || e.isComposing) return;
+    if (e.key !== 'Enter' || e.isComposing || e.metaKey || e.ctrlKey) return;
     e.preventDefault();
     submit();
   });

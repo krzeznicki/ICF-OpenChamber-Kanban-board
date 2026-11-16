@@ -7,6 +7,7 @@ import {
   bindingToString,
   createKeymap,
   formatBinding,
+  isReloadKey,
   parseBinding,
   parseOverrides,
   platformOf,
@@ -280,4 +281,12 @@ test('platformOf: macOS and iOS use Cmd', () => {
   assert.equal(platformOf('Win32'), 'other');
   assert.equal(platformOf('Linux x86_64'), 'other');
   assert.equal(platformOf(''), 'other');
+});
+
+test('isReloadKey: Mod+R and Mod+Shift+R are the browser reload; nothing else is', () => {
+  assert.equal(isReloadKey({ key: 'r', mod: true, shift: false, alt: false }), true);
+  assert.equal(isReloadKey({ key: 'r', mod: true, shift: true, alt: false }), true);
+  assert.equal(isReloadKey({ key: 'r', mod: true, shift: false, alt: true }), false);
+  assert.equal(isReloadKey({ key: 'r', mod: false, shift: true, alt: false }), false);
+  assert.equal(isReloadKey({ key: 'j', mod: true, shift: true, alt: false }), false);
 });

@@ -3,6 +3,7 @@
 // it sends are taskEdit.ts.
 import { mountBanner, mountButton, mountTextField } from '@openchamber/sdk/ui';
 import { editDirty, type EditText } from '../taskEdit.ts';
+import { hintLastChild } from './shortcutHints.ts';
 
 const div = (className: string): HTMLDivElement => {
   const d = document.createElement('div');
@@ -51,6 +52,7 @@ export const mountEditForm = (
     },
   });
   const save = mountButton(actions, { label: 'Save', size: 'sm', onClick: () => submit() });
+  hintLastChild(actions, 'task.saveEdit', 'Save');
   const cancel = mountButton(actions, { label: 'Cancel', size: 'sm', variant: 'outline', onClick: () => !busy && onDone() });
 
   const showError = (message: string | null): void => {
@@ -81,8 +83,9 @@ export const mountEditForm = (
       else showError(error);
     });
   };
+  // Enter in the title saves; Mod+Enter is left to the Save edit Shortcut (shortcuts.ts).
   titleSlot.addEventListener('keydown', (e) => {
-    if (e.key !== 'Enter' || e.isComposing) return;
+    if (e.key !== 'Enter' || e.isComposing || e.metaKey || e.ctrlKey) return;
     e.preventDefault();
     submit();
   });
