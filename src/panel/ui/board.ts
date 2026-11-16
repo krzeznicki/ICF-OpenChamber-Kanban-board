@@ -134,6 +134,7 @@ export const createBoard = (root: HTMLElement, callbacks: BoardCallbacks) => {
   hintLastChild(addSlot, 'board.addTask', 'Add task');
   hintLastChild(settingsSlot, 'board.settings', 'Settings');
   hintLastChild(refreshSlot, 'board.refresh', 'Refresh');
+  hintShortcut(searchSlot, 'board.search', 'Search tasks');
   let refreshBusy = false;
 
   let statusDispose: (() => void) | null = null;
