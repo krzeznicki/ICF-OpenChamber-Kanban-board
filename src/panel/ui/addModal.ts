@@ -209,30 +209,6 @@ export const openAddModal = (
   });
   const fixed = [titleField, typeSelect, stateSelect, parentSelect, bodyField];
 
-  /** The shared checkbox list (ui/checkList.ts), locked while the form is. */
-  const mountChecks = (
-    box: HTMLElement,
-    offered: readonly Choice[],
-    filterLabel: string,
-    filter: string,
-    setFilter: (v: string) => void,
-    selected: () => string[],
-    setSelected: (ids: string[]) => void,
-    onPick?: () => void,
-  ): Array<() => void> =>
-    mountCheckList(box, {
-      offered,
-      filterLabel,
-      filter,
-      onFilter: setFilter,
-      selected,
-      onSelected: (ids) => {
-        setSelected(ids);
-        onPick?.();
-      },
-      disabled: locked(),
-    });
-
   // --- blocked by: checkboxes of what addTask.ts offers for this parent ---
   let blockerDisposers: Array<() => void> = [];
   let blockerFilter = '';
@@ -253,8 +229,16 @@ export const openAddModal = (
       blockersBox.append(el('p', 'kb-muted', why));
       return;
     }
-    blockerDisposers = mountChecks(blockersBox, offered, 'Filter blockers', blockerFilter, (v) => (blockerFilter = v), () => d.blockedBy, (ids) => {
-      d.blockedBy = ids;
+    blockerDisposers = mountCheckList(blockersBox, {
+      offered,
+      filterLabel: 'Filter blockers',
+      filter: blockerFilter,
+      onFilter: (v) => (blockerFilter = v),
+      selected: () => d.blockedBy,
+      onSelected: (ids) => {
+        d.blockedBy = ids;
+      },
+      disabled: locked(),
     });
   };
 
@@ -357,18 +341,18 @@ export const openAddModal = (
         model.tracker === 'local' ? 'Moved into the new feature as its tickets once it is created.' : 'Linked as sub-issues of the new issue once it is created.',
       ),
     );
-    existingDisposers = mountChecks(
-      existingBox,
+    existingDisposers = mountCheckList(existingBox, {
       offered,
-      'Filter existing tasks',
-      existingFilter,
-      (v) => (existingFilter = v),
-      () => d.existing,
-      (ids) => {
+      filterLabel: 'Filter existing tasks',
+      filter: existingFilter,
+      onFilter: (v) => (existingFilter = v),
+      selected: () => d.existing,
+      onSelected: (ids) => {
         d.existing = ids;
+        drawStart(); // GitHub: having sub-tasks makes it a parent (orchestrate preset)
       },
-      drawStart, // GitHub: having sub-tasks makes it a parent (orchestrate preset)
-    );
+      disabled: locked(),
+    });
   };
 
   // --- start options: redrawn when what they inherit changes (type, kind, the project's settings) ---

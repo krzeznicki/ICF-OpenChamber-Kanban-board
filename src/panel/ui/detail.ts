@@ -597,6 +597,34 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
       const n = picked().length;
       return n === 0 ? 'Link selected' : `Link ${n} task${n === 1 ? '' : 's'}`;
     };
+    // The button is mounted (detached) before the list, whose picks update its label.
+    const button = mountButton(actions, {
+      label: label(),
+      size: 'xs',
+      loading: linking,
+      disabled: locked || picked().length === 0,
+      onClick: () => {
+        const taskId = task.id;
+        const chosen = offered.filter((c) => picked().includes(c.id));
+        if (linking || chosen.length === 0) return;
+        linking = true;
+        linkError = null;
+        linkKey = null;
+        // Redrawn after this click handler returns: the redraw disposes this button.
+        queueMicrotask(() => {
+          if (!disposed && current !== null) drawLinkChild(current);
+        });
+        void linkChildren(chosen, callbacks.onLinkChild)
+          .catch((e: unknown) => (e instanceof Error ? e.message : String(e)))
+          .then((error) => {
+            linking = false;
+            if (disposed) return;
+            if (error !== null) linkError = { taskId, message: error };
+            linkKey = null;
+            if (current !== null) drawLinkChild(current);
+          });
+      },
+    });
     linkDisposers.push(
       ...mountCheckList(linkBox, {
         offered,
@@ -614,31 +642,9 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
       }),
     );
     linkBox.append(actions, errorSlot);
-    const button = mountButton(actions, {
-      label: label(),
-      size: 'xs',
-      loading: linking,
-      disabled: locked || picked().length === 0,
-      onClick: () => {
-        const taskId = task.id;
-        const chosen = offered.filter((c) => picked().includes(c.id));
-        if (linking || chosen.length === 0) return;
-        linking = true;
-        linkError = null;
-        linkKey = null;
-        if (current !== null) drawLinkChild(current);
-        void linkChildren(chosen, callbacks.onLinkChild).then((error) => {
-          linking = false;
-          if (disposed) return;
-          if (error !== null) linkError = { taskId, message: error };
-          linkKey = null;
-          if (current !== null) drawLinkChild(current);
-        });
-      },
-    });
     linkDisposers.push(button.dispose);
     if (linkError !== null) {
-      linkDisposers.push(mountBanner(errorSlot, { tone: 'error', title: 'Could not link every task', body: linkError.message }).dispose);
+      linkDisposers.push(mountBanner(errorSlot, { tone: 'error', title: 'Could not link the tasks', body: linkError.message }).dispose);
     }
   };
 

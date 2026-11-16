@@ -5637,18 +5637,6 @@ ${ref}`,
       }
     });
     const fixed = [titleField, typeSelect, stateSelect, parentSelect, bodyField];
-    const mountChecks = (box, offered, filterLabel, filter, setFilter, selected, setSelected, onPick) => mountCheckList(box, {
-      offered,
-      filterLabel,
-      filter,
-      onFilter: setFilter,
-      selected,
-      onSelected: (ids) => {
-        setSelected(ids);
-        onPick?.();
-      },
-      disabled: locked()
-    });
     let blockerDisposers = [];
     let blockerFilter = "";
     const drawBlockers = () => {
@@ -5663,8 +5651,16 @@ ${ref}`,
         blockersBox.append(el3("p", "kb-muted", why));
         return;
       }
-      blockerDisposers = mountChecks(blockersBox, offered, "Filter blockers", blockerFilter, (v2) => blockerFilter = v2, () => d.blockedBy, (ids) => {
-        d.blockedBy = ids;
+      blockerDisposers = mountCheckList(blockersBox, {
+        offered,
+        filterLabel: "Filter blockers",
+        filter: blockerFilter,
+        onFilter: (v2) => blockerFilter = v2,
+        selected: () => d.blockedBy,
+        onSelected: (ids) => {
+          d.blockedBy = ids;
+        },
+        disabled: locked()
       });
     };
     let subDisposers = [];
@@ -5761,19 +5757,18 @@ ${ref}`,
           model.tracker === "local" ? "Moved into the new feature as its tickets once it is created." : "Linked as sub-issues of the new issue once it is created."
         )
       );
-      existingDisposers = mountChecks(
-        existingBox,
+      existingDisposers = mountCheckList(existingBox, {
         offered,
-        "Filter existing tasks",
-        existingFilter,
-        (v2) => existingFilter = v2,
-        () => d.existing,
-        (ids) => {
+        filterLabel: "Filter existing tasks",
+        filter: existingFilter,
+        onFilter: (v2) => existingFilter = v2,
+        selected: () => d.existing,
+        onSelected: (ids) => {
           d.existing = ids;
+          drawStart();
         },
-        drawStart
-        // GitHub: having sub-tasks makes it a parent (orchestrate preset)
-      );
+        disabled: locked()
+      });
     };
     let start2 = model.start;
     let startDispose = null;
@@ -12280,6 +12275,30 @@ ${ref}`,
         const n = picked().length;
         return n === 0 ? "Link selected" : `Link ${n} task${n === 1 ? "" : "s"}`;
       };
+      const button2 = mountButton(actions, {
+        label: label(),
+        size: "xs",
+        loading: linking,
+        disabled: locked || picked().length === 0,
+        onClick: () => {
+          const taskId = task.id;
+          const chosen = offered.filter((c) => picked().includes(c.id));
+          if (linking || chosen.length === 0) return;
+          linking = true;
+          linkError = null;
+          linkKey = null;
+          queueMicrotask(() => {
+            if (!disposed && current !== null) drawLinkChild(current);
+          });
+          void linkChildren(chosen, callbacks.onLinkChild).catch((e) => e instanceof Error ? e.message : String(e)).then((error2) => {
+            linking = false;
+            if (disposed) return;
+            if (error2 !== null) linkError = { taskId, message: error2 };
+            linkKey = null;
+            if (current !== null) drawLinkChild(current);
+          });
+        }
+      });
       linkDisposers.push(
         ...mountCheckList(linkBox, {
           offered,
@@ -12297,31 +12316,9 @@ ${ref}`,
         })
       );
       linkBox.append(actions, errorSlot);
-      const button2 = mountButton(actions, {
-        label: label(),
-        size: "xs",
-        loading: linking,
-        disabled: locked || picked().length === 0,
-        onClick: () => {
-          const taskId = task.id;
-          const chosen = offered.filter((c) => picked().includes(c.id));
-          if (linking || chosen.length === 0) return;
-          linking = true;
-          linkError = null;
-          linkKey = null;
-          if (current !== null) drawLinkChild(current);
-          void linkChildren(chosen, callbacks.onLinkChild).then((error2) => {
-            linking = false;
-            if (disposed) return;
-            if (error2 !== null) linkError = { taskId, message: error2 };
-            linkKey = null;
-            if (current !== null) drawLinkChild(current);
-          });
-        }
-      });
       linkDisposers.push(button2.dispose);
       if (linkError !== null) {
-        linkDisposers.push(mountBanner(errorSlot, { tone: "error", title: "Could not link every task", body: linkError.message }).dispose);
+        linkDisposers.push(mountBanner(errorSlot, { tone: "error", title: "Could not link the tasks", body: linkError.message }).dispose);
       }
     };
     let adder = null;
