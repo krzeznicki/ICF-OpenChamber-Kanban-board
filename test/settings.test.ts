@@ -443,3 +443,30 @@ test('summary language: a fresh install summarises in English; a language the us
   await store.saveGlobal({ summary: { language: 'Polish' } });
   assert.equal(resolveSettings(await createSettingsStore(storage).loadGlobal(), {}).summary.language, 'Polish');
 });
+
+// --- Shortcut overrides (keymap.ts) ---
+
+test('shortcut overrides: global only, read defensively, only overrides kept', () => {
+  assert.deepEqual(DEFAULT_SETTINGS.shortcuts, {});
+  assert.deepEqual(resolveSettings({ shortcuts: { 'board.addTask': 'Mod+Shift+a' } }, {}).shortcuts, { 'board.addTask': 'Mod+Shift+a' });
+  // Per-project bindings are out of scope: a project layer cannot change them.
+  assert.deepEqual(resolveSettings({}, { shortcuts: { 'board.addTask': 'Mod+Shift+a' } }).shortcuts, {});
+  assert.deepEqual(
+    parseSettings({ shortcuts: { 'board.addTask': 'Mod+Shift+a', 'board.selectUp': 'Mod+U', 'nope.action': 'Mod+X', 'task.edit': 42 } }),
+    { shortcuts: { 'board.addTask': 'Mod+Shift+a' } },
+  );
+  assert.deepEqual(parseSettings({ shortcuts: 'Mod+A' }), {});
+  assert.deepEqual(parseSettings({ shortcuts: {} }), {});
+});
+
+test('store: shortcut overrides round-trip in the global layer; resetting all deletes them', async () => {
+  const { data, storage } = fakeStorage();
+  const store = createSettingsStore(storage);
+  await store.saveGlobal({ maxParallel: 2, shortcuts: { 'task.edit': 'Mod+Shift+e' } });
+  assert.deepEqual(data.get('settings:global'), { maxParallel: 2, shortcuts: { 'task.edit': 'Mod+Shift+e' } });
+  assert.deepEqual((await store.loadGlobal()).shortcuts, { 'task.edit': 'Mod+Shift+e' });
+  await store.saveGlobal({ maxParallel: 2, shortcuts: {} });
+  assert.deepEqual(data.get('settings:global'), { maxParallel: 2 });
+  await store.saveGlobal({ shortcuts: {} });
+  assert.equal(data.has('settings:global'), false);
+});

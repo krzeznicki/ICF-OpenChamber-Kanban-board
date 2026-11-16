@@ -48,7 +48,9 @@ import { askChoice } from './ui/confirm.ts';
 import { mountNotice } from './ui/notice.ts';
 import { stateTone } from './ui/detail.ts';
 import { openSessionTasks } from './ui/sessionTasks.ts';
-import { createShortcuts } from './shortcuts.ts';
+import { createKeymap } from './keymap.ts';
+import { createShortcuts, type Shortcuts } from './shortcuts.ts';
+import { setHintKeymap } from './ui/shortcutHints.ts';
 import { openSettings } from './ui/settingsView.ts';
 import { injectStyles } from './ui/styles.ts';
 import { mountWizard } from './ui/wizard.ts';
@@ -226,6 +228,7 @@ const presets = (): Preset[] => {
 
 /** After any settings change: the hide switch follows, the board and an open detail redraw. */
 const applySettings = (): void => {
+  applyKeymap();
   const hide = settings().hideChildren;
   if (hide !== state.hideSubtasks) {
     state.hideSubtasks = hide;
@@ -956,8 +959,24 @@ const saveSections = (next: Sections): void => {
  * form) or Settings means none, then the task modal, then Add task, then the Board when no other
  * dialog is open.
  */
+let shortcuts: Shortcuts | null = null;
+/** The bindings last applied (their stored text), so an unrelated settings change does not rebuild the Keymap. */
+let appliedKeys: string | null = null;
+
+/** The user's bindings (global settings) into the dispatcher and every button tooltip, at once. */
+const applyKeymap = (): void => {
+  if (shortcuts === null) return;
+  const overrides = state.globalSettings.shortcuts ?? {};
+  const text = JSON.stringify(overrides);
+  if (text === appliedKeys) return;
+  appliedKeys = text;
+  const keymap = createKeymap(overrides);
+  shortcuts.setKeymap(keymap);
+  setHintKeymap(keymap, shortcuts.platform);
+};
+
 const installShortcuts = (): void => {
-  const shortcuts = createShortcuts();
+  shortcuts = createShortcuts();
   shortcuts.addLayer(() => (document.querySelector('.kb-confirm-backdrop') !== null ? 'none' : null));
   shortcuts.addLayer(() => (settingsSheet !== null ? 'none' : null));
   shortcuts.addLayer(() => editor.openModal());
@@ -968,6 +987,7 @@ const installShortcuts = (): void => {
     editor.showAdd();
   });
   shortcuts.on('add.create', () => editor.submitAddForm());
+  applyKeymap();
 };
 
 const start = (ctx: HostReadyContext): void => {

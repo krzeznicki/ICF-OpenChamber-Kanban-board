@@ -140,6 +140,18 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
 .kb-settings-section { display: flex; flex-direction: column; gap: 0.5rem; }
 .kb-settings-heading { margin: 0; font-size: 0.95em; font-weight: 600; }
 .kb-settings-hint { margin: 0; color: var(--oc-muted); font-size: 0.85em; }
+.kb-keys { display: flex; flex-direction: column; gap: 0.25rem; }
+.kb-keys-context { margin: 0.5rem 0 0; font-size: 0.85em; font-weight: 600; color: var(--oc-muted); }
+.kb-keys-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 0.5rem; min-height: 1.75rem; }
+.kb-keys-action { min-width: 0; overflow-wrap: anywhere; }
+.kb-keys-key { min-width: 5rem; text-align: end; }
+.kb-keys-buttons { display: flex; align-items: center; justify-content: flex-end; gap: 0.25rem; min-width: 8rem; }
+.kb-keys-recording { color: var(--oc-primary); font-size: 0.85em; }
+.kb-keys-note { margin: 0; font-size: 0.85em; }
+.kb-keys-error { color: var(--oc-error-text, var(--oc-fg)); }
+.kb-keys-warning { color: var(--oc-warning-text, var(--oc-fg)); }
+.kb-kbd { font-family: var(--oc-mono, ui-monospace, monospace); font-size: 0.85em; padding: 0.05rem 0.35rem;
+  border: 1px solid var(--oc-border); border-radius: 0.25rem; white-space: nowrap; }
 .kb-inherit { display: flex; flex-direction: column; gap: 0.125rem; }
 .kb-inherit-reset { display: flex; justify-content: flex-end; }
 .kb-preset { display: flex; flex-direction: column; gap: 0.5rem; padding: 0.75rem;
