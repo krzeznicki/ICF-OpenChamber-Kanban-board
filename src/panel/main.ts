@@ -216,6 +216,9 @@ const settings = (): Settings => {
   return resolveSettings(state.globalSettings, loaded ? state.projectSettings : {}, loaded ? (state.skills?.found ?? []) : []);
 };
 
+/** The shown board's types (the settings' and those its tasks use), without the model-pick marker. */
+const boardTypes = (): string[] => (state.tasks === null ? [] : taskTypes(state.tasks, settings().types).filter((t) => t !== MODEL_PICK));
+
 /** The presets a start uses: those of the project's preset set (settings presetSet), with each skill's SKILL.md. */
 const presets = (): Preset[] => {
   const skills = state.settingsFor === state.projectId ? state.skills : null;
@@ -973,7 +976,7 @@ const start = (ctx: HostReadyContext): void => {
       state.query = query;
       draw();
     },
-    suggest: (text, caret) => searchSuggestions(text, caret, state.tasks === null ? [] : taskTypes(state.tasks, settings().types).filter((t) => t !== MODEL_PICK)),
+    suggest: (text, caret) => searchSuggestions(text, caret, boardTypes()),
     onRefresh: () => void load(),
     onAdd: () => editor.showAdd(),
     onSettings: showSettings,

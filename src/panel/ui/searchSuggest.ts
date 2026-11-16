@@ -1,6 +1,7 @@
 // The search field's completions (search.ts searchSuggestions): a list under the field for the word
-// under the caret. Arrow keys move, Enter or Tab picks, Escape closes the list first (a second
-// Escape clears the field, as the kit's search field does), a click picks too.
+// that ends at the caret. Arrow keys select a row, then Enter or Tab picks it (with no row selected
+// both keep their usual meaning); Escape closes the list first (a second Escape clears the field, as
+// the kit's search field does); a click picks too.
 import type { Suggestion } from '../search.ts';
 
 export type SuggestDeps = {
@@ -16,9 +17,12 @@ export const mountSearchSuggest = (slot: HTMLElement, deps: SuggestDeps): (() =>
   if (input === null) return () => {};
   const list = document.createElement('div');
   list.className = 'kb-search-suggest';
+  list.id = 'kb-search-suggest';
   list.setAttribute('role', 'listbox');
   list.hidden = true;
   slot.append(list);
+  input.setAttribute('aria-controls', list.id);
+  input.setAttribute('aria-autocomplete', 'list');
 
   let items: Suggestion[] = [];
   let active = -1;
@@ -26,9 +30,13 @@ export const mountSearchSuggest = (slot: HTMLElement, deps: SuggestDeps): (() =>
   const paint = (): void => {
     list.replaceChildren();
     list.hidden = items.length === 0;
+    input.setAttribute('aria-expanded', String(items.length > 0));
+    if (active >= 0) input.setAttribute('aria-activedescendant', `kb-search-option-${active}`);
+    else input.removeAttribute('aria-activedescendant');
     items.forEach((s, i) => {
       const row = document.createElement('div');
       row.className = 'kb-search-option';
+      row.id = `kb-search-option-${i}`;
       row.setAttribute('role', 'option');
       row.setAttribute('aria-selected', String(i === active));
       row.textContent = s.label;
@@ -48,13 +56,13 @@ export const mountSearchSuggest = (slot: HTMLElement, deps: SuggestDeps): (() =>
   const refresh = (): void => {
     if (document.activeElement !== input) return close();
     items = deps.suggest(input.value, input.selectionStart ?? input.value.length);
-    active = items.length === 0 ? -1 : Math.min(Math.max(active, 0), items.length - 1);
+    // A new list starts with no row selected, so Enter and Tab are not taken over by a word.
+    active = -1;
     paint();
   };
 
   const pick = (s: Suggestion): void => {
     deps.apply(s.text);
-    input.value = s.text;
     input.setSelectionRange(s.caret, s.caret);
     active = -1;
     refresh();
@@ -62,10 +70,11 @@ export const mountSearchSuggest = (slot: HTMLElement, deps: SuggestDeps): (() =>
 
   // Capturing on the slot: runs before the kit's own Escape handler on the input.
   const onKey = (e: KeyboardEvent): void => {
-    if (items.length === 0) return;
+    if (items.length === 0 || e.isComposing) return;
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       e.preventDefault();
-      active = (active + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
+      const step = e.key === 'ArrowDown' ? 1 : -1;
+      active = active < 0 ? (step > 0 ? 0 : items.length - 1) : (active + step + items.length) % items.length;
       paint();
     } else if (e.key === 'Enter' || e.key === 'Tab') {
       const s = items[active];

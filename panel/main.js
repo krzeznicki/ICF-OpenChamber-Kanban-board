@@ -10855,18 +10855,18 @@ ${ref}`,
     const indexes = [0, 0, 0];
     let lastIndex = 0;
     for (; ; ) {
-      const candidates2 = [
+      const candidates = [
         type_schemed[indexes[0]],
         type_fuzzy_email[indexes[1]],
         type_fuzzy_link[indexes[2]]
       ];
-      const candidate = choose(choose(candidates2[0], candidates2[1]), candidates2[2]);
+      const candidate = choose(choose(candidates[0], candidates[1]), candidates[2]);
       if (!candidate) {
         break;
       }
-      if (candidate === candidates2[0]) {
+      if (candidate === candidates[0]) {
         indexes[0]++;
-      } else if (candidate === candidates2[1]) {
+      } else if (candidate === candidates[1]) {
         indexes[1]++;
       } else {
         indexes[2]++;
@@ -13270,9 +13270,12 @@ ${ref}`,
     return { launch, settle, reset, starting };
   };
 
+  // src/core/types.ts
+  var TASK_STATES = ["needs-triage", "needs-info", "ready-for-agent", "ready-for-human", "wontfix", "done"];
+
   // src/panel/prompt.ts
   var PROMPT_MAX2 = GUEST_ATTACH_TEXT_MAX;
-  var STATES2 = "needs-triage, needs-info, ready-for-agent, ready-for-human, wontfix, done";
+  var STATES2 = TASK_STATES.join(", ");
   var shellWord = (s) => /^[A-Za-z0-9_./:@%+=,-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`;
   var isGithub = (task) => task.url !== null || /^#\d+$/.test(task.id);
   var rootOf = (projectDir) => projectDir.replace(/\/+$/, "") || "/";
@@ -13746,12 +13749,13 @@ ${note}` : note;
     for (const token of foldText(query).split(/\s+/)) {
       if (token === "") continue;
       const m = FILTER.exec(token);
-      if (m === null || !isFilterKey(m[1])) {
+      const key = m?.[1] ?? "";
+      if (m === null || !isFilterKey(key)) {
         parsed.words.push(token);
         continue;
       }
       if (m[2] === "") continue;
-      parsed.filters.set(m[1], [...parsed.filters.get(m[1]) ?? [], m[2]]);
+      parsed.filters.set(key, [...parsed.filters.get(key) ?? [], m[2]]);
     }
     return parsed;
   };
@@ -13760,25 +13764,26 @@ ${note}` : note;
     const v2 = foldText(value);
     return v2.startsWith(wanted) || v2.split(/[-_\s]+/).some((part) => part.startsWith(wanted));
   };
-  var filterHolds = (values, wanted) => wanted.some((w) => values.some((v2) => valueMatches(v2, w)));
-  var columnValues = (column) => {
+  var anyMatches = (values, wanted) => values.some((v2) => valueMatches(v2, wanted));
+  var columnNames = (column) => {
     const c = COLUMNS.find((x) => x.id === column);
     return c === void 0 ? [] : [c.id, c.title];
   };
-  var filterValues = (key, task, column) => {
-    switch (key) {
-      case "type":
-        return task.type === null ? [] : [task.type];
-      case "state":
-        return [task.state];
-      case "column":
-        return columnValues(column);
-      case "status":
-        return [...columnValues(column), task.state];
+  var namesColumn = (wanted) => COLUMNS.some((c) => anyMatches(columnNames(c.id), wanted));
+  var typeFilter = { holds: (t, _c, w) => t.type !== null && valueMatches(t.type, w), offers: (types) => [...types] };
+  var stateFilter = { holds: (t, _c, w) => valueMatches(t.state, w), offers: () => [...TASK_STATES] };
+  var columnFilter = { holds: (_t, c, w) => anyMatches(columnNames(c), w), offers: () => COLUMNS.map((c) => c.id) };
+  var FILTERS = {
+    type: typeFilter,
+    state: stateFilter,
+    column: columnFilter,
+    status: {
+      holds: (t, c, w) => (namesColumn(w) ? columnFilter : stateFilter).holds(t, c, w),
+      offers: (types) => [.../* @__PURE__ */ new Set([...columnFilter.offers(types), ...stateFilter.offers(types)])]
     }
   };
   var matchesParsed = (task, q, tracker, column) => {
-    for (const [key, wanted] of q.filters) if (!filterHolds(filterValues(key, task, column), wanted)) return false;
+    for (const [key, wanted] of q.filters) if (!wanted.some((w) => FILTERS[key].holds(task, column, w))) return false;
     if (q.words.length === 0) return true;
     const { title, body } = editableText(tracker, task);
     const text3 = foldText(`${title}
@@ -13800,28 +13805,13 @@ ${body}`);
     for (const { id: column } of COLUMNS) out[column] = board2[column].filter((c) => keep.has(c.task.id));
     return out;
   };
-  var STATES3 = ["needs-triage", "needs-info", "ready-for-agent", "ready-for-human", "wontfix", "done"];
-  var candidates = (key, types) => {
-    const columns = COLUMNS.map((c) => c.id);
-    switch (key) {
-      case "type":
-        return [...types];
-      case "state":
-        return [...STATES3];
-      case "column":
-        return columns;
-      case "status":
-        return [.../* @__PURE__ */ new Set([...columns, ...STATES3])];
-    }
-  };
   var searchSuggestions = (text3, caret, types) => {
+    if (/^\S/.test(text3.slice(caret))) return [];
     const start2 = text3.slice(0, caret).search(/\S*$/);
-    const rest = text3.slice(caret).search(/\s|$/);
-    const end2 = caret + rest;
     const word = text3.slice(start2, caret);
     if (word === "") return [];
     const replace2 = (label, closed) => {
-      const after = text3.slice(end2);
+      const after = text3.slice(caret);
       if (!closed) return { label, text: text3.slice(0, start2) + label + after, caret: start2 + label.length };
       const spaced = /^\s/.test(after) ? after : ` ${after}`;
       return { label, text: text3.slice(0, start2) + label + spaced, caret: start2 + label.length + 1 };
@@ -13834,7 +13824,7 @@ ${body}`);
     const key = foldText(m[1]);
     if (!isFilterKey(key)) return [];
     const typed = foldText(m[3]);
-    const values = candidates(key, types).filter((v2) => typed === "" || valueMatches(v2, typed));
+    const values = FILTERS[key].offers(types).filter((v2) => typed === "" || valueMatches(v2, typed));
     if (values.every((v2) => foldText(v2) === typed)) return [];
     return values.map((v2) => replace2(`${m[1]}${m[2]}${v2}`, true));
   };
@@ -13969,17 +13959,24 @@ ${body}`);
     };
     const list2 = document.createElement("div");
     list2.className = "kb-search-suggest";
+    list2.id = "kb-search-suggest";
     list2.setAttribute("role", "listbox");
     list2.hidden = true;
     slot.append(list2);
+    input.setAttribute("aria-controls", list2.id);
+    input.setAttribute("aria-autocomplete", "list");
     let items = [];
     let active2 = -1;
     const paint = () => {
       list2.replaceChildren();
       list2.hidden = items.length === 0;
+      input.setAttribute("aria-expanded", String(items.length > 0));
+      if (active2 >= 0) input.setAttribute("aria-activedescendant", `kb-search-option-${active2}`);
+      else input.removeAttribute("aria-activedescendant");
       items.forEach((s, i) => {
         const row = document.createElement("div");
         row.className = "kb-search-option";
+        row.id = `kb-search-option-${i}`;
         row.setAttribute("role", "option");
         row.setAttribute("aria-selected", String(i === active2));
         row.textContent = s.label;
@@ -13996,21 +13993,21 @@ ${body}`);
     const refresh = () => {
       if (document.activeElement !== input) return close();
       items = deps.suggest(input.value, input.selectionStart ?? input.value.length);
-      active2 = items.length === 0 ? -1 : Math.min(Math.max(active2, 0), items.length - 1);
+      active2 = -1;
       paint();
     };
     const pick = (s) => {
       deps.apply(s.text);
-      input.value = s.text;
       input.setSelectionRange(s.caret, s.caret);
       active2 = -1;
       refresh();
     };
     const onKey = (e) => {
-      if (items.length === 0) return;
+      if (items.length === 0 || e.isComposing) return;
       if (e.key === "ArrowDown" || e.key === "ArrowUp") {
         e.preventDefault();
-        active2 = (active2 + (e.key === "ArrowDown" ? 1 : -1) + items.length) % items.length;
+        const step2 = e.key === "ArrowDown" ? 1 : -1;
+        active2 = active2 < 0 ? step2 > 0 ? 0 : items.length - 1 : (active2 + step2 + items.length) % items.length;
         paint();
       } else if (e.key === "Enter" || e.key === "Tab") {
         const s = items[active2];
@@ -14097,18 +14094,13 @@ ${body}`);
       value: "",
       placeholder: "Search tasks, type:, status:\u2026",
       label: "Search tasks by title or description, or filter with type:, state:, status: and column:",
-      onChange: (query) => {
-        search.update({ value: query });
-        callbacks.onSearch(query);
-      }
+      onChange: (query) => setQuery(query)
     });
-    mountSearchSuggest(searchSlot, {
-      suggest: callbacks.suggest,
-      apply: (query) => {
-        search.update({ value: query });
-        callbacks.onSearch(query);
-      }
-    });
+    const setQuery = (query) => {
+      search.update({ value: query });
+      callbacks.onSearch(query);
+    };
+    mountSearchSuggest(searchSlot, { suggest: callbacks.suggest, apply: setQuery });
     const add2 = mountButton(addSlot, { label: "Add task", size: "sm", disabled: true, onClick: callbacks.onAdd });
     mountButton(settingsSlot, { label: "Settings", variant: "outline", size: "sm", onClick: callbacks.onSettings });
     const refresh = mountButton(refreshSlot, { label: "Refresh", variant: "outline", size: "sm", onClick: callbacks.onRefresh });
@@ -14598,6 +14590,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     const loaded = state.settingsFor !== null && state.settingsFor === state.projectId;
     return resolveSettings(state.globalSettings, loaded ? state.projectSettings : {}, loaded ? state.skills?.found ?? [] : []);
   };
+  var boardTypes = () => state.tasks === null ? [] : taskTypes(state.tasks, settings().types).filter((t) => t !== MODEL_PICK);
   var presets = () => {
     const skills = state.settingsFor === state.projectId ? state.skills : null;
     const loaded = state.settingsFor !== null && state.settingsFor === state.projectId;
@@ -15208,7 +15201,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
         state.query = query;
         draw();
       },
-      suggest: (text3, caret) => searchSuggestions(text3, caret, state.tasks === null ? [] : taskTypes(state.tasks, settings().types).filter((t) => t !== MODEL_PICK)),
+      suggest: (text3, caret) => searchSuggestions(text3, caret, boardTypes()),
       onRefresh: () => void load(),
       onAdd: () => editor.showAdd(),
       onSettings: showSettings,

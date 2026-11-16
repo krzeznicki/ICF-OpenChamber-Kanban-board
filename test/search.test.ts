@@ -201,3 +201,22 @@ test('searchSuggestions: picking one replaces the word under the caret and moves
   const [last] = searchSuggestions('login type:re', 13, ['research']);
   assert.deepEqual(last, { label: 'type:research', text: 'login type:research ', caret: 20 });
 });
+
+test('filterBoard: status: naming a column means that column only, otherwise the state', () => {
+  const tasks = [task('a'), task('h', {}, 'ready-for-human'), task('i', {}, 'needs-info')];
+  const ready = ids(filterBoard(board(tasks), tasks, 'status:ready', 'github'));
+  assert.deepEqual([ready.ready, ready.backlog], [['a'], []]);
+  assert.deepEqual(ids(filterBoard(board(tasks), tasks, 'status:human', 'github')).backlog, ['h']);
+});
+
+test('filterBoard: with sub-tasks hidden, a column filter does not reach a hidden sub-task', () => {
+  const tasks = [task('p', { kind: 'parent' }), task('k', { parentId: 'p' }, 'needs-info')];
+  assert.deepEqual(ids(filterBoard(board(tasks, true), tasks, 'status:backlog', 'github')).ready, []);
+  assert.deepEqual(ids(filterBoard(board(tasks, true), tasks, 'state:info', 'github')).ready, ['p']);
+});
+
+test('searchSuggestions: nothing while the caret sits inside a word', () => {
+  assert.deepEqual(searchSuggestions('st login', 1, []), []);
+  assert.deepEqual(searchSuggestions('ty', 1, []), []);
+  assert.deepEqual(searchSuggestions('type:re', 6, ['research']), []);
+});

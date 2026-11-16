@@ -2,12 +2,12 @@
 // description as the edit form shows it (a local file without its heading and field lines, so
 // "ready" does not match every Status line); `type:`, `state:`, `column:` and `status:` filter on the
 // task's fields and column, and searchSuggestions completes them. Pure: no DOM, so it runs under node:test.
-import type { Task, TaskState } from '../core/types.ts';
+import type { Task } from '../core/types.ts';
+import { TASK_STATES } from '../core/types.ts';
 import type { TrackerKind } from './addTask.ts';
 import { foldText } from '../core/localFormat.ts';
 import { COLUMNS, type BoardModel, type Column } from './columns.ts';
 import { editableText } from './taskEdit.ts';
-
 
 /** The filter keys a query understands, as `key:value` or `key=value`. */
 export const FILTER_KEYS = ['type', 'state', 'status', 'column'] as const;
@@ -25,12 +25,13 @@ const parseQuery = (query: string): ParsedQuery => {
   for (const token of foldText(query).split(/\s+/)) {
     if (token === '') continue;
     const m = FILTER.exec(token);
-    if (m === null || !isFilterKey(m[1]!)) {
+    const key = m?.[1] ?? '';
+    if (m === null || !isFilterKey(key)) {
       parsed.words.push(token);
       continue;
     }
     if (m[2] === '') continue;
-    parsed.filters.set(m[1] as FilterKey, [...(parsed.filters.get(m[1] as FilterKey) ?? []), m[2]!]);
+    parsed.filters.set(key, [...(parsed.filters.get(key) ?? []), m[2]!]);
   }
   return parsed;
 };
@@ -43,31 +44,40 @@ const valueMatches = (value: string, wanted: string): boolean => {
   return v.startsWith(wanted) || v.split(/[-_\s]+/).some((part) => part.startsWith(wanted));
 };
 
-/** Each filter key holds when any of its values matches (OR); the task's values per key. */
-const filterHolds = (values: readonly string[], wanted: readonly string[]): boolean =>
-  wanted.some((w) => values.some((v) => valueMatches(v, w)));
+const anyMatches = (values: readonly string[], wanted: string): boolean => values.some((v) => valueMatches(v, wanted));
 
 /** A column's id and title ("in_progress", "In Progress"); none for a task not drawn. */
-const columnValues = (column: Column | null): string[] => {
+const columnNames = (column: Column | null): string[] => {
   const c = COLUMNS.find((x) => x.id === column);
   return c === undefined ? [] : [c.id, c.title];
 };
 
-const filterValues = (key: FilterKey, task: Task, column: Column | null): string[] => {
-  switch (key) {
-    case 'type':
-      return task.type === null ? [] : [task.type];
-    case 'state':
-      return [task.state];
-    case 'column':
-      return columnValues(column);
-    case 'status':
-      return [...columnValues(column), task.state];
-  }
+/** `status:` names a column ("ready", "prog") or else a tracker state ("info", "human"). */
+const namesColumn = (wanted: string): boolean => COLUMNS.some((c) => anyMatches(columnNames(c.id), wanted));
+
+/**
+ * Per key: whether a task (drawn in `column`, null: not drawn, as a sub-task hidden by "Hide
+ * sub-tasks") matches one typed value, and the values searchSuggestions offers.
+ */
+type FilterSpec = { holds: (task: Task, column: Column | null, wanted: string) => boolean; offers: (types: readonly string[]) => string[] };
+
+const typeFilter: FilterSpec = { holds: (t, _c, w) => t.type !== null && valueMatches(t.type, w), offers: (types) => [...types] };
+const stateFilter: FilterSpec = { holds: (t, _c, w) => valueMatches(t.state, w), offers: () => [...TASK_STATES] };
+const columnFilter: FilterSpec = { holds: (_t, c, w) => anyMatches(columnNames(c), w), offers: () => COLUMNS.map((c) => c.id) };
+
+const FILTERS: Record<FilterKey, FilterSpec> = {
+  type: typeFilter,
+  state: stateFilter,
+  column: columnFilter,
+  status: {
+    holds: (t, c, w) => (namesColumn(w) ? columnFilter : stateFilter).holds(t, c, w),
+    offers: (types) => [...new Set([...columnFilter.offers(types), ...stateFilter.offers(types)])],
+  },
 };
 
 const matchesParsed = (task: Task, q: ParsedQuery, tracker: TrackerKind, column: Column | null): boolean => {
-  for (const [key, wanted] of q.filters) if (!filterHolds(filterValues(key, task, column), wanted)) return false;
+  // The same key twice means either; different keys must all hold.
+  for (const [key, wanted] of q.filters) if (!wanted.some((w) => FILTERS[key].holds(task, column, w))) return false;
   if (q.words.length === 0) return true;
   const { title, body } = editableText(tracker, task);
   const text = foldText(`${title}\n${body}`);
@@ -75,13 +85,11 @@ const matchesParsed = (task: Task, q: ParsedQuery, tracker: TrackerKind, column:
 };
 
 /**
- * Every word of the query appears in the title or the description, and every filter holds:
- * `type:`, `state:` (the tracker state), `column:` (the board column the task is drawn in, `column`;
- * null: not drawn, so no column filter holds) and `status:` (the column or the state). The same key
- * twice means either. A blank query matches all.
+ * Every word of the query appears in the title or the description, and every filter on the task's
+ * own fields holds (`type:`, `state:`). Column filters need the board: see filterBoard. A blank
+ * query matches all.
  */
-export const matchesQuery = (task: Task, query: string, tracker: TrackerKind, column: Column | null = null): boolean =>
-  matchesParsed(task, parseQuery(query), tracker, column);
+export const matchesQuery = (task: Task, query: string, tracker: TrackerKind): boolean => matchesParsed(task, parseQuery(query), tracker, null);
 
 /**
  * The board with only the cards that match (matchesQuery, `column:` against the column each card is
@@ -105,39 +113,23 @@ export const filterBoard = (board: BoardModel, tasks: readonly Task[], query: st
   return out;
 };
 
-const STATES: readonly TaskState[] = ['needs-triage', 'needs-info', 'ready-for-agent', 'ready-for-human', 'wontfix', 'done'];
-
 /** A completion for the search field: its label, the whole new text, and where the caret goes. */
 export type Suggestion = { label: string; text: string; caret: number };
 
-const candidates = (key: FilterKey, types: readonly string[]): string[] => {
-  const columns = COLUMNS.map((c) => c.id);
-  switch (key) {
-    case 'type':
-      return [...types];
-    case 'state':
-      return [...STATES];
-    case 'column':
-      return columns;
-    case 'status':
-      return [...new Set<string>([...columns, ...STATES])];
-  }
-};
-
 /**
- * What to offer for the word under the caret: the keys it starts (`st` -> `state:`, `status:`), or
+ * What to offer for the word that ends at the caret: the keys it starts (`st` -> `state:`, `status:`), or
  * after `key:` (or `key=`) the values matching what follows (as filters match them). Picking a key
  * leaves the caret after it; picking a value ends the word with a space. `types`: the board's types.
  * Nothing when the only match is what is already typed.
  */
 export const searchSuggestions = (text: string, caret: number, types: readonly string[]): Suggestion[] => {
+  // Only at the end of a word: completing inside one would leave or swallow the rest of it.
+  if (/^\S/.test(text.slice(caret))) return [];
   const start = text.slice(0, caret).search(/\S*$/);
-  const rest = text.slice(caret).search(/\s|$/);
-  const end = caret + rest;
   const word = text.slice(start, caret);
   if (word === '') return [];
   const replace = (label: string, closed: boolean): Suggestion => {
-    const after = text.slice(end);
+    const after = text.slice(caret);
     if (!closed) return { label, text: text.slice(0, start) + label + after, caret: start + label.length };
     const spaced = /^\s/.test(after) ? after : ` ${after}`;
     return { label, text: text.slice(0, start) + label + spaced, caret: start + label.length + 1 };
@@ -150,7 +142,7 @@ export const searchSuggestions = (text: string, caret: number, types: readonly s
   const key = foldText(m[1]!);
   if (!isFilterKey(key)) return [];
   const typed = foldText(m[3]!);
-  const values = candidates(key, types).filter((v) => typed === '' || valueMatches(v, typed));
+  const values = FILTERS[key].offers(types).filter((v) => typed === '' || valueMatches(v, typed));
   if (values.every((v) => foldText(v) === typed)) return [];
   return values.map((v) => replace(`${m[1]}${m[2]}${v}`, true));
 };

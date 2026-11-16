@@ -6,6 +6,9 @@ export type TaskState =
   | 'wontfix'
   | 'done';
 
+/** Every TaskState, in workflow order. */
+export const TASK_STATES: readonly TaskState[] = ['needs-triage', 'needs-info', 'ready-for-agent', 'ready-for-human', 'wontfix', 'done'];
+
 export type TaskKind = 'parent' | 'ticket';
 
 export type Task = {

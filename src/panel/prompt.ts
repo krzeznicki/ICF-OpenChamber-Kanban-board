@@ -4,12 +4,12 @@
 // paths of the skills a skills text uses). The whole text stays within the
 // host's attach text limit; a long body is cut and the agent is told how to read the rest.
 import { GUEST_ATTACH_TEXT_MAX } from '@openchamber/sdk';
-import type { Task } from '../core/types.ts';
+import { TASK_STATES, type Task } from '../core/types.ts';
 import type { Preset } from './presets.ts';
 
 export const PROMPT_MAX = GUEST_ATTACH_TEXT_MAX;
 
-const STATES = 'needs-triage, needs-info, ready-for-agent, ready-for-human, wontfix, done';
+const STATES = TASK_STATES.join(', ');
 
 /** A shell word: kept bare when it is plainly safe, else single-quoted (a GitHub id starts with #). */
 export const shellWord = (s: string): string => (/^[A-Za-z0-9_./:@%+=,-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`);
