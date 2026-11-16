@@ -11,7 +11,7 @@ import { resolveStart, type CardOptions, type Sections, type Settings } from './
 import { askedOf, type Suggester } from './suggest.ts';
 import { COLUMNS, type Column, type SessionLookup, type SessionTarget } from './columns.ts';
 import { openChildren, planMove, taskTypes, type Move } from './moves.ts';
-import { openAddModal, type AddModalStart, type AddResult } from './ui/addModal.ts';
+import { openAddModal, type AddModalHandle, type AddModalStart, type AddResult } from './ui/addModal.ts';
 import type { Board } from './ui/board.ts';
 import { askChoice } from './ui/confirm.ts';
 import { openDetail, type DetailHandle, type DetailModel, type SessionView, type SummaryModel } from './ui/detail.ts';
@@ -104,7 +104,7 @@ export const createEditor = (deps: EditorDeps) => {
   const moving = new Set<string>();
   /** `onFollow`: the open task got a new id (a local link moved it); its handlers use that one. */
   let detail: { id: string; handle: DetailHandle; onFollow: (id: string) => void } | null = null;
-  let addModal: { setStart: (start: AddModalStart | null) => void; dispose: () => void } | null = null;
+  let addModal: AddModalHandle | null = null;
   /** What the open Add task form offers: the types, and whether "Let the model pick" is there. */
   let addOffer: { types: string[]; suggest: boolean } = { types: [], suggest: false };
   /** The open modal's stored start options; version bumps when they are (re)loaded. */
@@ -637,6 +637,10 @@ export const createEditor = (deps: EditorDeps) => {
     /** Ids whose write is in flight; the board draws them busy. */
     busy: moving as ReadonlySet<string>,
     showAdd,
+    /** Add task's Create task (Mod+Enter); false when no form is open or it is busy. */
+    submitAddForm: (): boolean => addModal?.submit() ?? false,
+    /** Which of the two modals is open, for the Shortcut context: the task modal first. */
+    openModal: (): 'task' | 'add' | null => (detail !== null ? 'task' : addModal !== null ? 'add' : null),
     /** The task modal (also what a click or Enter on a card opens). */
     showDetail,
     /** Project switch or the board went away: drop the modal and the form. */

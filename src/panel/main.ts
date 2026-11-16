@@ -46,6 +46,7 @@ import { askChoice } from './ui/confirm.ts';
 import { mountNotice } from './ui/notice.ts';
 import { stateTone } from './ui/detail.ts';
 import { openSessionTasks } from './ui/sessionTasks.ts';
+import { createShortcuts } from './shortcuts.ts';
 import { openSettings } from './ui/settingsView.ts';
 import { injectStyles } from './ui/styles.ts';
 import { mountWizard } from './ui/wizard.ts';
@@ -948,6 +949,25 @@ const saveSections = (next: Sections): void => {
   saver.save(STORAGE_KEYS.detailSections, () => store.saveSections(next));
 };
 
+/**
+ * The panel's Shortcuts (shortcuts.ts). Context, first answer wins: a confirm (askChoice, the start
+ * form) or Settings means none, then the task modal, then Add task, then the Board when no other
+ * dialog is open.
+ */
+const installShortcuts = (): void => {
+  const shortcuts = createShortcuts();
+  shortcuts.addLayer(() => (document.querySelector('.kb-confirm-backdrop') !== null ? 'none' : null));
+  shortcuts.addLayer(() => (settingsSheet !== null ? 'none' : null));
+  shortcuts.addLayer(() => editor.openModal());
+  // Any other dialog (the session's task list, one added later) keeps the Board's Shortcuts off.
+  shortcuts.addLayer(() => (state.view === 'board' && document.querySelector('[aria-modal="true"]') === null ? 'board' : 'none'));
+  shortcuts.on('board.addTask', () => {
+    if (state.config === null) return false;
+    editor.showAdd();
+  });
+  shortcuts.on('add.create', () => editor.submitAddForm());
+};
+
 const start = (ctx: HostReadyContext): void => {
   injectStyles();
   void store
@@ -1050,6 +1070,7 @@ const start = (ctx: HostReadyContext): void => {
     // Global only; off until the global layer is read.
     suggest: { enabled: () => suggestEnabled(globalLoaded, state.globalSettings), suggester },
   });
+  installShortcuts();
   // Answers the model gave after an earlier frame of this panel was gone are kept by the host. Only
   // summaries are taken back; a late type/state suggestion is dropped (summaries.acceptLate ignores
   // it), since the task may have been changed by then.
