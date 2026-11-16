@@ -134,6 +134,14 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
   background: var(--oc-elevated); color: var(--oc-elevated-fg); border: 1px solid var(--oc-border); border-radius: var(--oc-radius); }
 .kb-confirm-title { margin: 0; font-size: 1em; font-weight: 600; overflow-wrap: anywhere; }
 .kb-confirm-body { margin: 0; color: var(--oc-muted); font-size: 0.9em; }
+.kb-cheat { width: min(34rem, 100%); max-height: calc(100vh - 2rem); }
+.kb-cheat-body { display: flex; flex-direction: column; gap: 1rem; overflow-y: auto; min-height: 0; }
+.kb-cheat-group { display: flex; flex-direction: column; gap: 0.375rem; }
+.kb-cheat-list { display: grid; grid-template-columns: 1fr auto; gap: 0.25rem 1rem; margin: 0; font-size: 0.9em; }
+.kb-cheat-list dt { margin: 0; overflow-wrap: anywhere; }
+.kb-cheat-list dd { margin: 0; text-align: right; }
+.kb-kbd { font-family: var(--oc-mono); font-size: 0.9em; padding: 0.05em 0.4em; white-space: nowrap;
+  border: 1px solid var(--oc-border); border-radius: 4px; background: var(--oc-muted-surface); }
 .kb-sheet-part { display: flex; flex-direction: column; gap: 0.75rem; }
 .kb-sheet-part:empty, .kb-sheet-part[hidden] { display: none; }
 .kb-start { padding: 0.75rem; border: 1px solid var(--oc-border); border-radius: var(--oc-radius); background: var(--oc-muted-surface); }
