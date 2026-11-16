@@ -109,6 +109,7 @@ export const createBoard = (root: HTMLElement, callbacks: BoardCallbacks) => {
   const add = mountButton(addSlot, { label: 'Add task', size: 'sm', disabled: true, onClick: callbacks.onAdd });
   mountButton(settingsSlot, { label: 'Settings', variant: 'outline', size: 'sm', onClick: callbacks.onSettings });
   const refresh = mountButton(refreshSlot, { label: 'Refresh', variant: 'outline', size: 'sm', onClick: callbacks.onRefresh });
+  let refreshBusy = false;
 
   let statusDispose: (() => void) | null = null;
   let sessionNoteDispose: (() => void) | null = null;
@@ -156,7 +157,23 @@ export const createBoard = (root: HTMLElement, callbacks: BoardCallbacks) => {
     },
     /** A dismissible info banner above the columns (the rail panel's session note); null removes it. */
     setSessionNote,
-    setBusy: (busy: boolean) => refresh.update({ loading: busy, disabled: busy }),
+    setBusy: (busy: boolean) => {
+      refreshBusy = busy;
+      refresh.update({ loading: busy, disabled: busy });
+    },
+    /** Refresh is running (its button is disabled), so the Refresh Shortcut does nothing either. */
+    busy: () => refreshBusy,
+    /**
+     * Opens the project switcher with its search focused, as a click on it does (the Project
+     * switcher Shortcut). False when it is disabled (no projects); an open one gets its search focused.
+     */
+    openProjects: (): boolean => {
+      const trigger = projectSlot.querySelector<HTMLButtonElement>('.oc-sdk-trigger');
+      if (trigger === null || trigger.disabled) return false;
+      if (trigger.getAttribute('aria-expanded') === 'true') projectSlot.querySelector<HTMLInputElement>('.oc-sdk-popup-search input')?.focus();
+      else trigger.click();
+      return true;
+    },
     setStatus: (next: BoardStatus) => {
       statusDispose?.();
       statusDispose = null;
