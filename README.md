@@ -136,6 +136,8 @@ The session behind **Open session** is checked before it opens. A session the bo
 
 A parent (a feature with sub-tasks) is a card too, with its progress (`2/5 sub-tasks done`). Sub-tasks are drawn indented under their parent when both sit in the same column; **Hide sub-tasks** in the toolbar hides them.
 
+**Search tasks** in the toolbar narrows the board to cards whose title or description holds every word typed (case and accents ignored; a local file is searched without its field lines). A matching sub-task keeps its parent on the board for context. Only this panel session remembers the search; Escape clears it.
+
 Dragging a parent that has sub-tasks to In Progress starts one orchestrator session with the **Break down and orchestrate** preset (unless the card picks another; a parent without sub-tasks starts with its type's preset, or pick orchestrate on its card to have it broken down). The orchestrator creates sub-tasks if there are none, claims them through the CLI and hands them to subagents. While it runs, its sub-tasks show **led by orchestrator**, a claimed one sits in In Progress, and dropping one of them on In Progress starts nothing. Moving a parent with open sub-tasks to Done asks whether to close them too.
 
 ## Starting agents
@@ -301,6 +303,7 @@ Not done yet; each needs the extension installed in OpenChamber:
 10. The task modal: a Review card whose path B session was archived shows **Session archived** and opens nothing; **Open session** on a live path B session in a worktree opens that session.
 11. Archive done: the confirm counts the done tasks; after it Done is empty in both the rail panel and the full-screen page; **Show archived** and **Unarchive** work; reopening an archived task (CLI or GitHub) brings it back without a click.
 12. Type and state suggested: a task added with both on **Let the model pick** gets a type and state from the Small Model a moment later; one with a type picked keeps it; with no Small Model set, one notice and the form stops offering it.
+13. Search tasks: typing filters the cards in both the rail panel and the page, a sub-task match shows its parent, Escape clears it, and dragging still works while filtered.
 
 ## Development
 

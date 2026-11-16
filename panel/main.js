@@ -13736,6 +13736,31 @@ ${note}` : note;
     };
   };
 
+  // src/panel/search.ts
+  var fold = (text3) => text3.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().replace(/ł/g, "l");
+  var COLUMN_IDS = COLUMNS.map((c) => c.id);
+  var words = (query) => fold(query).split(/\s+/).filter((w) => w !== "");
+  var matchesQuery = (task, query, tracker) => {
+    const wanted = words(query);
+    if (wanted.length === 0) return true;
+    const { title, body } = editableText(tracker, task);
+    const text3 = fold(`${title}
+${body}`);
+    return wanted.every((w) => text3.includes(w));
+  };
+  var filterBoard = (board2, tasks, query, tracker) => {
+    if (words(query).length === 0) return board2;
+    const keep = /* @__PURE__ */ new Set();
+    for (const t of tasks) {
+      if (!matchesQuery(t, query, tracker)) continue;
+      keep.add(t.id);
+      if (t.parentId !== null) keep.add(t.parentId);
+    }
+    const out = { ...board2 };
+    for (const column of COLUMN_IDS) out[column] = board2[column].filter((c) => keep.has(c.task.id));
+    return out;
+  };
+
   // src/panel/ui/card.ts
   var typeTone = (type) => type === "bug" ? "error" : type === "enhancement" ? "info" : "neutral";
   var sessionBadge = (s) => {
@@ -13840,11 +13865,12 @@ ${note}` : note;
     const toolbar = div3("kb-toolbar");
     const projectSlot = div3("kb-project");
     const switchSlot = div3("kb-hide");
+    const searchSlot = div3("kb-search");
     const spacer = div3("kb-spacer");
     const addSlot = div3("kb-add-button");
     const settingsSlot = div3("kb-settings-button");
     const refreshSlot = div3("kb-refresh");
-    toolbar.append(projectSlot, switchSlot, spacer, addSlot, settingsSlot, refreshSlot);
+    toolbar.append(projectSlot, switchSlot, searchSlot, spacer, addSlot, settingsSlot, refreshSlot);
     if (VARIANT === "test") {
       const badge2 = document.createElement("span");
       badge2.className = "kb-test-badge";
@@ -13873,6 +13899,15 @@ ${note}` : note;
       onChange: (checked) => {
         hideSwitch.update({ checked });
         callbacks.onHideSubtasks(checked);
+      }
+    });
+    const search = mountSearchField(searchSlot, {
+      value: "",
+      placeholder: "Search tasks",
+      label: "Search tasks by title or description",
+      onChange: (query) => {
+        search.update({ value: query });
+        callbacks.onSearch(query);
       }
     });
     const add2 = mountButton(addSlot, { label: "Add task", size: "sm", disabled: true, onClick: callbacks.onAdd });
@@ -13985,6 +14020,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
 .kb { display: flex; flex-direction: column; gap: 0.75rem; padding: 0.75rem; min-height: 100vh; }
 .kb-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 0.75rem; }
 .kb-project { flex: 1 1 12rem; min-width: 10rem; max-width: 22rem; }
+.kb-search { flex: 1 1 12rem; min-width: 9rem; max-width: 20rem; }
 .kb-spacer { flex: 1 1 auto; }
 .kb-test-badge { font-weight: 700; font-size: 0.75em; letter-spacing: 0.06em; padding: 0.125rem 0.5rem; border-radius: var(--oc-radius);
   border: 1px solid var(--oc-warning, #d97706); color: var(--oc-warning-text, var(--oc-fg)); }
@@ -14234,7 +14270,8 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     archivedTasksFor: null,
     showArchived: false,
     order: [],
-    orderFor: null
+    orderFor: null,
+    query: ""
   };
   var store = createSettingsStore(host.storage);
   var fail = (message2) => void host.toast({ kind: "error", message: message2 }).catch(() => {
@@ -14421,13 +14458,17 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     );
     for (const [column, cards] of Object.entries(model)) for (const c of cards) state.columns.set(c.task.id, column);
     setBadge(model.review.length || null);
-    board.render(model, editor.busy, (task) => summaries.get(task), {
+    const tracker = state.config.tracker;
+    const shown = filterBoard(model, state.tasks, state.query, tracker);
+    board.render(shown, editor.busy, (task) => summaries.get(task), {
       archivable: archivableIds(state.tasks, marks).length,
       archived: archivedCount,
       showArchived: state.showArchived
     });
     auditLinks();
-    if (state.tasks.length === 0) {
+    if (shown !== model && Object.values(shown).every((cards) => cards.length === 0)) {
+      board.setStatus({ kind: "empty", title: "No tasks match", body: `Nothing has "${state.query.trim()}" in its title or description.` });
+    } else if (state.tasks.length === 0) {
       board.setStatus({
         kind: "empty",
         title: "No tasks yet",
@@ -14838,6 +14879,10 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
         state.hideSubtasks = hide;
         const id = state.settingsFor;
         if (id !== null && id === state.projectId) saveProjectSettings(id, { ...state.projectSettings, hideChildren: hide });
+        draw();
+      },
+      onSearch: (query) => {
+        state.query = query;
         draw();
       },
       onRefresh: () => void load(),

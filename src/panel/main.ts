@@ -37,6 +37,7 @@ import { MODEL_NOTICES, createLimiter, createModelAvailability } from './limiter
 import { createSuggester, createTypeClassifier } from './suggest.ts';
 import { taskTypes } from './moves.ts';
 import { MODEL_PICK } from './addTask.ts';
+import { filterBoard } from './search.ts';
 import { createSummaries } from './summaries.ts';
 import { createBoard, type Board } from './ui/board.ts';
 import { askChoice } from './ui/confirm.ts';
@@ -89,6 +90,8 @@ type State = {
   /** The manual card order (order.ts); `orderFor` is its project. */
   order: string[];
   orderFor: string | null;
+  /** The toolbar's search text (search.ts); this panel session only, kept across project switches. */
+  query: string;
 };
 
 const state: State = {
@@ -117,6 +120,7 @@ const state: State = {
   showArchived: false,
   order: [],
   orderFor: null,
+  query: '',
 };
 
 const store = createSettingsStore(host.storage);
@@ -343,13 +347,17 @@ const draw = (): void => {
   for (const [column, cards] of Object.entries(model)) for (const c of cards) state.columns.set(c.task.id, column as Column);
   // The attention mark: sessions that finished or wait for the user.
   setBadge(model.review.length || null);
-  board.render(model, editor.busy, (task) => summaries.get(task), {
+  const tracker = state.config.tracker;
+  const shown = filterBoard(model, state.tasks, state.query, tracker);
+  board.render(shown, editor.busy, (task) => summaries.get(task), {
     archivable: archivableIds(state.tasks, marks).length,
     archived: archivedCount,
     showArchived: state.showArchived,
   });
   auditLinks();
-  if (state.tasks.length === 0) {
+  if (shown !== model && Object.values(shown).every((cards) => cards.length === 0)) {
+    board.setStatus({ kind: 'empty', title: 'No tasks match', body: `Nothing has "${state.query.trim()}" in its title or description.` });
+  } else if (state.tasks.length === 0) {
     board.setStatus({
       kind: 'empty',
       title: 'No tasks yet',
@@ -877,6 +885,10 @@ const start = (ctx: HostReadyContext): void => {
       // The switch is the project's "Hide sub-tasks" setting.
       const id = state.settingsFor;
       if (id !== null && id === state.projectId) saveProjectSettings(id, { ...state.projectSettings, hideChildren: hide });
+      draw();
+    },
+    onSearch: (query) => {
+      state.query = query;
       draw();
     },
     onRefresh: () => void load(),
