@@ -643,6 +643,11 @@ export const createEditor = (deps: EditorDeps) => {
     openModal: (): 'task' | 'add' | null => (detail !== null ? 'task' : addModal !== null ? 'add' : null),
     /** The task modal (also what a click or Enter on a card opens). */
     showDetail,
+    /** Moves a card to another column through the same path as a drop (Mod+Shift+←/→). */
+    moveCard: (id: string, to: Column): void => {
+      const from = deps.columnOf(id);
+      if (from !== null) move(id, from, to);
+    },
     /** Project switch or the board went away: drop the modal and the form. */
     reset: () => {
       closeDetail();

@@ -48,7 +48,9 @@ import { askChoice } from './ui/confirm.ts';
 import { mountNotice } from './ui/notice.ts';
 import { stateTone } from './ui/detail.ts';
 import { openSessionTasks } from './ui/sessionTasks.ts';
-import { createShortcuts } from './shortcuts.ts';
+import { createShortcuts, type Shortcuts } from './shortcuts.ts';
+import { layoutOf } from './navigation.ts';
+import { createSelection, type Selection } from './ui/selection.ts';
 import { openSettings } from './ui/settingsView.ts';
 import { injectStyles } from './ui/styles.ts';
 import { mountWizard } from './ui/wizard.ts';
@@ -190,6 +192,12 @@ const setBadge = (count: number | null): void => {
 
 let board: Board;
 let editor: Editor;
+/**
+ * The Selected card (ui/selection.ts), kept by task id in the panel state: get/set by id, and the
+ * drawn layout navigation.ts steps through (also for Mod+↑/↓ in an Open task).
+ */
+let selection: Selection;
+let shortcuts: Shortcuts;
 let unsubscribeSessions: (() => void) | null = null;
 /** Bumped on every load and project switch; a stale answer is dropped. */
 let generation = 0;
@@ -357,11 +365,13 @@ const draw = (): void => {
   setBadge(model.review.length || null);
   const tracker = state.config.tracker;
   const shown = filterBoard(model, state.tasks, state.query, tracker);
+  selection.beforeRender();
   board.render(shown, editor.busy, (task) => summaries.get(task), {
     archivable: archivableIds(state.tasks, marks).length,
     archived: archivedCount,
     showArchived: state.showArchived,
   });
+  selection.rendered(layoutOf(shown));
   auditLinks();
   focusSession();
   if (state.tasks.length > 0 && state.query.trim() !== '' && Object.values(shown).every((cards) => cards.length === 0)) {
@@ -537,6 +547,7 @@ const selectProject = async (id: string | null): Promise<void> => {
   if (id === state.projectId) return;
   state.projectId = id;
   editor.reset();
+  selection.set(null);
   closeSettings();
   state.settingsFor = null;
   state.skills = null;
@@ -956,8 +967,49 @@ const saveSections = (next: Sections): void => {
  * form) or Settings means none, then the task modal, then Add task, then the Board when no other
  * dialog is open.
  */
+/** The "Hide sub-tasks" switch, or Mod+S: the project's "Hide sub-tasks" setting. */
+const setHideSubtasks = (hide: boolean): void => {
+  state.hideSubtasks = hide;
+  const id = state.settingsFor;
+  if (id !== null && id === state.projectId) saveProjectSettings(id, { ...state.projectSettings, hideChildren: hide });
+  draw();
+};
+
+/** The Board's Selected card Shortcuts: arrows, Enter, Mod+Shift+←/→ and Mod+S. */
+const installBoardNavigation = (): void => {
+  // Arrows and Enter act only from a card or nowhere: on a toolbar control they keep their meaning.
+  const arrow = (direction: 'up' | 'down' | 'left' | 'right') => (): boolean => selection.focusOnBoard() && selection.step(direction);
+  shortcuts.on('board.selectUp', arrow('up'));
+  shortcuts.on('board.selectDown', arrow('down'));
+  shortcuts.on('board.selectLeft', arrow('left'));
+  shortcuts.on('board.selectRight', arrow('right'));
+  // Enter on a focused card is already handled by ui/dnd.ts; this is the Selected card without focus.
+  shortcuts.on('board.openSelected', () => {
+    const id = selection.get();
+    if (id === null || !selection.focusOnBoard() || !state.columns.has(id)) return false;
+    editor.showDetail(id);
+  });
+  const moveSelected = (by: -1 | 1) => (): boolean => {
+    const id = selection.get();
+    const from = id === null ? undefined : state.columns.get(id);
+    if (id === null || from === undefined) return false;
+    const to = COLUMNS[COLUMNS.findIndex((c) => c.id === from) + by];
+    // The card stays selected by id and is found in its new column after the redraw.
+    if (to !== undefined) editor.moveCard(id, to.id);
+    return true;
+  };
+  shortcuts.on('board.moveCardPrev', moveSelected(-1));
+  shortcuts.on('board.moveCardNext', moveSelected(1));
+  shortcuts.on('board.toggleSubtasks', () => {
+    if (state.config === null) return false;
+    const hide = !state.hideSubtasks;
+    board.setHideSubtasks(hide);
+    setHideSubtasks(hide);
+  });
+};
+
 const installShortcuts = (): void => {
-  const shortcuts = createShortcuts();
+  shortcuts = createShortcuts();
   shortcuts.addLayer(() => (document.querySelector('.kb-confirm-backdrop') !== null ? 'none' : null));
   shortcuts.addLayer(() => (settingsSheet !== null ? 'none' : null));
   shortcuts.addLayer(() => editor.openModal());
@@ -968,6 +1020,7 @@ const installShortcuts = (): void => {
     editor.showAdd();
   });
   shortcuts.on('add.create', () => editor.submitAddForm());
+  installBoardNavigation();
 };
 
 const start = (ctx: HostReadyContext): void => {
@@ -999,13 +1052,7 @@ const start = (ctx: HostReadyContext): void => {
       rememberProject(id);
       void selectProject(id);
     },
-    onHideSubtasks: (hide) => {
-      state.hideSubtasks = hide;
-      // The switch is the project's "Hide sub-tasks" setting.
-      const id = state.settingsFor;
-      if (id !== null && id === state.projectId) saveProjectSettings(id, { ...state.projectSettings, hideChildren: hide });
-      draw();
-    },
+    onHideSubtasks: setHideSubtasks,
     onSearch: (query) => {
       state.query = query;
       draw();
@@ -1020,6 +1067,8 @@ const start = (ctx: HostReadyContext): void => {
       draw();
     },
   });
+  // Focus returns to the Selected card after a redraw only on the Board itself, never under a dialog.
+  selection = createSelection(board.columns, { canFocus: () => shortcuts.context() === 'board' });
   editor = createEditor({
     host,
     board,
