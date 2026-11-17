@@ -3,6 +3,7 @@
 // it sends are taskEdit.ts.
 import { mountBanner, mountButton, mountTextField } from '@openchamber/sdk/ui';
 import { editDirty, type EditText } from '../taskEdit.ts';
+import { hintLastChild } from './shortcutHints.ts';
 
 const div = (className: string): HTMLDivElement => {
   const d = document.createElement('div');
@@ -13,14 +14,14 @@ const div = (className: string): HTMLDivElement => {
 /**
  * The Task section's Edit form: title, description (markdown), Save and Cancel. The service's
  * error shows in it; `onDone` runs after a successful save or Cancel (the section redraws).
- * `dirty` says whether closing the modal now would lose typed text.
+ * `dirty` says whether closing the modal now would lose typed text; `submit` is Save (Mod+Enter).
  */
 export const mountEditForm = (
   box: HTMLElement,
   initial: EditText,
   onSave: (draft: EditText) => Promise<string | null>,
   onDone: () => void,
-): { dispose: () => void; dirty: () => boolean } => {
+): { dispose: () => void; dirty: () => boolean; submit: () => boolean } => {
   const titleSlot = div('kb-field');
   const bodySlot = div('kb-field');
   const errorSlot = div('kb-add-error');
@@ -51,6 +52,7 @@ export const mountEditForm = (
     },
   });
   const save = mountButton(actions, { label: 'Save', size: 'sm', onClick: () => submit() });
+  hintLastChild(actions, 'task.saveEdit', 'Save');
   const cancel = mountButton(actions, { label: 'Cancel', size: 'sm', variant: 'outline', onClick: () => !busy && onDone() });
 
   const showError = (message: string | null): void => {
@@ -81,14 +83,21 @@ export const mountEditForm = (
       else showError(error);
     });
   };
+  // Enter in the title saves; Mod+Enter is left to the Save edit Shortcut (shortcuts.ts).
   titleSlot.addEventListener('keydown', (e) => {
-    if (e.key !== 'Enter' || e.isComposing) return;
+    if (e.key !== 'Enter' || e.isComposing || e.metaKey || e.ctrlKey) return;
     e.preventDefault();
     submit();
   });
 
   return {
     dirty: () => editDirty(initial, draft),
+    /** Save, as its button does (Mod+Enter); false while a save is running. */
+    submit: (): boolean => {
+      if (busy) return false;
+      submit();
+      return true;
+    },
     dispose: () => {
       disposed = true;
       errorDispose?.();

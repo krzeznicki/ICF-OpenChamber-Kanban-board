@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.0
+
+- **Keyboard shortcuts** (⌘ on macOS, Ctrl elsewhere), each scoped to a Shortcut context (`keymap.ts`, one dispatcher in `shortcuts.ts`):
+  - **Board:** ⌘A Add task, ⌘S hide/show sub-tasks, ⌘K project switcher, ⌘, Settings, ⇧⌘R refresh (never reloads the panel), ⌘F search. A **Selected card** (kept by task id across redraws) moves with the arrows (`navigation.ts`), Enter opens it and ⇧⌘←/→ moves it to the previous or next column like a drop. In the search field Esc clears it, then returns to the Selected card, and ↓ selects the first matching card.
+  - **Open task:** ⌘↑/↓ previous/next task in its column, ⌘E edit, ⌘Enter save, ⌘S add sub-task, ⌘P pick parent, ⌘1…5 set the column, ⌘O open session, ⌘⌫ delete (with confirm). Closing it selects the last task shown.
+  - **Add task:** ⌘Enter creates the task from any field.
+  - `?` shows a cheat sheet of the current bindings. Button tooltips show their key.
+  - Settings → Global → **Keyboard shortcuts** lists every Shortcut; record a new key, reset one or all. A key taken in the same context, one without ⌘/Ctrl or one left to text fields (⌘A/C/V/X/Z) is refused; ⌘W/Q/R/T/N warn. Bindings apply in every project.
+  - ⌘A, arrows and ⌘⌫ keep their text meaning in text fields; nothing fires during IME composition.
+- `/kanban` in the chat composer opens the Kanban panel (`/kanban-test` in the test build).
+
 ## 0.3.8
 
 - Fixed: the full-screen board opened from a chat in a worktree (a session started from a card, in OpenChamber's In work) showed the first project of the list instead of the session's. Only the rail panel looked the project up, by its session id; the page has no session, so nothing placed the worktree's directory. Now both look it up by directory (`projectFollow.ts`): a session of that directory in the projects' session lists, else the project of the worktree's main checkout, from the service's new `/project/of` (`git rev-parse --git-common-dir`; symlinked projects and a project registered as a folder of the repository match too). The lookup runs for each such directory, not once per frame, tries again when the service is not up yet, and a fresh board waits for it instead of flashing the first project.
