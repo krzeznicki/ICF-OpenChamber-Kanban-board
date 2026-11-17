@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.2
+
+- Fixed: a card at the end of a long column could not be dragged into the column beside it. Each column was only as tall as its own cards, so beside the end of a long list there was no column under the pointer and the drop was cancelled. On the full-screen board, where columns sit side by side, they now all reach the bottom of the board (the longest column, at least the rest of the window), and the whole height takes the drop. The rail panel, where columns are stacked, is unchanged.
+
 ## 0.4.1
 
 - **Clear archive** in the Done header (shown while anything is archived) deletes every archived task for good, after an in-panel confirm with the count, the same way the task modal's Delete does (`clearArchive.ts`): locally the ticket files, and a feature with its whole folder only when every sub-task the board lists is archived too (otherwise the feature stays and its archived sub-tasks go); on GitHub one `gh issue delete` per archived issue (repository admins only), sub-issues before their parent, sub-issues not archived kept as top-level issues. One failed delete does not stop the rest; each failure gets its own toast. Session links, queued starts, start options and card places of deleted tasks go with them.
