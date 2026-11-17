@@ -11,10 +11,10 @@ import { resolveStart, type CardOptions, type Sections, type Settings } from './
 import { askedOf, type Suggester } from './suggest.ts';
 import { COLUMNS, type Column, type SessionLookup, type SessionTarget } from './columns.ts';
 import { openChildren, planMove, taskTypes, type Move } from './moves.ts';
-import { openAddModal, type AddModalStart, type AddResult } from './ui/addModal.ts';
+import { openAddModal, type AddModalHandle, type AddModalStart, type AddResult } from './ui/addModal.ts';
 import type { Board } from './ui/board.ts';
 import { askChoice } from './ui/confirm.ts';
-import { openDetail, type DetailHandle, type DetailModel, type SessionView, type SummaryModel } from './ui/detail.ts';
+import { openDetail, type DetailHandle, type DetailModel, type OpenTaskShortcuts, type SessionView, type SummaryModel } from './ui/detail.ts';
 import { attachDrag } from './ui/dnd.ts';
 import { canLinkUnder, followingMove, linkChoices, linkConfirm, unlinkConfirm } from './link.ts';
 import { deleteConfirm } from './taskDelete.ts';
@@ -83,6 +83,13 @@ export type EditorDeps = {
      */
     markNoType: (projectId: string, taskId: string) => Promise<void>;
   };
+  /** The task modal shows `taskId` (opened, or switched to it). */
+  onOpenTaskShown?: (taskId: string) => void;
+  /**
+   * The task modal closed on `taskId`, the task it showed last: `dismissed` by the user (Escape, ×,
+   * backdrop) or `gone` because the task left the board (deleted, here or elsewhere).
+   */
+  onOpenTaskClosed?: (taskId: string, how: 'dismissed' | 'gone') => void;
   /** The personal summary in the task modal (summaries.ts). */
   summary: {
     model: (task: Task) => SummaryModel | null;
@@ -104,7 +111,7 @@ export const createEditor = (deps: EditorDeps) => {
   const moving = new Set<string>();
   /** `onFollow`: the open task got a new id (a local link moved it); its handlers use that one. */
   let detail: { id: string; handle: DetailHandle; onFollow: (id: string) => void } | null = null;
-  let addModal: { setStart: (start: AddModalStart | null) => void; dispose: () => void } | null = null;
+  let addModal: AddModalHandle | null = null;
   /** What the open Add task form offers: the types, and whether "Let the model pick" is there. */
   let addOffer: { types: string[]; suggest: boolean } = { types: [], suggest: false };
   /** The open modal's stored start options; version bumps when they are (re)loaded. */
@@ -238,8 +245,11 @@ export const createEditor = (deps: EditorDeps) => {
     if (detail === null) return;
     const task = find(detail.id);
     if (task === null && detail.id === followed) return; // moved; the reload in flight lists it
-    if (task === null) closeDetail();
-    else detail.handle.update(detailModel(task));
+    if (task === null) {
+      const id = detail.id;
+      closeDetail();
+      deps.onOpenTaskClosed?.(id, 'gone');
+    } else detail.handle.update(detailModel(task));
   };
 
   /**
@@ -508,9 +518,13 @@ export const createEditor = (deps: EditorDeps) => {
       },
       onType: (type) => void run(id, (api) => api.setType(id, type)),
       onOpenUrl: (url) => void deps.host.openUrl(url).catch((e: unknown) => fail(errorText(e))),
-      onDismiss: closeDetail,
+      onDismiss: () => {
+        closeDetail();
+        deps.onOpenTaskClosed?.(id, 'dismissed');
+      },
     }, { sections: deps.sections.get() });
     detail = { id, handle, onFollow: (next) => (id = next) };
+    deps.onOpenTaskShown?.(id);
   };
 
   const closeAdd = (): void => {
@@ -637,8 +651,29 @@ export const createEditor = (deps: EditorDeps) => {
     /** Ids whose write is in flight; the board draws them busy. */
     busy: moving as ReadonlySet<string>,
     showAdd,
+    /** Add task's Create task (Mod+Enter); false when no form is open or it is busy. */
+    submitAddForm: (): boolean => addModal?.submit() ?? false,
+    /** Which of the two modals is open, for the Shortcut context: the task modal first. */
+    openModal: (): 'task' | 'add' | null => (detail !== null ? 'task' : addModal !== null ? 'add' : null),
     /** The task modal (also what a click or Enter on a card opens). */
     showDetail,
+    /** The Open task: its task id now and its Shortcuts (ui/detail.ts), or null when no task modal is open. */
+    openTask: (): { id: string; shortcuts: OpenTaskShortcuts } | null => (detail === null ? null : { id: detail.id, shortcuts: detail.handle.shortcuts }),
+    /**
+     * Mod+↑/↓: the open modal shows `id` instead, once a changed Edit form is discarded. Resolves
+     * false when it stays (kept, or the modal closed meanwhile).
+     */
+    switchOpenTask: async (id: string): Promise<boolean> => {
+      const from = detail;
+      if (from === null || find(id) === null || !(await from.handle.shortcuts.leave()) || detail !== from) return false;
+      showDetail(id);
+      return true;
+    },
+    /** Moves a card to another column through the same path as a drop (Mod+Shift+←/→). */
+    moveCard: (id: string, to: Column): void => {
+      const from = deps.columnOf(id);
+      if (from !== null) move(id, from, to);
+    },
     /** Project switch or the board went away: drop the modal and the form. */
     reset: () => {
       closeDetail();

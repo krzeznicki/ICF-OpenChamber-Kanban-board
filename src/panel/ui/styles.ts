@@ -45,6 +45,8 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
 .kb-loading { display: flex; justify-content: center; padding: 2rem 0; }
 .kb-card { cursor: grab; user-select: none; -webkit-user-select: none; touch-action: none; }
 .kb-card:focus-visible { outline: 2px solid var(--oc-focus); outline-offset: 1px; }
+/* The Selected card (keyboard navigation): marked also while focus is elsewhere, e.g. in the search field. */
+.kb-card.is-selected { border-color: var(--oc-focus); }
 .kb-card.is-dragging { opacity: 0.4; }
 .kb-card.is-busy { opacity: 0.6; cursor: progress; }
 .kb-card.is-archived { opacity: 0.55; border-style: dashed; }
@@ -133,6 +135,15 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
   background: var(--oc-elevated); color: var(--oc-elevated-fg); border: 1px solid var(--oc-border); border-radius: var(--oc-radius); }
 .kb-confirm-title { margin: 0; font-size: 1em; font-weight: 600; overflow-wrap: anywhere; }
 .kb-confirm-body { margin: 0; color: var(--oc-muted); font-size: 0.9em; }
+.kb-cheat-backdrop { z-index: 70; justify-content: center; align-items: center; padding: 1rem; }
+.kb-cheat { width: min(34rem, 100%); max-height: calc(100vh - 2rem); }
+.kb-cheat-body { display: flex; flex-direction: column; gap: 1rem; overflow-y: auto; min-height: 0; }
+.kb-cheat-group { display: flex; flex-direction: column; gap: 0.375rem; }
+.kb-cheat-list { display: grid; grid-template-columns: 1fr auto; gap: 0.25rem 1rem; margin: 0; font-size: 0.9em; }
+.kb-cheat-list dt { margin: 0; overflow-wrap: anywhere; }
+.kb-cheat-list dd { margin: 0; text-align: right; }
+.kb-kbd { font-family: var(--oc-mono); font-size: 0.9em; padding: 0.05em 0.4em; white-space: nowrap;
+  border: 1px solid var(--oc-border); border-radius: 4px; background: var(--oc-muted-surface); }
 .kb-sheet-part { display: flex; flex-direction: column; gap: 0.75rem; }
 .kb-sheet-part:empty, .kb-sheet-part[hidden] { display: none; }
 .kb-start { padding: 0.75rem; border: 1px solid var(--oc-border); border-radius: var(--oc-radius); background: var(--oc-muted-surface); }
@@ -141,6 +152,18 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
 .kb-settings-section { display: flex; flex-direction: column; gap: 0.5rem; }
 .kb-settings-heading { margin: 0; font-size: 0.95em; font-weight: 600; }
 .kb-settings-hint { margin: 0; color: var(--oc-muted); font-size: 0.85em; }
+.kb-keys { display: flex; flex-direction: column; gap: 0.25rem; }
+.kb-keys-context { margin: 0.5rem 0 0; font-size: 0.85em; font-weight: 600; color: var(--oc-muted); }
+.kb-keys-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 0.5rem; min-height: 1.75rem; }
+.kb-keys-action { min-width: 0; overflow-wrap: anywhere; }
+.kb-keys-key { min-width: 5rem; text-align: end; }
+.kb-keys-buttons { display: flex; align-items: center; justify-content: flex-end; gap: 0.25rem; min-width: 8rem; }
+.kb-keys-recording { color: var(--oc-primary); font-size: 0.85em; }
+.kb-keys-note { margin: 0; font-size: 0.85em; }
+.kb-keys-error { color: var(--oc-error-text, var(--oc-fg)); }
+.kb-keys-warning { color: var(--oc-warning-text, var(--oc-fg)); }
+.kb-kbd { font-family: var(--oc-mono, ui-monospace, monospace); font-size: 0.85em; padding: 0.05rem 0.35rem;
+  border: 1px solid var(--oc-border); border-radius: 0.25rem; white-space: nowrap; }
 .kb-inherit { display: flex; flex-direction: column; gap: 0.125rem; }
 .kb-inherit-reset { display: flex; justify-content: flex-end; }
 .kb-preset { display: flex; flex-direction: column; gap: 0.5rem; padding: 0.75rem;

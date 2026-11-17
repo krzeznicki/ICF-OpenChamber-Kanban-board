@@ -35,6 +35,14 @@ test('testManifest output is a valid OpenChamber manifest', () => {
   assert.ok(parsed.ok, JSON.stringify(parsed));
 });
 
+test('testManifest: slash commands get a -test suffix so both installs keep their own', () => {
+  const out = testManifest(pkg, 'abc1234') as Record<string, any>;
+  assert.deepEqual(pkg.openchamber.contributes.commands.map((c: { name: string }) => c.name), ['kanban']);
+  assert.deepEqual(out.openchamber.contributes.commands.map((c: { name: string }) => c.name), ['kanban-test']);
+  const bare = testManifest({ version: '1.0.0', openchamber: { contributes: { panel: { id: 'x' } } } }, 'abc1234') as Record<string, any>;
+  assert.equal(bare.openchamber.contributes.commands, undefined);
+});
+
 test('testManifest rejects a bad sha or a manifest without a panel', () => {
   assert.throws(() => testManifest(pkg, 'not-a-sha'), /not a git sha/);
   assert.throws(() => testManifest({ version: '1.0.0', openchamber: { contributes: {} } }, 'abc1234'), /contributes\.panel/);
