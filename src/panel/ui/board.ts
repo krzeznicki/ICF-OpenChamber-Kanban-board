@@ -1,7 +1,7 @@
 // The board shell: a toolbar (a TEST badge in the test build, project switcher, "Hide sub-tasks", a search field,
 // Add task, Settings, Refresh; the search completes filters, ui/searchSuggest.ts, and hands Esc in an
 // empty field and ↓ back to main.ts for the Board), a status slot for banners, spinner and empty states, and the five columns. The Done header carries
-// "Archive done" and "Show archived (N)" (archive.ts).
+// "Archive done", "Show archived (N)" (archive.ts) and "Clear archive" (clearArchive.ts).
 // It draws what main.ts hands it and reports clicks back; it holds no data of its own. Dragging
 // is attached to `columns` by the editor (ui/dnd.ts).
 import { mountBanner, mountButton, mountEmpty, mountSearchField, mountSelect, mountSpinner, mountSwitch } from '@openchamber/sdk/ui';
@@ -32,6 +32,8 @@ export type BoardCallbacks = {
   onArchiveDone: () => void;
   /** The Done header's "Show archived (N)" switch. */
   onShowArchived: (show: boolean) => void;
+  /** The Done header's "Clear archive": deletes the archived tasks for good (the caller asks to confirm). */
+  onClearArchive: () => void;
 };
 
 /** The Done header's archive tools: how many done tasks "Archive done" takes, how many are archived. */
@@ -148,14 +150,18 @@ export const createBoard = (root: HTMLElement, callbacks: BoardCallbacks) => {
   };
   let cardDisposers: Array<() => void> = [];
 
-  /** "Archive done" and "Show archived (N)" under the Done header; disposed with the cards. */
+  /** Under the Done header: "Archive done" and "Clear archive" side by side, then "Show archived (N)"; disposed with the cards. */
   const doneTools = (done: DoneTools): HTMLElement => {
     const tools = div('kb-column-tools');
-    if (done.archivable > 0) {
+    const buttons = div('kb-archive-buttons');
+    const button = (label: string, onClick: () => void): void => {
       const slot = div('kb-archive-button');
-      tools.append(slot);
-      cardDisposers.push(mountButton(slot, { label: 'Archive done', variant: 'outline', size: 'xs', onClick: callbacks.onArchiveDone }).dispose);
-    }
+      buttons.append(slot);
+      cardDisposers.push(mountButton(slot, { label, variant: 'outline', size: 'xs', onClick }).dispose);
+    };
+    if (done.archivable > 0) button('Archive done', callbacks.onArchiveDone);
+    if (done.archived > 0) button('Clear archive', callbacks.onClearArchive);
+    tools.append(buttons);
     if (done.archived > 0) {
       const slot = div('kb-show-archived');
       tools.append(slot);

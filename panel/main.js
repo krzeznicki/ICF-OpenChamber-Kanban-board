@@ -2825,6 +2825,46 @@ ${GUEST_UI_LOOK_CSS}`;
     };
   };
 
+  // src/panel/clearArchive.ts
+  var plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+  var clearArchivePlan = (tracker, tasks, marks) => {
+    const archived2 = tasks.filter((t) => isArchived(t, marks));
+    const ids = new Set(archived2.map((t) => t.id));
+    const children = /* @__PURE__ */ new Map();
+    for (const t of tasks) if (t.parentId !== null) children.set(t.parentId, [...children.get(t.parentId) ?? [], t]);
+    const hasChildren = (id) => (children.get(id)?.length ?? 0) > 0;
+    if (tracker === "local") {
+      const skipped = archived2.filter((t) => t.kind === "parent" && !(children.get(t.id) ?? []).every((c) => ids.has(c.id))).map((t) => t.id);
+      const gone = new Set(archived2.filter((t) => t.kind === "parent" && !skipped.includes(t.id)).map((t) => t.id));
+      const deletes = [];
+      for (const t of archived2) {
+        if (gone.has(t.id)) deletes.push({ id: t.id, withChildren: true });
+        else if (t.kind !== "parent" && (t.parentId === null || !gone.has(t.parentId))) deletes.push({ id: t.id, withChildren: false });
+      }
+      return { deletes, skipped, count: archived2.length - skipped.length };
+    }
+    const ordered = [...archived2.filter((t) => !hasChildren(t.id)), ...archived2.filter((t) => hasChildren(t.id))];
+    return { deletes: ordered.map((t) => ({ id: t.id, withChildren: false })), skipped: [], count: archived2.length };
+  };
+  var clearConfirm = (tracker, plan) => {
+    if (plan.deletes.length === 0) return null;
+    const where = tracker === "local" ? "Their files in .scratch/ are deleted; a feature goes with its whole folder, including done sub-tasks older than 30 days the board no longer lists." : "Their issues are deleted on GitHub (only repository admins can delete issues); sub-issues not archived stay as top-level issues.";
+    const k = plan.skipped.length;
+    const kept = k > 0 ? ` ${plural(k, "archived feature")} with sub-tasks still on the board stay${k === 1 ? "s" : ""}.` : "";
+    return { title: `Delete ${plural(plan.count, "archived task")} for good?`, body: `${where}${kept} This cannot be undone from the board.` };
+  };
+  var runClearArchive = async (deletes, remove) => {
+    const out = { deleted: [], failed: [] };
+    for (const d of deletes) {
+      try {
+        out.deleted.push(...await remove(d.id, d.withChildren));
+      } catch (error2) {
+        out.failed.push({ id: d.id, error: error2 });
+      }
+    }
+    return out;
+  };
+
   // src/panel/api.ts
   var ApiError = class extends Error {
     code;
@@ -13349,7 +13389,7 @@ ${ref}`,
   };
 
   // src/panel/taskDelete.ts
-  var plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+  var plural2 = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
   var deleteConfirm = (tracker, task, tasks) => {
     const n = tasks.filter((t) => t.parentId === task.id).length;
     const title = `Delete \u201C${task.title}\u201D?`;
@@ -13358,7 +13398,7 @@ ${ref}`,
         return { title, body: `The file ${task.id} is deleted. This cannot be undone from the board.`, choices: [{ id: "one", label: "Delete", variant: "destructive" }] };
       }
       const folder = task.id.replace(/spec\.md$/, "");
-      const subs = n > 0 ? `, including ${plural(n, "sub-task")} on the board and any older done ones` : "";
+      const subs = n > 0 ? `, including ${plural2(n, "sub-task")} on the board and any older done ones` : "";
       return {
         title,
         body: `The folder ${folder} is deleted with spec.md and all its sub-tasks${subs}. This cannot be undone from the board.`,
@@ -13369,7 +13409,7 @@ ${ref}`,
     if (n === 0) return { title, body: base2, choices: [{ id: "one", label: "Delete", variant: "destructive" }] };
     return {
       title,
-      body: `${base2} It has ${plural(n, "sub-issue")}; kept, they become top-level issues.`,
+      body: `${base2} It has ${plural2(n, "sub-issue")}; kept, they become top-level issues.`,
       choices: [
         { id: "all", label: "Delete with sub-issues", variant: "destructive" },
         { id: "one", label: "Delete only this issue", variant: "secondary" }
@@ -14904,11 +14944,15 @@ ${listKey(projects)}`;
     let cardDisposers = [];
     const doneTools = (done) => {
       const tools = div3("kb-column-tools");
-      if (done.archivable > 0) {
+      const buttons = div3("kb-archive-buttons");
+      const button2 = (label, onClick) => {
         const slot = div3("kb-archive-button");
-        tools.append(slot);
-        cardDisposers.push(mountButton(slot, { label: "Archive done", variant: "outline", size: "xs", onClick: callbacks.onArchiveDone }).dispose);
-      }
+        buttons.append(slot);
+        cardDisposers.push(mountButton(slot, { label, variant: "outline", size: "xs", onClick }).dispose);
+      };
+      if (done.archivable > 0) button2("Archive done", callbacks.onArchiveDone);
+      if (done.archived > 0) button2("Clear archive", callbacks.onClearArchive);
+      tools.append(buttons);
       if (done.archived > 0) {
         const slot = div3("kb-show-archived");
         tools.append(slot);
@@ -15257,6 +15301,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
 .kb-card.is-archived { opacity: 0.55; border-style: dashed; }
 .kb-column-tools { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.375rem 0.5rem;
   padding: 0 0.25rem; font-size: 0.85em; }
+.kb-archive-buttons { display: flex; flex-wrap: wrap; align-items: center; gap: 0.375rem; }
 .kb-ghost { position: fixed; left: 0; top: 0; z-index: 60; pointer-events: none; margin: 0; cursor: grabbing;
   box-shadow: 0 8px 24px rgb(0 0 0 / 0.25); }
 :root.kb-dragging, :root.kb-dragging * { cursor: grabbing !important; }
@@ -16073,6 +16118,52 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     unarchivedAt.set(id, new Map(removedFor(id)).set(taskId, Date.now()));
     setArchivedTasks(id, unarchiveTask(archivedTasks(), taskId));
   };
+  var clearing = false;
+  var clearArchive = async () => {
+    if (clearing) return;
+    clearing = true;
+    try {
+      await clearArchiveNow();
+    } finally {
+      clearing = false;
+    }
+  };
+  var clearArchiveNow = async () => {
+    const id = state.projectId;
+    const p = project();
+    if (id === null || p === null || state.view !== "board" || state.config === null || state.tasks === null) return;
+    const tracker = state.config.tracker;
+    const plan = clearArchivePlan(tracker, state.tasks, archivedTasks());
+    const ask = clearConfirm(tracker, plan);
+    if (ask === null) {
+      info("The archived features still have sub-tasks on the board; nothing to delete.");
+      return;
+    }
+    const answer = await askChoice(ask.title, ask.body, [{ id: "clear", label: "Delete all", variant: "destructive" }]);
+    if (answer === null || state.projectId !== id || state.tasks === null) return;
+    const fresh = clearArchivePlan(tracker, state.tasks, archivedTasks());
+    if (JSON.stringify(fresh) !== JSON.stringify(plan)) {
+      info("The archive changed while you were asked; nothing was deleted. Try again.");
+      return;
+    }
+    const api = createApi(host, p.directory);
+    try {
+      const result = await runClearArchive(plan.deletes, (taskId, withChildren) => api.remove(taskId, withChildren));
+      if (result.deleted.length > 0) {
+        info(`Deleted ${result.deleted.length} archived task${result.deleted.length === 1 ? "" : "s"}`);
+        if (state.projectId === id) forgetOrdered(result.deleted);
+        for (const d of result.deleted) await forgetStartOptions(id, d).catch((e) => fail(`Could not drop the start options of ${d}: ${errorText4(e)}`));
+      }
+      for (const f of result.failed) fail(`Could not delete ${f.id}: ${errorText4(f.error)}`);
+    } finally {
+      await load();
+    }
+  };
+  var forgetStartOptions = async (projectId, taskId) => {
+    await saver.idle();
+    await store.forgetCard(projectId, taskId);
+    await store.forgetNoType(projectId, taskId);
+  };
   var sessionFocus = createSessionFocus(null);
   var panelSession = null;
   var projectsSettled = false;
@@ -16299,7 +16390,8 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
       onShowArchived: (show) => {
         state.showArchived = show;
         draw();
-      }
+      },
+      onClearArchive: () => void clearArchive()
     });
     selection2 = createSelection(board.columns, { canFocus: () => shortcuts.context() === "board" });
     editor = createEditor({
@@ -16350,11 +16442,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
           await store.moveCard(projectId, from, to);
           await store.moveNoType(projectId, from, to);
         },
-        forget: async (projectId, taskId) => {
-          await saver.idle();
-          await store.forgetCard(projectId, taskId);
-          await store.forgetNoType(projectId, taskId);
-        },
+        forget: forgetStartOptions,
         markNoType: (projectId, taskId) => store.markNoType(projectId, taskId)
       },
       summary: {

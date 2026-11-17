@@ -52,6 +52,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
 .kb-card.is-archived { opacity: 0.55; border-style: dashed; }
 .kb-column-tools { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.375rem 0.5rem;
   padding: 0 0.25rem; font-size: 0.85em; }
+.kb-archive-buttons { display: flex; flex-wrap: wrap; align-items: center; gap: 0.375rem; }
 .kb-ghost { position: fixed; left: 0; top: 0; z-index: 60; pointer-events: none; margin: 0; cursor: grabbing;
   box-shadow: 0 8px 24px rgb(0 0 0 / 0.25); }
 :root.kb-dragging, :root.kb-dragging * { cursor: grabbing !important; }

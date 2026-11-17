@@ -14,6 +14,7 @@ import { applyHostReady } from '@openchamber/sdk/ui';
 import { VARIANT, panelId } from '../core/variant.ts';
 import type { Task } from '../core/types.ts';
 import { archivableIds, archivedShown, archiveTasks, archiveWriteJob, createStorageSync, createPendingMarks, isArchived, mergeArchived, reconcileArchived, unarchiveTask } from './archive.ts';
+import { clearArchivePlan, clearConfirm, runClearArchive } from './clearArchive.ts';
 import { ApiError, createApi, type Api, type ConfigResult, type ProjectConfig } from './api.ts';
 import { applyOrder, forgetInOrder, pruneOrder, renameInOrder, reorder } from './order.ts';
 import { COLUMNS, groupTasks, pruneArchived, resolveSession, sessionForTask, sessionTarget, type Column, type SessionLookup } from './columns.ts';
@@ -864,6 +865,65 @@ const unarchive = (taskId: string): void => {
   setArchivedTasks(id, unarchiveTask(archivedTasks(), taskId));
 };
 
+/** A "Clear archive" is asking or running: a second click does nothing. */
+let clearing = false;
+
+/**
+ * "Clear archive" (clearArchive.ts): every archived task is deleted for good, like the modal's Delete;
+ * the service drops their links and queue entries, here their card places and start options go. A
+ * local feature with a sub-task still on the board is kept (its folder would take that one too).
+ */
+const clearArchive = async (): Promise<void> => {
+  if (clearing) return;
+  clearing = true;
+  try {
+    await clearArchiveNow();
+  } finally {
+    clearing = false;
+  }
+};
+
+const clearArchiveNow = async (): Promise<void> => {
+  const id = state.projectId;
+  const p = project();
+  if (id === null || p === null || state.view !== 'board' || state.config === null || state.tasks === null) return;
+  const tracker = state.config.tracker;
+  const plan = clearArchivePlan(tracker, state.tasks, archivedTasks());
+  const ask = clearConfirm(tracker, plan);
+  if (ask === null) {
+    info('The archived features still have sub-tasks on the board; nothing to delete.');
+    return;
+  }
+  const answer = await askChoice(ask.title, ask.body, [{ id: 'clear', label: 'Delete all', variant: 'destructive' }]);
+  if (answer === null || state.projectId !== id || state.tasks === null) return;
+  // The board may have reloaded while the question was open: delete only what the user confirmed.
+  const fresh = clearArchivePlan(tracker, state.tasks, archivedTasks());
+  if (JSON.stringify(fresh) !== JSON.stringify(plan)) {
+    info('The archive changed while you were asked; nothing was deleted. Try again.');
+    return;
+  }
+  const api = createApi(host, p.directory);
+  try {
+    const result = await runClearArchive(plan.deletes, (taskId, withChildren) => api.remove(taskId, withChildren));
+    if (result.deleted.length > 0) {
+      info(`Deleted ${result.deleted.length} archived task${result.deleted.length === 1 ? '' : 's'}`);
+      if (state.projectId === id) forgetOrdered(result.deleted);
+      for (const d of result.deleted) await forgetStartOptions(id, d).catch((e: unknown) => fail(`Could not drop the start options of ${d}: ${errorText(e)}`));
+    }
+    for (const f of result.failed) fail(`Could not delete ${f.id}: ${errorText(f.error)}`);
+  } finally {
+    // The reload prunes the marks of deleted tasks (reconcileArchived).
+    await load();
+  }
+};
+
+/** A deleted task's stored start options go, after any pending save of them. */
+const forgetStartOptions = async (projectId: string, taskId: string): Promise<void> => {
+  await saver.idle();
+  await store.forgetCard(projectId, taskId);
+  await store.forgetNoType(projectId, taskId);
+};
+
 // --- The rail panel opened in a chat: that session's task (sessionFocus.ts) ---
 
 /** Set in start(): the rail panel decides once, for the chat it was opened in; other surfaces never. */
@@ -1166,6 +1226,7 @@ const start = (ctx: HostReadyContext): void => {
       state.showArchived = show;
       draw();
     },
+    onClearArchive: () => void clearArchive(),
   });
   // Focus returns to the Selected card after a redraw only on the Board itself, never under a dialog.
   selection = createSelection(board.columns, { canFocus: () => shortcuts.context() === 'board' });
@@ -1217,11 +1278,7 @@ const start = (ctx: HostReadyContext): void => {
         await store.moveCard(projectId, from, to);
         await store.moveNoType(projectId, from, to);
       },
-      forget: async (projectId, taskId) => {
-        await saver.idle();
-        await store.forgetCard(projectId, taskId);
-        await store.forgetNoType(projectId, taskId);
-      },
+      forget: forgetStartOptions,
       markNoType: (projectId, taskId) => store.markNoType(projectId, taskId),
     },
     summary: {
