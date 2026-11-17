@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.0
 
 - **Keyboard shortcuts** (⌘ on macOS, Ctrl elsewhere), each scoped to a Shortcut context (`keymap.ts`, one dispatcher in `shortcuts.ts`):
   - **Board:** ⌘A Add task, ⌘S hide/show sub-tasks, ⌘K project switcher, ⌘, Settings, ⇧⌘R refresh (never reloads the panel), ⌘F search. A **Selected card** (kept by task id across redraws) moves with the arrows (`navigation.ts`), Enter opens it and ⇧⌘←/→ moves it to the previous or next column like a drop. In the search field Esc clears it, then returns to the Selected card, and ↓ selects the first matching card.
