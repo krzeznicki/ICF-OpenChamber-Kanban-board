@@ -14294,20 +14294,21 @@ ${listKey(projects)}`;
     let cardDisposers = [];
     const doneTools = (done) => {
       const tools = div3("kb-column-tools");
-      if (done.archivable > 0) {
+      const buttons = div3("kb-archive-buttons");
+      const button2 = (label, onClick) => {
         const slot = div3("kb-archive-button");
-        tools.append(slot);
-        cardDisposers.push(mountButton(slot, { label: "Archive done", variant: "outline", size: "xs", onClick: callbacks.onArchiveDone }).dispose);
-      }
+        buttons.append(slot);
+        cardDisposers.push(mountButton(slot, { label, variant: "outline", size: "xs", onClick }).dispose);
+      };
+      if (done.archivable > 0) button2("Archive done", callbacks.onArchiveDone);
+      if (done.archived > 0) button2("Clear archive", callbacks.onClearArchive);
+      tools.append(buttons);
       if (done.archived > 0) {
         const slot = div3("kb-show-archived");
         tools.append(slot);
         cardDisposers.push(
           mountSwitch(slot, { label: `Show archived (${done.archived})`, checked: done.showArchived, onChange: callbacks.onShowArchived }).dispose
         );
-        const clear = div3("kb-clear-archive");
-        tools.append(clear);
-        cardDisposers.push(mountButton(clear, { label: "Clear archive", variant: "outline", size: "xs", onClick: callbacks.onClearArchive }).dispose);
       }
       return tools;
     };
@@ -14491,6 +14492,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
 .kb-card.is-archived { opacity: 0.55; border-style: dashed; }
 .kb-column-tools { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.375rem 0.5rem;
   padding: 0 0.25rem; font-size: 0.85em; }
+.kb-archive-buttons { display: flex; flex-wrap: wrap; align-items: center; gap: 0.375rem; }
 .kb-ghost { position: fixed; left: 0; top: 0; z-index: 60; pointer-events: none; margin: 0; cursor: grabbing;
   box-shadow: 0 8px 24px rgb(0 0 0 / 0.25); }
 :root.kb-dragging, :root.kb-dragging * { cursor: grabbing !important; }

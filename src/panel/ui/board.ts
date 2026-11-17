@@ -123,23 +123,24 @@ export const createBoard = (root: HTMLElement, callbacks: BoardCallbacks) => {
   };
   let cardDisposers: Array<() => void> = [];
 
-  /** "Archive done", "Show archived (N)" and "Clear archive" under the Done header; disposed with the cards. */
+  /** Under the Done header: "Archive done" and "Clear archive" side by side, then "Show archived (N)"; disposed with the cards. */
   const doneTools = (done: DoneTools): HTMLElement => {
     const tools = div('kb-column-tools');
-    if (done.archivable > 0) {
+    const buttons = div('kb-archive-buttons');
+    const button = (label: string, onClick: () => void): void => {
       const slot = div('kb-archive-button');
-      tools.append(slot);
-      cardDisposers.push(mountButton(slot, { label: 'Archive done', variant: 'outline', size: 'xs', onClick: callbacks.onArchiveDone }).dispose);
-    }
+      buttons.append(slot);
+      cardDisposers.push(mountButton(slot, { label, variant: 'outline', size: 'xs', onClick }).dispose);
+    };
+    if (done.archivable > 0) button('Archive done', callbacks.onArchiveDone);
+    if (done.archived > 0) button('Clear archive', callbacks.onClearArchive);
+    tools.append(buttons);
     if (done.archived > 0) {
       const slot = div('kb-show-archived');
       tools.append(slot);
       cardDisposers.push(
         mountSwitch(slot, { label: `Show archived (${done.archived})`, checked: done.showArchived, onChange: callbacks.onShowArchived }).dispose,
       );
-      const clear = div('kb-clear-archive');
-      tools.append(clear);
-      cardDisposers.push(mountButton(clear, { label: 'Clear archive', variant: 'outline', size: 'xs', onClick: callbacks.onClearArchive }).dispose);
     }
     return tools;
   };
