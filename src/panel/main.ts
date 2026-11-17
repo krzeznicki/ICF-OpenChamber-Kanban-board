@@ -1,5 +1,6 @@
 // Entry for both the rail panel (panel/index.html) and the full-screen page (panel/page.html).
 // The layout follows ctx.surface through the data-oc-surface attribute applyHostReady sets.
+// It also answers the `/kanban` slash command by opening the rail panel (see host.onResolve below).
 // Data: projects and sessions from the host, tasks from our service via host.serviceRequest.
 // Writes (drag and drop, the task modal, Add task) live in edit.ts; a drop on In Progress goes to starter.ts:
 // it starts an agent session (or queues it over the limit) and the card then follows that session. Settings (global, per project, presets, per card) come from the
@@ -10,8 +11,10 @@
 import { connectHost } from '@openchamber/sdk';
 import type { GuestProject, GuestSessionRecord, HostReadyContext } from '@openchamber/sdk';
 import { applyHostReady } from '@openchamber/sdk/ui';
+import { VARIANT, panelId } from '../core/variant.ts';
 import type { Task } from '../core/types.ts';
 import { archivableIds, archivedShown, archiveTasks, archiveWriteJob, createStorageSync, createPendingMarks, isArchived, mergeArchived, reconcileArchived, unarchiveTask } from './archive.ts';
+import { clearArchivePlan, clearConfirm, runClearArchive } from './clearArchive.ts';
 import { ApiError, createApi, type Api, type ConfigResult, type ProjectConfig } from './api.ts';
 import { applyOrder, forgetInOrder, pruneOrder, renameInOrder, reorder } from './order.ts';
 import { COLUMNS, groupTasks, pruneArchived, resolveSession, sessionForTask, sessionTarget, type Column, type SessionLookup } from './columns.ts';
@@ -44,8 +47,16 @@ import { createSessionFocus } from './sessionFocus.ts';
 import { createBoard, type Board } from './ui/board.ts';
 import { askChoice } from './ui/confirm.ts';
 import { mountNotice } from './ui/notice.ts';
-import { stateTone } from './ui/detail.ts';
+import { stateTone, type OpenTaskShortcuts } from './ui/detail.ts';
 import { openSessionTasks } from './ui/sessionTasks.ts';
+import { createKeymap } from './keymap.ts';
+import { createShortcuts, focusInTextField, type Shortcuts } from './shortcuts.ts';
+import { cheatSheetGroups } from './cheatSheet.ts';
+import { openCheatSheet } from './ui/cheatSheet.ts';
+import { firstSelected, layoutOf, locate } from './navigation.ts';
+import { columnNeighbour } from './openTask.ts';
+import { createSelection, type Selection } from './ui/selection.ts';
+import { setHintKeymap } from './ui/shortcutHints.ts';
 import { openSettings } from './ui/settingsView.ts';
 import { injectStyles } from './ui/styles.ts';
 import { mountWizard } from './ui/wizard.ts';
@@ -187,6 +198,12 @@ const setBadge = (count: number | null): void => {
 
 let board: Board;
 let editor: Editor;
+/**
+ * The Selected card (ui/selection.ts), kept by task id in the panel state: get/set by id, and the
+ * drawn layout navigation.ts steps through (also for Mod+↑/↓ in an Open task).
+ */
+let selection: Selection;
+let shortcuts: Shortcuts;
 let unsubscribeSessions: (() => void) | null = null;
 /** Bumped on every load and project switch; a stale answer is dropped. */
 let generation = 0;
@@ -223,6 +240,7 @@ const presets = (): Preset[] => {
 
 /** After any settings change: the hide switch follows, the board and an open detail redraw. */
 const applySettings = (): void => {
+  applyKeymap();
   const hide = settings().hideChildren;
   if (hide !== state.hideSubtasks) {
     state.hideSubtasks = hide;
@@ -354,11 +372,13 @@ const draw = (): void => {
   setBadge(model.review.length || null);
   const tracker = state.config.tracker;
   const shown = filterBoard(model, state.tasks, state.query, tracker);
+  selection.beforeRender();
   board.render(shown, editor.busy, (task) => summaries.get(task), {
     archivable: archivableIds(state.tasks, marks).length,
     archived: archivedCount,
     showArchived: state.showArchived,
   });
+  selection.rendered(layoutOf(shown));
   auditLinks();
   focusSession();
   if (state.tasks.length > 0 && state.query.trim() !== '' && Object.values(shown).every((cards) => cards.length === 0)) {
@@ -534,6 +554,7 @@ const selectProject = async (id: string | null): Promise<void> => {
   if (id === state.projectId) return;
   state.projectId = id;
   editor.reset();
+  selection.set(null);
   closeSettings();
   state.settingsFor = null;
   state.skills = null;
@@ -844,6 +865,65 @@ const unarchive = (taskId: string): void => {
   setArchivedTasks(id, unarchiveTask(archivedTasks(), taskId));
 };
 
+/** A "Clear archive" is asking or running: a second click does nothing. */
+let clearing = false;
+
+/**
+ * "Clear archive" (clearArchive.ts): every archived task is deleted for good, like the modal's Delete;
+ * the service drops their links and queue entries, here their card places and start options go. A
+ * local feature with a sub-task still on the board is kept (its folder would take that one too).
+ */
+const clearArchive = async (): Promise<void> => {
+  if (clearing) return;
+  clearing = true;
+  try {
+    await clearArchiveNow();
+  } finally {
+    clearing = false;
+  }
+};
+
+const clearArchiveNow = async (): Promise<void> => {
+  const id = state.projectId;
+  const p = project();
+  if (id === null || p === null || state.view !== 'board' || state.config === null || state.tasks === null) return;
+  const tracker = state.config.tracker;
+  const plan = clearArchivePlan(tracker, state.tasks, archivedTasks());
+  const ask = clearConfirm(tracker, plan);
+  if (ask === null) {
+    info('The archived features still have sub-tasks on the board; nothing to delete.');
+    return;
+  }
+  const answer = await askChoice(ask.title, ask.body, [{ id: 'clear', label: 'Delete all', variant: 'destructive' }]);
+  if (answer === null || state.projectId !== id || state.tasks === null) return;
+  // The board may have reloaded while the question was open: delete only what the user confirmed.
+  const fresh = clearArchivePlan(tracker, state.tasks, archivedTasks());
+  if (JSON.stringify(fresh) !== JSON.stringify(plan)) {
+    info('The archive changed while you were asked; nothing was deleted. Try again.');
+    return;
+  }
+  const api = createApi(host, p.directory);
+  try {
+    const result = await runClearArchive(plan.deletes, (taskId, withChildren) => api.remove(taskId, withChildren));
+    if (result.deleted.length > 0) {
+      info(`Deleted ${result.deleted.length} archived task${result.deleted.length === 1 ? '' : 's'}`);
+      if (state.projectId === id) forgetOrdered(result.deleted);
+      for (const d of result.deleted) await forgetStartOptions(id, d).catch((e: unknown) => fail(`Could not drop the start options of ${d}: ${errorText(e)}`));
+    }
+    for (const f of result.failed) fail(`Could not delete ${f.id}: ${errorText(f.error)}`);
+  } finally {
+    // The reload prunes the marks of deleted tasks (reconcileArchived).
+    await load();
+  }
+};
+
+/** A deleted task's stored start options go, after any pending save of them. */
+const forgetStartOptions = async (projectId: string, taskId: string): Promise<void> => {
+  await saver.idle();
+  await store.forgetCard(projectId, taskId);
+  await store.forgetNoType(projectId, taskId);
+};
+
 // --- The rail panel opened in a chat: that session's task (sessionFocus.ts) ---
 
 /** Set in start(): the rail panel decides once, for the chat it was opened in; other surfaces never. */
@@ -948,6 +1028,148 @@ const saveSections = (next: Sections): void => {
   saver.save(STORAGE_KEYS.detailSections, () => store.saveSections(next));
 };
 
+/** The "Hide sub-tasks" switch, or Mod+S: the project's "Hide sub-tasks" setting. */
+const setHideSubtasks = (hide: boolean): void => {
+  state.hideSubtasks = hide;
+  const id = state.settingsFor;
+  if (id !== null && id === state.projectId) saveProjectSettings(id, { ...state.projectSettings, hideChildren: hide });
+  draw();
+};
+
+/** The Board's Selected card Shortcuts: arrows, Enter, Mod+Shift+←/→ and Mod+S. */
+const installBoardNavigation = (): void => {
+  // Arrows and Enter act only from a card or nowhere: on a toolbar control they keep their meaning.
+  const arrow = (direction: 'up' | 'down' | 'left' | 'right') => (): boolean => selection.focusOnBoard() && selection.step(direction);
+  shortcuts.on('board.selectUp', arrow('up'));
+  shortcuts.on('board.selectDown', arrow('down'));
+  shortcuts.on('board.selectLeft', arrow('left'));
+  shortcuts.on('board.selectRight', arrow('right'));
+  // Enter on a focused card is already handled by ui/dnd.ts; this is the Selected card without focus.
+  shortcuts.on('board.openSelected', () => {
+    const id = selection.get();
+    if (id === null || !selection.focusOnBoard() || !state.columns.has(id)) return false;
+    editor.showDetail(id);
+  });
+  const moveSelected = (by: -1 | 1) => (): boolean => {
+    // In a text field (the search) Mod+Shift+←/→ selects text.
+    if (focusInTextField()) return false;
+    const id = selection.get();
+    const from = id === null ? undefined : state.columns.get(id);
+    if (id === null || from === undefined) return false;
+    const to = COLUMNS[COLUMNS.findIndex((c) => c.id === from) + by];
+    // The card stays selected by id and is found in its new column after the redraw.
+    if (to !== undefined) editor.moveCard(id, to.id);
+    return true;
+  };
+  shortcuts.on('board.moveCardPrev', moveSelected(-1));
+  shortcuts.on('board.moveCardNext', moveSelected(1));
+  shortcuts.on('board.toggleSubtasks', () => {
+    if (state.config === null) return false;
+    const hide = !state.hideSubtasks;
+    board.setHideSubtasks(hide);
+    setHideSubtasks(hide);
+  });
+};
+
+/** The bindings last applied (their stored text), so an unrelated settings change does not rebuild the Keymap. */
+let appliedKeys: string | null = null;
+
+/** The user's bindings (global settings) into the dispatcher and every button tooltip, at once. */
+const applyKeymap = (): void => {
+  // Before installShortcuts the dispatcher does not exist yet; it applies the bindings itself.
+  if (typeof shortcuts === 'undefined') return;
+  const overrides = state.globalSettings.shortcuts ?? {};
+  const text = JSON.stringify(overrides);
+  if (text === appliedKeys) return;
+  appliedKeys = text;
+  const keymap = createKeymap(overrides);
+  shortcuts.setKeymap(keymap);
+  setHintKeymap(keymap, shortcuts.platform);
+};
+
+/**
+ * The panel's Shortcuts (shortcuts.ts). Context, first answer wins: the cheat sheet (in front), a
+ * confirm (askChoice, the start form) or Settings means none, then the task modal, then Add task,
+ * then the Board when no other dialog is open.
+ */
+const installShortcuts = (): void => {
+  shortcuts = createShortcuts();
+  shortcuts.addLayer(() => (document.querySelector('.kb-confirm-backdrop') !== null ? 'none' : null));
+  shortcuts.addLayer(() => (settingsSheet !== null ? 'none' : null));
+  shortcuts.addLayer(() => editor.openModal());
+  // Any other dialog (the session's task list, one added later) keeps the Board's Shortcuts off.
+  shortcuts.addLayer(() => (state.view === 'board' && document.querySelector('[aria-modal="true"]') === null ? 'board' : 'none'));
+  shortcuts.on('board.addTask', () => {
+    if (state.config === null) return false;
+    editor.showAdd();
+  });
+  shortcuts.on('add.create', () => editor.submitAddForm());
+  installBoardNavigation();
+  installOpenTaskShortcuts(shortcuts);
+  installToolbarShortcuts(shortcuts);
+  installCheatSheet(shortcuts);
+  applyKeymap();
+};
+
+/**
+ * The Open task's Shortcuts (ui/detail.ts OpenTaskShortcuts): each does what its control does, and
+ * nothing when the control is not shown. The key is still taken then (Mod+S, P, O would save,
+ * print or open a file), except Mod+↑/↓ and Mod+Backspace in a text field, which keep moving the
+ * caret and deleting text there, and Mod+Enter with no Edit form open.
+ */
+const installOpenTaskShortcuts = (shortcuts: Shortcuts): void => {
+  const act = (run: (s: OpenTaskShortcuts) => boolean) => (): boolean => {
+    const open = editor.openTask();
+    if (open !== null) run(open.shortcuts);
+    return true;
+  };
+  const step = (direction: 'prev' | 'next') => (): boolean => {
+    if (focusInTextField()) return false;
+    const open = editor.openTask();
+    const id = open === null ? null : columnNeighbour(selection.layout(), open.id, direction);
+    if (id !== null) void editor.switchOpenTask(id);
+    return true;
+  };
+  shortcuts.on('task.prev', step('prev'));
+  shortcuts.on('task.next', step('next'));
+  shortcuts.on('task.edit', act((s) => s.edit()));
+  shortcuts.on('task.saveEdit', () => editor.openTask()?.shortcuts.saveEdit() ?? false);
+  shortcuts.on('task.addSubtask', act((s) => s.addSubtask()));
+  shortcuts.on('task.pickParent', act((s) => s.pickParent()));
+  const states = ['task.state1', 'task.state2', 'task.state3', 'task.state4', 'task.state5'] as const;
+  states.forEach((id, i) => shortcuts.on(id, act((s) => s.setColumn(i + 1))));
+  shortcuts.on('task.openSession', act((s) => s.openSession()));
+  shortcuts.on('task.delete', () => !focusInTextField() && act((s) => s.delete())());
+};
+
+/**
+ * The toolbar's Shortcuts: each does what its control does. Refresh is reserved (shortcuts.ts): while
+ * its key is the browser's reload it is taken in every context, even while a load runs (its button
+ * is disabled then), so Mod+Shift+R never reloads the iframe.
+ */
+const installToolbarShortcuts = (shortcuts: Shortcuts): void => {
+  shortcuts.on('board.projects', () => board.openProjects());
+  shortcuts.on('board.settings', () => showSettings());
+  shortcuts.on('board.search', () => board.focusSearch());
+  shortcuts.on('board.refresh', () => {
+    if (!board.busy()) void load();
+  });
+  shortcuts.reserve('board.refresh');
+};
+
+/** `?` on the Board opens the cheat sheet, built from the Keymap now; no Shortcuts while it is open. */
+const installCheatSheet = (shortcuts: Shortcuts): void => {
+  let open = false;
+  shortcuts.addLayer(() => (open ? 'none' : null), { front: true });
+  shortcuts.on('board.cheatSheet', () => {
+    if (open) return false;
+    open = true;
+    openCheatSheet(cheatSheetGroups(shortcuts.keymap(), shortcuts.platform), () => {
+      open = false;
+    });
+  });
+};
+
 const start = (ctx: HostReadyContext): void => {
   injectStyles();
   void store
@@ -977,18 +1199,25 @@ const start = (ctx: HostReadyContext): void => {
       rememberProject(id);
       void selectProject(id);
     },
-    onHideSubtasks: (hide) => {
-      state.hideSubtasks = hide;
-      // The switch is the project's "Hide sub-tasks" setting.
-      const id = state.settingsFor;
-      if (id !== null && id === state.projectId) saveProjectSettings(id, { ...state.projectSettings, hideChildren: hide });
-      draw();
-    },
+    onHideSubtasks: setHideSubtasks,
     onSearch: (query) => {
       state.query = query;
       draw();
     },
     suggest: (text, caret) => searchSuggestions(text, caret, boardTypes()),
+    // Second Esc: focus back on the Selected card, or on the Board itself when there is none.
+    onSearchExit: () => {
+      const id = selection.get();
+      if (id !== null) selection.set(id, { focus: true });
+      if (id === null || !selection.focusOnBoard()) (document.activeElement as HTMLElement | null)?.blur();
+    },
+    // ↓: the first card the search left, in Navigation order.
+    onSearchDown: () => {
+      const first = firstSelected(selection.layout());
+      if (first === null) return false;
+      selection.set(first.id, { focus: true });
+      return true;
+    },
     onRefresh: () => void load(),
     onAdd: () => editor.showAdd(),
     onSettings: showSettings,
@@ -997,7 +1226,10 @@ const start = (ctx: HostReadyContext): void => {
       state.showArchived = show;
       draw();
     },
+    onClearArchive: () => void clearArchive(),
   });
+  // Focus returns to the Selected card after a redraw only on the Board itself, never under a dialog.
+  selection = createSelection(board.columns, { canFocus: () => shortcuts.context() === 'board' });
   editor = createEditor({
     host,
     board,
@@ -1021,6 +1253,18 @@ const start = (ctx: HostReadyContext): void => {
       open: (id) => void host.openSession(id).catch((e: unknown) => fail(`Could not open the session: ${errorText(e)}`)),
     },
     sections: { get: () => sections, save: saveSections },
+    // The Open task is the Selected card while it is drawn (a hidden sub-task is not), so a redraw
+    // that drops it (deleted) falls back to the nearest card in its column.
+    onOpenTaskShown: (taskId) => {
+      if (locate(selection.layout(), taskId) !== null) selection.set(taskId);
+    },
+    // Closed: the task last shown gets focus while it is drawn. When it left the board (deleted),
+    // the card the Selected card fell back to gets it instead (now if the board already redrew,
+    // else on the redraw, which keeps focus on the Selected card).
+    onOpenTaskClosed: (taskId, how) => {
+      const id = locate(selection.layout(), taskId) !== null ? taskId : how === 'gone' ? selection.get() : null;
+      if (id !== null) selection.set(id, { focus: true });
+    },
     archive: { has: (task) => isArchived(task, archivedTasks()), unarchive },
     order: { reorder: reorderCard, rename: renameOrdered, forget: forgetOrdered },
     baseTypes: () => settings().types,
@@ -1034,11 +1278,7 @@ const start = (ctx: HostReadyContext): void => {
         await store.moveCard(projectId, from, to);
         await store.moveNoType(projectId, from, to);
       },
-      forget: async (projectId, taskId) => {
-        await saver.idle();
-        await store.forgetCard(projectId, taskId);
-        await store.forgetNoType(projectId, taskId);
-      },
+      forget: forgetStartOptions,
       markNoType: (projectId, taskId) => store.markNoType(projectId, taskId),
     },
     summary: {
@@ -1050,6 +1290,7 @@ const start = (ctx: HostReadyContext): void => {
     // Global only; off until the global layer is read.
     suggest: { enabled: () => suggestEnabled(globalLoaded, state.globalSettings), suggester },
   });
+  installShortcuts();
   // Answers the model gave after an earlier frame of this panel was gone are kept by the host. Only
   // summaries are taken back; a late type/state suggestion is dropped (summaries.acceptLate ignores
   // it), since the task may have been changed by then.
@@ -1093,9 +1334,19 @@ const start = (ctx: HostReadyContext): void => {
   });
 };
 
+// `/kanban` (`/kanban-test` in the test build) opens this panel and attaches nothing. With no
+// background entry the host asks a mounted panel frame, or loads this entry hidden just to answer;
+// the rail surface id is `plugin:<panel id>`. Arguments are ignored.
+host.onResolve(async () => {
+  await host.openSurface(`plugin:${panelId(VARIANT)}`);
+  return null;
+});
+
 let mounted = false;
 host.onReady((ctx) => {
   applyHostReady(ctx, document.documentElement);
+  // A hidden frame loaded only to answer a slash command: no board to draw or poll.
+  if (ctx.surface === 'background') return;
   if (mounted) return;
   mounted = true;
   start(ctx);

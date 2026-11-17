@@ -2,6 +2,7 @@
 // All of it lives in the extension's instance storage, never in the repo. The resolvers are pure
 // so they run under node:test; createSettingsStore is the only part that touches storage.
 import { parseArchivedTasks, serializeArchived, type ArchivedTasks } from './archive.ts';
+import { parseOverrides, type Overrides } from './keymap.ts';
 import { ORDER_MAX, parseOrder } from './order.ts';
 import { BUILTIN_PRESETS, defaultSetId, effectiveSetId, EMPTY_SETS, isPristineSets, migrateStoredPresets, parseStoredSets, type Preset, type StoredSets } from './presets.ts';
 import { DEFAULT_SUMMARY_PROMPT } from './summaries.ts';
@@ -37,6 +38,11 @@ export type Settings = {
    * Global only: resolveSettings ignores it in a project layer.
    */
   suggestFields: boolean;
+  /**
+   * The user's Shortcut bindings (keymap.ts): action id -> binding text, only those that differ from
+   * the default. Global only (they apply in every project): resolveSettings ignores a project layer's.
+   */
+  shortcuts: Overrides;
 };
 
 /**
@@ -72,6 +78,7 @@ export const DEFAULT_SETTINGS: Settings = {
   types: ['enhancement', 'bug', 'chore', 'research'],
   presetSet: defaultSetId([]),
   suggestFields: true,
+  shortcuts: {},
 };
 
 const record = (v: unknown): Record<string, unknown> | null =>
@@ -115,6 +122,8 @@ export const parseSettings = (raw: unknown): SettingsLayer => {
   if (typeof r.maxParallel === 'number' && Number.isFinite(r.maxParallel)) out.maxParallel = clampParallel(r.maxParallel);
   if (typeof r.hideChildren === 'boolean') out.hideChildren = r.hideChildren;
   if (typeof r.suggestFields === 'boolean') out.suggestFields = r.suggestFields;
+  const shortcuts = parseOverrides(r.shortcuts);
+  if (Object.keys(shortcuts).length > 0) out.shortcuts = shortcuts;
   const presetSet = text(r.presetSet);
   if (presetSet !== undefined) out.presetSet = presetSet;
   if (Array.isArray(r.types)) {
@@ -194,6 +203,7 @@ export const resolveSettings = (global: SettingsLayer, project: SettingsLayer, f
     types: [...(p.types ?? g.types ?? d.types)],
     presetSet: p.presetSet ?? g.presetSet ?? defaultSetId(found),
     suggestFields: g.suggestFields ?? d.suggestFields,
+    shortcuts: { ...(g.shortcuts ?? d.shortcuts) },
   };
 };
 

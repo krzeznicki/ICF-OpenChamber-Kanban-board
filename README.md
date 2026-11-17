@@ -96,6 +96,7 @@ Types: `bug` and `enhancement` (a feature), plus your own (`chore` and `research
 - **Show archived (N)** in the Done header draws them again, muted and marked `archived` (until the panel reloads). Their modal has **Unarchive**, which puts the task back in Done.
 - A task that leaves Done (reopened by hand, by the CLI or on GitHub) is unarchived on its own; ids the tracker no longer lists (e.g. issues closed more than 30 days ago) are dropped on the next load. Such a task loses its archive mark: if the tracker lists it again and it is still done, it shows in Done again.
 - A parent's progress (`3/5 sub-tasks done`) still counts its archived done sub-tasks.
+- **Clear archive** (next to **Show archived**) deletes every archived task for good, after a confirm, like the task modal's **Delete**: locally their files (an archived feature with its whole folder, but only when all its sub-tasks on the board are archived too; otherwise it stays), on GitHub one `gh issue delete` per archived issue (repository admins only; sub-issues not archived become top-level). A failed delete does not stop the others.
 
 ## Adding tasks
 

@@ -1,6 +1,7 @@
 // The board shell: a toolbar (a TEST badge in the test build, project switcher, "Hide sub-tasks", a search field,
-// Add task, Settings, Refresh; the search completes filters, ui/searchSuggest.ts), a status slot for banners, spinner and empty states, and the five columns. The Done header carries
-// "Archive done" and "Show archived (N)" (archive.ts).
+// Add task, Settings, Refresh; the search completes filters, ui/searchSuggest.ts, and hands Esc in an
+// empty field and ↓ back to main.ts for the Board), a status slot for banners, spinner and empty states, and the five columns. The Done header carries
+// "Archive done", "Show archived (N)" (archive.ts) and "Clear archive" (clearArchive.ts).
 // It draws what main.ts hands it and reports clicks back; it holds no data of its own. Dragging
 // is attached to `columns` by the editor (ui/dnd.ts).
 import { mountBanner, mountButton, mountEmpty, mountSearchField, mountSelect, mountSpinner, mountSwitch } from '@openchamber/sdk/ui';
@@ -9,6 +10,7 @@ import type { Task } from '../../core/types.ts';
 import { VARIANT } from '../../core/variant.ts';
 import { COLUMNS, type BoardModel } from '../columns.ts';
 import type { Suggestion } from '../search.ts';
+import { hintLastChild, hintShortcut } from './shortcutHints.ts';
 import { renderCard } from './card.ts';
 import { mountSearchSuggest } from './searchSuggest.ts';
 
@@ -19,6 +21,10 @@ export type BoardCallbacks = {
   onSearch: (query: string) => void;
   /** The search field's completions for the text and caret (search.ts searchSuggestions). */
   suggest: (text: string, caret: number) => Suggestion[];
+  /** Esc in the empty search field (the kit's first Esc clears it): back to the Board. */
+  onSearchExit: () => void;
+  /** ↓ in the search field with no completion list open: select the first card; false when none. */
+  onSearchDown: () => boolean;
   onRefresh: () => void;
   onAdd: () => void;
   onSettings: () => void;
@@ -26,6 +32,8 @@ export type BoardCallbacks = {
   onArchiveDone: () => void;
   /** The Done header's "Show archived (N)" switch. */
   onShowArchived: (show: boolean) => void;
+  /** The Done header's "Clear archive": deletes the archived tasks for good (the caller asks to confirm). */
+  onClearArchive: () => void;
 };
 
 /** The Done header's archive tools: how many done tasks "Archive done" takes, how many are archived. */
@@ -106,9 +114,30 @@ export const createBoard = (root: HTMLElement, callbacks: BoardCallbacks) => {
   };
   // The field's completion list lives as long as the board, like the field itself.
   mountSearchSuggest(searchSlot, { suggest: callbacks.suggest, apply: setQuery });
+  // Esc and ↓ in the field, in steps: the completion list takes them first (capturing on the slot),
+  // then the kit's Esc clears a non-empty field (both preventDefault); only what is left reaches here,
+  // registered after the kit's listener on the same input.
+  const searchInput = searchSlot.querySelector<HTMLInputElement>('input');
+  searchInput?.addEventListener('keydown', (e) => {
+    if (e.defaultPrevented || e.isComposing || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+    if (e.key === 'Escape' && searchInput.value === '') {
+      e.preventDefault();
+      callbacks.onSearchExit();
+    } else if (e.key === 'ArrowDown' && callbacks.onSearchDown()) {
+      e.preventDefault();
+    }
+  });
   const add = mountButton(addSlot, { label: 'Add task', size: 'sm', disabled: true, onClick: callbacks.onAdd });
   mountButton(settingsSlot, { label: 'Settings', variant: 'outline', size: 'sm', onClick: callbacks.onSettings });
   const refresh = mountButton(refreshSlot, { label: 'Refresh', variant: 'outline', size: 'sm', onClick: callbacks.onRefresh });
+  // Key hints in the tooltips (shortcutHints.ts); they follow a rebinding.
+  hintShortcut(projectSlot, 'board.projects', 'Switch project');
+  hintShortcut(switchSlot, 'board.toggleSubtasks', 'Hide or show sub-tasks');
+  hintLastChild(addSlot, 'board.addTask', 'Add task');
+  hintLastChild(settingsSlot, 'board.settings', 'Settings');
+  hintLastChild(refreshSlot, 'board.refresh', 'Refresh');
+  hintShortcut(searchSlot, 'board.search', 'Search tasks');
+  let refreshBusy = false;
 
   let statusDispose: (() => void) | null = null;
   let sessionNoteDispose: (() => void) | null = null;
@@ -121,14 +150,18 @@ export const createBoard = (root: HTMLElement, callbacks: BoardCallbacks) => {
   };
   let cardDisposers: Array<() => void> = [];
 
-  /** "Archive done" and "Show archived (N)" under the Done header; disposed with the cards. */
+  /** Under the Done header: "Archive done" and "Clear archive" side by side, then "Show archived (N)"; disposed with the cards. */
   const doneTools = (done: DoneTools): HTMLElement => {
     const tools = div('kb-column-tools');
-    if (done.archivable > 0) {
+    const buttons = div('kb-archive-buttons');
+    const button = (label: string, onClick: () => void): void => {
       const slot = div('kb-archive-button');
-      tools.append(slot);
-      cardDisposers.push(mountButton(slot, { label: 'Archive done', variant: 'outline', size: 'xs', onClick: callbacks.onArchiveDone }).dispose);
-    }
+      buttons.append(slot);
+      cardDisposers.push(mountButton(slot, { label, variant: 'outline', size: 'xs', onClick }).dispose);
+    };
+    if (done.archivable > 0) button('Archive done', callbacks.onArchiveDone);
+    if (done.archived > 0) button('Clear archive', callbacks.onClearArchive);
+    tools.append(buttons);
     if (done.archived > 0) {
       const slot = div('kb-show-archived');
       tools.append(slot);
@@ -156,7 +189,30 @@ export const createBoard = (root: HTMLElement, callbacks: BoardCallbacks) => {
     },
     /** A dismissible info banner above the columns (the rail panel's session note); null removes it. */
     setSessionNote,
-    setBusy: (busy: boolean) => refresh.update({ loading: busy, disabled: busy }),
+    setBusy: (busy: boolean) => {
+      refreshBusy = busy;
+      refresh.update({ loading: busy, disabled: busy });
+    },
+    /** Refresh is running (its button is disabled), so the Refresh Shortcut does nothing either. */
+    busy: () => refreshBusy,
+    /** Focuses the search field with its text selected (the Search Shortcut). */
+    focusSearch: (): boolean => {
+      if (searchInput === null) return false;
+      searchInput.focus();
+      searchInput.select();
+      return true;
+    },
+    /**
+     * Opens the project switcher with its search focused, as a click on it does (the Project
+     * switcher Shortcut). False when it is disabled (no projects); an open one gets its search focused.
+     */
+    openProjects: (): boolean => {
+      const trigger = projectSlot.querySelector<HTMLButtonElement>('.oc-sdk-trigger');
+      if (trigger === null || trigger.disabled) return false;
+      if (trigger.getAttribute('aria-expanded') === 'true') projectSlot.querySelector<HTMLInputElement>('.oc-sdk-popup-search input')?.focus();
+      else trigger.click();
+      return true;
+    },
     setStatus: (next: BoardStatus) => {
       statusDispose?.();
       statusDispose = null;

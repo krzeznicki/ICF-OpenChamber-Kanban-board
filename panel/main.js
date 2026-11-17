@@ -453,7 +453,7 @@
     if (!target) {
       throw new HostRequestError("HOST_UNAVAILABLE", "No window. connectHost runs in a browser frame.");
     }
-    const acceptSource = options.acceptSource ?? ((source) => source === target.parent);
+    const acceptSource = options.acceptSource ?? ((source2) => source2 === target.parent);
     const requestTimeoutMs = options.requestTimeoutMs ?? GUEST_REQUEST_TIMEOUT_MS;
     const readyListeners = /* @__PURE__ */ new Set();
     const directoryListeners = /* @__PURE__ */ new Set();
@@ -1916,7 +1916,7 @@ ${GUEST_UI_LOOK_CSS}`;
     const label = document.createElement("span");
     node.append(label);
     root.append(node);
-    const paint = () => {
+    const paint2 = () => {
       node.dataset.variant = props.variant ?? "default";
       node.dataset.size = props.size ?? "default";
       node.disabled = Boolean(props.disabled) || Boolean(props.loading);
@@ -1936,11 +1936,11 @@ ${GUEST_UI_LOOK_CSS}`;
       props.onClick();
     };
     node.addEventListener("click", onClick);
-    paint();
+    paint2();
     return {
       update: (next) => {
         props = { ...props, ...next };
-        paint();
+        paint2();
       },
       dispose: () => {
         node.removeEventListener("click", onClick);
@@ -1959,7 +1959,7 @@ ${GUEST_UI_LOOK_CSS}`;
     const note = el("span", "oc-sdk-field-note");
     field2.append(caption, input, note);
     root.append(field2);
-    const paint = () => {
+    const paint2 = () => {
       setText(caption, props.label);
       caption.hidden = !props.label;
       if (input instanceof HTMLInputElement) {
@@ -1984,11 +1984,11 @@ ${GUEST_UI_LOOK_CSS}`;
       props.onChange(input.value);
     };
     input.addEventListener("input", onInput);
-    paint();
+    paint2();
     return {
       update: (next) => {
         props = { ...props, ...next };
-        paint();
+        paint2();
       },
       dispose: () => {
         input.removeEventListener("input", onInput);
@@ -2038,7 +2038,7 @@ ${GUEST_UI_LOOK_CSS}`;
     clear.tabIndex = -1;
     wrap.append(icon("search", 16, "oc-sdk-search-icon"), input, clear);
     root.append(wrap);
-    const paint = () => {
+    const paint2 = () => {
       const placeholder = props.placeholder ?? "Search";
       setAttr(input, "placeholder", placeholder);
       input.setAttribute("aria-label", props.label ?? placeholder);
@@ -2066,14 +2066,14 @@ ${GUEST_UI_LOOK_CSS}`;
     input.addEventListener("input", onInput);
     input.addEventListener("keydown", onKeyDown);
     clear.addEventListener("click", clearValue);
-    paint();
+    paint2();
     if (props.autofocus) {
       input.focus();
     }
     return {
       update: (next) => {
         props = { ...props, ...next };
-        paint();
+        paint2();
       },
       dispose: () => {
         input.removeEventListener("input", onInput);
@@ -2322,12 +2322,12 @@ ${GUEST_UI_LOOK_CSS}`;
       if (closePopup && !(event.relatedTarget instanceof Node && wrap.contains(event.relatedTarget)))
         close();
     };
-    const paint = () => {
+    const paint2 = () => {
       setText(caption, props.label);
       caption.hidden = !props.label;
-      const current = props.options.find((option) => option.id === props.value);
-      setText(value, current?.label ?? props.placeholder ?? "Select");
-      value.dataset.empty = current ? "false" : "true";
+      const current2 = props.options.find((option) => option.id === props.value);
+      setText(value, current2?.label ?? props.placeholder ?? "Select");
+      value.dataset.empty = current2 ? "false" : "true";
       trigger.disabled = Boolean(props.disabled);
       if (closePopup)
         paintOptions();
@@ -2337,11 +2337,11 @@ ${GUEST_UI_LOOK_CSS}`;
     popup.addEventListener("keydown", onPopupKey);
     search.addEventListener("input", onSearchInput);
     wrap.addEventListener("focusout", onFocusOut);
-    paint();
+    paint2();
     return {
       update: (next) => {
         props = { ...props, ...next };
-        paint();
+        paint2();
       },
       dispose: () => {
         close();
@@ -2371,7 +2371,7 @@ ${GUEST_UI_LOOK_CSS}`;
     text3.append(label, description);
     node.append(control, text3);
     root.append(node);
-    const paint = () => {
+    const paint2 = () => {
       node.setAttribute("aria-checked", props.checked ? "true" : "false");
       node.disabled = Boolean(props.disabled);
       setText(label, props.label);
@@ -2384,11 +2384,11 @@ ${GUEST_UI_LOOK_CSS}`;
       }
     };
     node.addEventListener("click", onClick);
-    paint();
+    paint2();
     return {
       update: (next) => {
         props = { ...props, ...next };
-        paint();
+        paint2();
       },
       dispose: () => {
         node.removeEventListener("click", onClick);
@@ -2406,7 +2406,7 @@ ${GUEST_UI_LOOK_CSS}`;
     const track = el("div", "oc-sdk oc-sdk-tabs");
     track.setAttribute("role", "tablist");
     root.append(track);
-    const paint = () => {
+    const paint2 = () => {
       clearNode(track);
       track.dataset.track = props.trackBackground ? "true" : "false";
       for (const item of props.items) {
@@ -2446,11 +2446,11 @@ ${GUEST_UI_LOOK_CSS}`;
       }
     };
     track.addEventListener("keydown", onKeyDown);
-    paint();
+    paint2();
     return {
       update: (next) => {
         props = { ...props, ...next };
-        paint();
+        paint2();
       },
       dispose: () => {
         track.removeEventListener("keydown", onKeyDown);
@@ -2468,15 +2468,15 @@ ${GUEST_UI_LOOK_CSS}`;
     let props = initial;
     const node = el("span", "oc-sdk oc-sdk-badge");
     root.append(node);
-    const paint = () => {
+    const paint2 = () => {
       setText(node, props.label);
       applyTone(node, props.tone);
     };
-    paint();
+    paint2();
     return {
       update: (next) => {
         props = { ...props, ...next };
-        paint();
+        paint2();
       },
       dispose: () => {
         node.remove();
@@ -2511,7 +2511,7 @@ ${GUEST_UI_LOOK_CSS}`;
       node.textContent = text3;
       return node;
     };
-    const paint = () => {
+    const paint2 = () => {
       clearNode(list2);
       setAttr(list2, "aria-label", props.ariaLabel);
       if (props.items.length === 0) {
@@ -2559,11 +2559,11 @@ ${GUEST_UI_LOOK_CSS}`;
       }
     };
     list2.addEventListener("keydown", onKeyDown);
-    paint();
+    paint2();
     return {
       update: (next) => {
         props = { ...props, ...next };
-        paint();
+        paint2();
       },
       dispose: () => {
         list2.removeEventListener("keydown", onKeyDown);
@@ -2583,7 +2583,7 @@ ${GUEST_UI_LOOK_CSS}`;
     shell.append(title, body, slot);
     root.append(shell);
     let action = null;
-    const paint = () => {
+    const paint2 = () => {
       setText(title, props.title);
       setText(body, props.body);
       body.hidden = !props.body;
@@ -2600,11 +2600,11 @@ ${GUEST_UI_LOOK_CSS}`;
         action = mountButton(slot, { ...next, variant: "outline", size: "sm" });
       }
     };
-    paint();
+    paint2();
     return {
       update: (next) => {
         props = { ...props, ...next };
-        paint();
+        paint2();
       },
       dispose: () => {
         action?.dispose();
@@ -2625,17 +2625,17 @@ ${GUEST_UI_LOOK_CSS}`;
     const label = el("span");
     node.append(ring2, label);
     root.append(node);
-    const paint = () => {
+    const paint2 = () => {
       node.dataset.size = props.size ?? "default";
       setText(label, props.label);
       label.hidden = !props.label;
       node.setAttribute("aria-label", props.label ?? "Loading");
     };
-    paint();
+    paint2();
     return {
       update: (next) => {
         props = { ...props, ...next };
-        paint();
+        paint2();
       },
       dispose: () => {
         node.remove();
@@ -2656,7 +2656,7 @@ ${GUEST_UI_LOOK_CSS}`;
     node.append(text3, slot);
     root.append(node);
     let action = null;
-    const paint = () => {
+    const paint2 = () => {
       node.dataset.tone = props.tone;
       node.setAttribute("role", props.tone === "error" || props.tone === "warning" ? "alert" : "status");
       setText(title, props.title);
@@ -2675,11 +2675,11 @@ ${GUEST_UI_LOOK_CSS}`;
         action = mountButton(slot, { ...next, variant: "outline", size: "xs" });
       }
     };
-    paint();
+    paint2();
     return {
       update: (next) => {
         props = { ...props, ...next };
-        paint();
+        paint2();
       },
       dispose: () => {
         action?.dispose();
@@ -2710,7 +2710,7 @@ ${GUEST_UI_LOOK_CSS}`;
     track.append(fill2);
     node.append(caption, track);
     root.append(node);
-    const paint = () => {
+    const paint2 = () => {
       const value = clampProgress(props.value);
       applyTone(fill2, props.tone);
       fill2.style.transform = `scaleX(${value / 100})`;
@@ -2726,17 +2726,22 @@ ${GUEST_UI_LOOK_CSS}`;
       doneMark.style.display = done ? "" : "none";
       caption.hidden = !props.label;
     };
-    paint();
+    paint2();
     return {
       update: (next) => {
         props = { ...props, ...next };
-        paint();
+        paint2();
       },
       dispose: () => {
         node.remove();
       }
     };
   };
+
+  // src/core/variant.ts
+  var toVariant = (value) => value === "test" ? "test" : "prod";
+  var VARIANT = toVariant(false ? void 0 : "prod");
+  var panelId = (variant) => variant === "test" ? "icf-kanban-test" : "icf-kanban";
 
   // src/panel/archive.ts
   var ARCHIVE_MAX = 400;
@@ -2775,8 +2780,8 @@ ${GUEST_UI_LOOK_CSS}`;
   var isArchived = (task, marks) => task.state === "done" && marks.has(task.id);
   var mergeArchived = (mine, stored2, removed = /* @__PURE__ */ new Map()) => {
     const out = /* @__PURE__ */ new Map();
-    for (const source of [mine, stored2]) {
-      for (const [id, at] of source) {
+    for (const source2 of [mine, stored2]) {
+      for (const [id, at] of source2) {
         if (at <= (removed.get(id) ?? 0)) continue;
         if (at > (out.get(id) ?? 0)) out.set(id, at);
       }
@@ -2818,6 +2823,46 @@ ${GUEST_UI_LOOK_CSS}`;
         if (prev !== void 0 && n >= prev.n) pending.delete(projectId);
       }
     };
+  };
+
+  // src/panel/clearArchive.ts
+  var plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+  var clearArchivePlan = (tracker, tasks, marks) => {
+    const archived2 = tasks.filter((t) => isArchived(t, marks));
+    const ids = new Set(archived2.map((t) => t.id));
+    const children = /* @__PURE__ */ new Map();
+    for (const t of tasks) if (t.parentId !== null) children.set(t.parentId, [...children.get(t.parentId) ?? [], t]);
+    const hasChildren = (id) => (children.get(id)?.length ?? 0) > 0;
+    if (tracker === "local") {
+      const skipped = archived2.filter((t) => t.kind === "parent" && !(children.get(t.id) ?? []).every((c) => ids.has(c.id))).map((t) => t.id);
+      const gone = new Set(archived2.filter((t) => t.kind === "parent" && !skipped.includes(t.id)).map((t) => t.id));
+      const deletes = [];
+      for (const t of archived2) {
+        if (gone.has(t.id)) deletes.push({ id: t.id, withChildren: true });
+        else if (t.kind !== "parent" && (t.parentId === null || !gone.has(t.parentId))) deletes.push({ id: t.id, withChildren: false });
+      }
+      return { deletes, skipped, count: archived2.length - skipped.length };
+    }
+    const ordered = [...archived2.filter((t) => !hasChildren(t.id)), ...archived2.filter((t) => hasChildren(t.id))];
+    return { deletes: ordered.map((t) => ({ id: t.id, withChildren: false })), skipped: [], count: archived2.length };
+  };
+  var clearConfirm = (tracker, plan) => {
+    if (plan.deletes.length === 0) return null;
+    const where = tracker === "local" ? "Their files in .scratch/ are deleted; a feature goes with its whole folder, including done sub-tasks older than 30 days the board no longer lists." : "Their issues are deleted on GitHub (only repository admins can delete issues); sub-issues not archived stay as top-level issues.";
+    const k = plan.skipped.length;
+    const kept = k > 0 ? ` ${plural(k, "archived feature")} with sub-tasks still on the board stay${k === 1 ? "s" : ""}.` : "";
+    return { title: `Delete ${plural(plan.count, "archived task")} for good?`, body: `${where}${kept} This cannot be undone from the board.` };
+  };
+  var runClearArchive = async (deletes, remove) => {
+    const out = { deleted: [], failed: [] };
+    for (const d of deletes) {
+      try {
+        out.deleted.push(...await remove(d.id, d.withChildren));
+      } catch (error2) {
+        out.failed.push({ id: d.id, error: error2 });
+      }
+    }
+    return out;
   };
 
   // src/panel/api.ts
@@ -2929,8 +2974,8 @@ ${GUEST_UI_LOOK_CSS}`;
   var parseOrder = (raw) => Array.isArray(raw) ? [...new Set(raw.filter((id) => typeof id === "string" && id !== ""))].slice(0, ORDER_MAX) : [];
   var renameInOrder = (order2, from, to) => order2.includes(from) ? order2.filter((id) => id !== to).map((id) => id === from ? to : id) : [...order2];
   var pruneOrder = (order2, tasks) => {
-    const listed = new Set(tasks.map((t) => t.id));
-    return order2.filter((id) => listed.has(id));
+    const listed2 = new Set(tasks.map((t) => t.id));
+    return order2.filter((id) => listed2.has(id));
   };
   var forgetInOrder = (order2, ids) => {
     const gone = new Set(ids);
@@ -3217,6 +3262,192 @@ ${GUEST_UI_LOOK_CSS}`;
     const parts = [...part("create", "sub-task", "not created"), ...part("link", "existing task", "not linked under it")];
     return `Created ${taskId}, but ${parts.join("; ")}.`;
   };
+
+  // src/panel/keymap.ts
+  var mod = (key, shift = false) => ({ key, mod: true, shift, alt: false });
+  var plain = (key) => ({ key, mod: false, shift: false, alt: false });
+  var def = (id, context, label, binding, fixed = false) => ({
+    id,
+    context,
+    label,
+    binding,
+    fixed
+  });
+  var listed = (id, context, label, binding) => ({
+    ...def(id, context, label, binding, true),
+    listedOnly: true
+  });
+  var DEFAULT_SHORTCUTS = [
+    def("board.addTask", "board", "Add task", mod("a")),
+    def("board.toggleSubtasks", "board", "Hide/show sub-tasks", mod("s")),
+    def("board.moveCardPrev", "board", "Move card to previous column", mod("ArrowLeft", true)),
+    def("board.moveCardNext", "board", "Move card to next column", mod("ArrowRight", true)),
+    def("board.projects", "board", "Project switcher", mod("k")),
+    def("board.settings", "board", "Settings", mod(",")),
+    def("board.refresh", "board", "Refresh", mod("r", true)),
+    def("board.search", "board", "Search", mod("f")),
+    def("board.selectUp", "board", "Select card above", plain("ArrowUp"), true),
+    def("board.selectDown", "board", "Select card below", plain("ArrowDown"), true),
+    def("board.selectLeft", "board", "Select card in previous column", plain("ArrowLeft"), true),
+    def("board.selectRight", "board", "Select card in next column", plain("ArrowRight"), true),
+    def("board.openSelected", "board", "Open selected card", plain("Enter"), true),
+    listed("board.escape", "board", "Leave search / close dialog", plain("Escape")),
+    def("board.cheatSheet", "board", "Show keyboard shortcuts", plain("?"), true),
+    def("task.prev", "task", "Previous task", mod("ArrowUp")),
+    def("task.next", "task", "Next task", mod("ArrowDown")),
+    def("task.edit", "task", "Edit", mod("e")),
+    def("task.saveEdit", "task", "Save edit", mod("Enter")),
+    def("task.addSubtask", "task", "Add sub-task", mod("s")),
+    def("task.pickParent", "task", "Pick parent", mod("p")),
+    def("task.state1", "task", "Set state to column 1", mod("1")),
+    def("task.state2", "task", "Set state to column 2", mod("2")),
+    def("task.state3", "task", "Set state to column 3", mod("3")),
+    def("task.state4", "task", "Set state to column 4", mod("4")),
+    def("task.state5", "task", "Set state to column 5", mod("5")),
+    def("task.openSession", "task", "Open session", mod("o")),
+    def("task.delete", "task", "Delete (with confirm)", mod("Backspace")),
+    def("add.create", "add", "Create task", mod("Enter"))
+  ];
+  var SHORTCUT_CONTEXTS = [
+    { context: "board", label: "Board" },
+    { context: "task", label: "Open task" },
+    { context: "add", label: "Add task" }
+  ];
+  var CONTEXT_LABELS = Object.fromEntries(SHORTCUT_CONTEXTS.map((c) => [c.context, c.label]));
+  var RESERVED_KEYS = ["w", "q", "r", "t", "n"];
+  var TEXT_FIELD_KEYS = ["a", "c", "v", "x", "z"];
+  var MODIFIER_KEYS = /* @__PURE__ */ new Set(["Meta", "Control", "Shift", "Alt", "AltGraph", "CapsLock", "Fn", "OS", "Dead", "Process", "Unidentified"]);
+  var isAlnum = (k) => /^[a-z0-9]$/i.test(k);
+  var isSymbol = (k) => [...k].length === 1 && !isAlnum(k) && k !== " ";
+  var pressedKey = (key, code2) => {
+    if (isAlnum(key)) return key.toLowerCase();
+    const fromCode = code2 === void 0 ? null : /^Key([A-Z])$/.exec(code2) ?? /^Digit([0-9])$/.exec(code2);
+    if (fromCode !== null && fromCode !== void 0 && ([...key].length === 1 || key === "Dead")) return fromCode[1].toLowerCase();
+    return key === " " ? "Space" : key;
+  };
+  var bindingOf = (input) => pressOf(input)?.binding ?? null;
+  var pressFromEvent = (e, platform) => ({
+    key: e.key,
+    code: e.code,
+    meta: e.metaKey,
+    ctrl: e.ctrlKey,
+    shift: e.shiftKey,
+    alt: e.altKey,
+    platform
+  });
+  var plainMod = (b) => b.mod && !b.shift && !b.alt;
+  var pressOf = (input) => {
+    if (MODIFIER_KEYS.has(input.key)) return null;
+    const key = pressedKey(input.key, input.code);
+    const isMod = input.platform === "mac" ? input.meta : input.ctrl;
+    const foreign = input.platform === "mac" ? input.ctrl : input.meta;
+    return { binding: { key, mod: isMod && !foreign, shift: isSymbol(key) ? false : input.shift, alt: input.alt }, foreign };
+  };
+  var isReloadKey = (b) => b.mod && !b.alt && b.key === "r";
+  var sameBinding = (a, b) => a.key === b.key && a.mod === b.mod && a.shift === b.shift && a.alt === b.alt;
+  var bindingToString = (b) => [b.mod ? "Mod" : "", b.alt ? "Alt" : "", b.shift ? "Shift" : "", b.key === "+" ? "Plus" : b.key].filter((p) => p !== "").join("+");
+  var parseBinding = (text3) => {
+    if (typeof text3 !== "string" || text3 === "" || text3.length > 40) return null;
+    const parts = text3.split("+");
+    const last = parts.pop();
+    if (last === void 0 || last === "") return null;
+    const flags = new Set(parts);
+    if (flags.size !== parts.length || [...flags].some((f) => f !== "Mod" && f !== "Shift" && f !== "Alt")) return null;
+    const key = last === "Plus" ? "+" : isAlnum(last) ? last.toLowerCase() : last;
+    if (MODIFIER_KEYS.has(key)) return null;
+    return { key, mod: flags.has("Mod"), shift: flags.has("Shift") && !isSymbol(key), alt: flags.has("Alt") };
+  };
+  var MAC_KEYS = {
+    ArrowUp: "\u2191",
+    ArrowDown: "\u2193",
+    ArrowLeft: "\u2190",
+    ArrowRight: "\u2192",
+    Enter: "\u21A9",
+    Backspace: "\u232B",
+    Delete: "\u2326",
+    Escape: "Esc",
+    Tab: "\u21E5",
+    Space: "Space"
+  };
+  var OTHER_KEYS = {
+    ArrowUp: "\u2191",
+    ArrowDown: "\u2193",
+    ArrowLeft: "\u2190",
+    ArrowRight: "\u2192",
+    Escape: "Esc"
+  };
+  var keyName = (key, platform) => (platform === "mac" ? MAC_KEYS[key] : OTHER_KEYS[key]) ?? ([...key].length === 1 ? key.toUpperCase() : key);
+  var formatBinding = (b, platform) => platform === "mac" ? `${b.alt ? "\u2325" : ""}${b.shift ? "\u21E7" : ""}${b.mod ? "\u2318" : ""}${keyName(b.key, platform)}` : [b.mod ? "Ctrl" : "", b.alt ? "Alt" : "", b.shift ? "Shift" : "", keyName(b.key, platform)].filter((p) => p !== "").join("+");
+  var DEFAULTS = new Map(DEFAULT_SHORTCUTS.map((s) => [s.id, s]));
+  var isActionId = (id) => typeof id === "string" && DEFAULTS.has(id);
+  var parseOverrides = (raw) => {
+    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return {};
+    const out = {};
+    for (const [id, text3] of Object.entries(raw)) {
+      if (!isActionId(id) || DEFAULTS.get(id).fixed) continue;
+      const b = parseBinding(text3);
+      if (b !== null) out[id] = bindingToString(b);
+    }
+    return out;
+  };
+  var setOverride = (overrides, id, binding) => {
+    const { [id]: _, ...rest } = overrides;
+    const base2 = DEFAULTS.get(id);
+    return base2 === void 0 || base2.fixed || sameBinding(base2.binding, binding) ? rest : { ...rest, [id]: bindingToString(binding) };
+  };
+  var resetOverride = (overrides, id) => {
+    const { [id]: _, ...rest } = overrides;
+    return rest;
+  };
+  var createKeymap = (overrides = {}) => {
+    const clean2 = parseOverrides(overrides);
+    const table2 = DEFAULT_SHORTCUTS.map((s) => {
+      const text3 = clean2[s.id];
+      const b = text3 === void 0 ? null : parseBinding(text3);
+      return b === null ? { ...s, binding: { ...s.binding } } : { ...s, binding: b };
+    });
+    const byId = new Map(table2.map((s) => [s.id, s]));
+    const get = (id) => {
+      const s = byId.get(id);
+      if (s === void 0) throw new Error(`Unknown Shortcut: ${id}`);
+      return { ...s, binding: { ...s.binding } };
+    };
+    const resolve = (input) => {
+      if (input.composing || input.context === null) return null;
+      const press = pressOf(input);
+      if (press === null || press.foreign) return null;
+      const pressed = press.binding;
+      if (input.inTextField && plainMod(pressed) && TEXT_FIELD_KEYS.includes(pressed.key)) return null;
+      for (const s of table2) {
+        if (s.listedOnly === true || s.context !== input.context || !sameBinding(s.binding, pressed)) continue;
+        if (s.fixed && input.inTextField) return null;
+        return s.id;
+      }
+      return null;
+    };
+    const validate = (id, binding) => {
+      const self = get(id);
+      if (self.fixed) return { ok: false, reason: "fixed" };
+      if (!binding.mod) return { ok: false, reason: "no-modifier" };
+      const holder = table2.find((s) => s.id !== id && s.context === self.context && sameBinding(s.binding, binding));
+      if (holder !== void 0) return { ok: false, reason: "duplicate", holder: { ...holder, binding: { ...holder.binding } } };
+      if (plainMod(binding) && TEXT_FIELD_KEYS.includes(binding.key) && !sameBinding(DEFAULTS.get(id).binding, binding)) {
+        return { ok: false, reason: "text-field" };
+      }
+      const reserved = plainMod(binding) && RESERVED_KEYS.includes(binding.key);
+      return { ok: true, warning: reserved ? "reserved" : null };
+    };
+    return {
+      resolve,
+      all: () => table2.map((s) => get(s.id)),
+      list: (context) => table2.filter((s) => s.context === context).map((s) => get(s.id)),
+      get,
+      label: (id, platform) => formatBinding(get(id).binding, platform),
+      validate,
+      overridden: (id) => clean2[id] !== void 0
+    };
+  };
+  var platformOf = (navigatorPlatform) => /mac|iphone|ipad|ipod/i.test(navigatorPlatform) ? "mac" : "other";
 
   // src/core/skills.ts
   var MATT_SKILLS = [
@@ -3642,8 +3873,8 @@ ${GUEST_UI_LOOK_CSS}`;
   var isEdited = (stored2, setId, presetId) => stored2.builtin[setId] !== void 0 && Object.hasOwn(stored2.builtin[setId].texts, presetId);
   var shipped = (setId, presetId) => builtinSet(setId)?.presets.find((p) => p.id === presetId);
   var withBuiltin = (stored2, setId, change) => {
-    const current = stored2.builtin[setId] ?? { texts: {}, custom: [] };
-    const next = change({ texts: { ...current.texts }, custom: [...current.custom] });
+    const current2 = stored2.builtin[setId] ?? { texts: {}, custom: [] };
+    const next = change({ texts: { ...current2.texts }, custom: [...current2.custom] });
     const builtin = { ...stored2.builtin };
     if (Object.keys(next.texts).length === 0 && next.custom.length === 0) delete builtin[setId];
     else builtin[setId] = next;
@@ -3778,8 +4009,8 @@ Title: {title}
   };
   var hash = (s) => fnv(s, 2166136261) + fnv(s, 84696351);
   var taskPrefix = (projectId, taskId) => {
-    const plain = `summary:${projectId}:${taskId}:`;
-    return plain.length + 16 <= MAX_KEY ? plain : `summary:~${hash(JSON.stringify([projectId, taskId]))}:`;
+    const plain2 = `summary:${projectId}:${taskId}:`;
+    return plain2.length + 16 <= MAX_KEY ? plain2 : `summary:~${hash(JSON.stringify([projectId, taskId]))}:`;
   };
   var summaryKey = (projectId, task, s) => taskPrefix(projectId, task.id) + hash(JSON.stringify([task.body, s.language, s.prompt]));
   var fill = (template, values) => template.replace(/\{(language|title|body)\}/g, (_, k) => values[k]);
@@ -4014,7 +4245,8 @@ ${ref}`,
     hideChildren: false,
     types: ["enhancement", "bug", "chore", "research"],
     presetSet: defaultSetId([]),
-    suggestFields: true
+    suggestFields: true,
+    shortcuts: {}
   };
   var record3 = (v2) => typeof v2 === "object" && v2 !== null && !Array.isArray(v2) ? v2 : null;
   var text = (v2) => typeof v2 === "string" && v2.trim() !== "" ? v2.trim() : void 0;
@@ -4048,6 +4280,8 @@ ${ref}`,
     if (typeof r.maxParallel === "number" && Number.isFinite(r.maxParallel)) out.maxParallel = clampParallel(r.maxParallel);
     if (typeof r.hideChildren === "boolean") out.hideChildren = r.hideChildren;
     if (typeof r.suggestFields === "boolean") out.suggestFields = r.suggestFields;
+    const shortcuts2 = parseOverrides(r.shortcuts);
+    if (Object.keys(shortcuts2).length > 0) out.shortcuts = shortcuts2;
     const presetSet = text(r.presetSet);
     if (presetSet !== void 0) out.presetSet = presetSet;
     if (Array.isArray(r.types)) {
@@ -4104,7 +4338,8 @@ ${ref}`,
       hideChildren: p.hideChildren ?? g.hideChildren ?? d.hideChildren,
       types: [...p.types ?? g.types ?? d.types],
       presetSet: p.presetSet ?? g.presetSet ?? defaultSetId(found),
-      suggestFields: g.suggestFields ?? d.suggestFields
+      suggestFields: g.suggestFields ?? d.suggestFields,
+      shortcuts: { ...g.shortcuts ?? d.shortcuts }
     };
   };
   var suggestEnabled = (globalLoaded2, global) => globalLoaded2 && resolveSettings(global, {}).suggestFields;
@@ -4367,11 +4602,11 @@ ${ref}`,
     }
     return { type, state: state2 };
   };
-  var planSuggestion = (asked, s, current) => {
+  var planSuggestion = (asked, s, current2) => {
     const out = {};
-    if (current === null) return out;
-    if (asked.type && s.type !== null && current.type === null) out.type = s.type;
-    if (asked.state && current.state === "needs-triage" && s.state !== "needs-triage") out.state = s.state;
+    if (current2 === null) return out;
+    if (asked.type && s.type !== null && current2.type === null) out.type = s.type;
+    if (asked.state && current2.state === "needs-triage" && s.state !== "needs-triage") out.state = s.state;
     return out;
   };
   var codeOf2 = (e) => typeof e === "object" && e !== null && typeof e.code === "string" ? e.code : null;
@@ -4433,13 +4668,13 @@ ${ref}`,
       if (deps.busy?.(job.taskId) === true) return { kind: "kept" };
       const written = {};
       try {
-        let current;
+        let current2;
         try {
-          current = await job.target.get(job.taskId);
+          current2 = await job.target.get(job.taskId);
         } catch {
-          current = null;
+          current2 = null;
         }
-        const plan = planSuggestion(job.asked, suggestion, current);
+        const plan = planSuggestion(job.asked, suggestion, current2);
         if (plan.type === void 0 && plan.state === void 0) return { kind: "kept" };
         if (deps.busy?.(job.taskId) === true) return { kind: "kept" };
         if (plan.type !== void 0) {
@@ -4598,11 +4833,11 @@ ${ref}`,
       out.push(search.dispose);
     }
     for (const c of o.offered) {
-      const cell = document.createElement("div");
-      cell.className = "kb-add-check";
-      cell.dataset.id = c.id;
-      list2.append(cell);
-      const check = mountCheckbox(cell, {
+      const cell2 = document.createElement("div");
+      cell2.className = "kb-add-check";
+      cell2.dataset.id = c.id;
+      list2.append(cell2);
+      const check = mountCheckbox(cell2, {
         label: c.label,
         description: c.hint ?? c.id,
         checked: o.selected().includes(c.id),
@@ -4754,6 +4989,91 @@ ${ref}`,
     (d) => fetchAgents(d).then((r) => ({ list: r.agents, ...r.error !== void 0 ? { error: r.error } : {} })),
     directory
   );
+
+  // src/panel/shortcuts.ts
+  var TEXT_INPUT_TYPES = /* @__PURE__ */ new Set(["text", "search", "email", "url", "tel", "password", "number", "date", "datetime-local", "month", "time", "week", ""]);
+  var isTextField = (el7) => el7 instanceof HTMLInputElement && TEXT_INPUT_TYPES.has(el7.type) || el7 instanceof HTMLTextAreaElement || el7 instanceof HTMLElement && el7.isContentEditable;
+  var activeElement = () => {
+    let el7 = document.activeElement;
+    while (el7?.shadowRoot?.activeElement) el7 = el7.shadowRoot.activeElement;
+    return el7;
+  };
+  var focusInTextField = () => isTextField(activeElement());
+  var detectPlatform = () => {
+    const nav = navigator;
+    return platformOf(nav.userAgentData?.platform ?? nav.platform ?? "");
+  };
+  var createShortcuts = (options = {}) => {
+    let keymap = options.keymap ?? createKeymap();
+    const platform = options.platform ?? detectPlatform();
+    const handlers = /* @__PURE__ */ new Map();
+    const reserved = /* @__PURE__ */ new Set();
+    const layers = [];
+    const context = () => {
+      for (const layer of layers) {
+        const answer = layer();
+        if (answer !== null) return answer === "none" ? null : answer;
+      }
+      return null;
+    };
+    const isReserved = (e) => {
+      if (reserved.size === 0) return false;
+      const pressed = bindingOf(pressFromEvent(e, platform));
+      if (pressed === null || !isReloadKey(pressed)) return false;
+      return [...reserved].some((id) => sameBinding(keymap.get(id).binding, pressed));
+    };
+    const onKey = (e) => {
+      const handled = e.defaultPrevented;
+      if (isReserved(e)) e.preventDefault();
+      const composing = e.isComposing || e.keyCode === 229;
+      if (handled || composing) return;
+      const id = keymap.resolve({
+        ...pressFromEvent(e, platform),
+        context: context(),
+        inTextField: focusInTextField(),
+        composing
+      });
+      if (id === null) return;
+      const handler = handlers.get(id);
+      if (handler === void 0 || handler(e) === false) return;
+      e.preventDefault();
+    };
+    document.addEventListener("keydown", onKey);
+    return {
+      on: (id, handler) => {
+        handlers.set(id, handler);
+        return () => {
+          if (handlers.get(id) === handler) handlers.delete(id);
+        };
+      },
+      reserve: (id) => {
+        reserved.add(id);
+        return () => {
+          reserved.delete(id);
+        };
+      },
+      addLayer: (layer, opts) => {
+        if (opts?.front === true) layers.unshift(layer);
+        else layers.push(layer);
+        return () => {
+          const i = layers.indexOf(layer);
+          if (i !== -1) layers.splice(i, 1);
+        };
+      },
+      context,
+      keymap: () => keymap,
+      setKeymap: (next) => {
+        keymap = next;
+      },
+      platform,
+      dispose: () => {
+        document.removeEventListener("keydown", onKey);
+        handlers.clear();
+        reserved.clear();
+        layers.length = 0;
+      }
+    };
+  };
 
   // src/panel/ui/startTarget.ts
   var message = (e) => e instanceof Error ? e.message : String(e);
@@ -4997,12 +5317,12 @@ ${ref}`,
       parent.append(r);
       return r;
     };
-    const cell = (parent) => {
+    const cell2 = (parent) => {
       const c = el2("div", "kb-field");
       parent.append(c);
       return c;
     };
-    const bool = (parent, label, get, set2, b) => mountInheritSelect(cell(parent), disposers, {
+    const bool = (parent, label, get, set2, b) => mountInheritSelect(cell2(parent), disposers, {
       label,
       value: get() === void 0 ? void 0 : get() ? "on" : "off",
       inheritLabel: inherit(onOff(b)),
@@ -5018,7 +5338,7 @@ ${ref}`,
     const defaults = () => layer.defaults ??= {};
     const summary = () => layer.summary ??= {};
     const setSection = section("Preset set", "The presets cards start with: built-in sets run Matt Pocock's skills, the Superpowers skills, or plain instructions; edit them or add your own in Presets.");
-    mountInheritSelect(cell(row(setSection)), disposers, {
+    mountInheritSelect(cell2(row(setSection)), disposers, {
       label: "Preset set",
       value: layer.presetSet,
       inheritLabel: opts.sets.inheritLabel,
@@ -5032,7 +5352,7 @@ ${ref}`,
     const start2 = section("Starting agents", "Moving a card to In Progress starts a session with these options unless the card sets its own.");
     const r1 = row(start2);
     bool(r1, "Start at once", () => layer.autoStart, (v2) => layer.autoStart = v2, base2.autoStart);
-    mountInheritSelect(cell(r1), disposers, {
+    mountInheritSelect(cell2(r1), disposers, {
       label: "Sessions at a time",
       value: layer.maxParallel === void 0 ? void 0 : String(layer.maxParallel),
       inheritLabel: inherit(String(base2.maxParallel)),
@@ -5046,7 +5366,7 @@ ${ref}`,
       }
     });
     const r2 = row(start2);
-    mountInheritSelect(cell(r2), disposers, {
+    mountInheritSelect(cell2(r2), disposers, {
       label: "Default preset",
       value: layer.defaults?.presetId,
       inheritLabel: inherit(presetName(presets2, base2.defaults.presetId)),
@@ -5056,7 +5376,7 @@ ${ref}`,
         emit();
       }
     });
-    mountInheritSelect(cell(r2), disposers, {
+    mountInheritSelect(cell2(r2), disposers, {
       label: "Location",
       value: layer.defaults?.location,
       inheritLabel: inherit(LOCATION_LABELS[base2.defaults.location]),
@@ -5067,9 +5387,9 @@ ${ref}`,
       }
     });
     const r3 = row(start2);
-    const modelCell = cell(r3);
-    const thinkingCell = cell(r3);
-    const agentCell = cell(row(start2));
+    const modelCell = cell2(r3);
+    const thinkingCell = cell2(r3);
+    const agentCell = cell2(row(start2));
     disposers.push(
       mountStartTarget(
         { model: modelCell, thinking: thinkingCell, agent: agentCell },
@@ -5093,7 +5413,7 @@ ${ref}`,
     const r4 = row(byType);
     for (const type of types) {
       const inherited = base2.presetByType[type];
-      mountInheritSelect(cell(r4), disposers, {
+      mountInheritSelect(cell2(r4), disposers, {
         label: type,
         value: layer.presetByType?.[type],
         inheritLabel: inherit(inherited !== void 0 ? presetName(presets2, inherited) : "default preset"),
@@ -5110,7 +5430,7 @@ ${ref}`,
     const board2 = section("Board");
     const r5 = row(board2);
     bool(r5, "Hide sub-tasks", () => layer.hideChildren, (v2) => layer.hideChildren = v2, base2.hideChildren);
-    mountInheritText(cell(r5), disposers, {
+    mountInheritText(cell2(r5), disposers, {
       label: "Types",
       value: layer.types?.join(", "),
       placeholder: base2.types.join(", "),
@@ -5125,7 +5445,7 @@ ${ref}`,
     const sum = section("Summaries");
     const r6 = row(sum);
     bool(r6, "Summarise automatically", () => layer.summary?.auto, (v2) => summary().auto = v2, base2.summary.auto);
-    mountInheritText(cell(r6), disposers, {
+    mountInheritText(cell2(r6), disposers, {
       label: "Language",
       value: layer.summary?.language,
       placeholder: base2.summary.language,
@@ -5152,12 +5472,178 @@ ${ref}`,
         'Add task offers "Let the model pick" for Type and State: your Small Model suggests them from the title and description once the task is created. Only the fields left to it change. Applies to every project.'
       );
       bool(row(fresh), "Suggest type and state for new tasks", () => layer.suggestFields, (v2) => layer.suggestFields = v2, base2.suggestFields);
+      drawShortcuts(
+        section("Keyboard shortcuts", "Shortcuts for the board, an open task and Add task. Record a new key for one, or reset it. Applies to every project."),
+        disposers,
+        {
+          get: () => layer.shortcuts ?? {},
+          set: (next) => {
+            layer.shortcuts = Object.keys(next).length === 0 ? void 0 : next;
+            emit();
+          },
+          platform: detectPlatform()
+        }
+      );
     }
+  };
+  var drawShortcuts = (root, disposers, opts) => {
+    const { platform } = opts;
+    const list2 = el2("div", "kb-keys");
+    const footer = el2("div", "kb-actions kb-actions-start");
+    root.append(list2, footer);
+    let recording = null;
+    let note = null;
+    let rowDisposers = [];
+    let rows = /* @__PURE__ */ new Map();
+    const keyText = (b) => formatBinding(b, platform);
+    const modName = platform === "mac" ? "\u2318" : "Ctrl";
+    const record4 = (id, b) => {
+      const keymap = createKeymap(opts.get());
+      const v2 = keymap.validate(id, b);
+      if (!v2.ok) {
+        const text3 = v2.reason === "duplicate" ? `${keyText(b)} is already used by \u201C${v2.holder.label}\u201D in ${CONTEXT_LABELS[v2.holder.context]}. Not saved.` : v2.reason === "no-modifier" ? `A Shortcut needs ${modName}: ${keyText(b)} would fire while typing. Not saved.` : v2.reason === "text-field" ? `${keyText(b)} is left to text fields (select all, copy, paste, cut, undo). Not saved.` : "This key cannot be changed.";
+        note = { id, tone: "error", text: text3 };
+        return;
+      }
+      opts.set(setOverride(opts.get(), id, b));
+      note = v2.warning === "reserved" ? { id, tone: "warning", text: `Saved. OpenChamber or the system may take ${keyText(b)} before the board sees it.` } : null;
+    };
+    const stop = () => {
+      const id = recording;
+      if (id === null) return;
+      recording = null;
+      rows.get(id)?.show(false);
+    };
+    const start2 = (id) => {
+      stop();
+      if (note !== null) {
+        note = null;
+        draw2();
+      }
+      const row = rows.get(id);
+      if (row === void 0) return;
+      recording = id;
+      row.show(true);
+      row.recorder?.focus();
+    };
+    const onKey = (e) => {
+      if (recording === null) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.isComposing || e.keyCode === 229) return;
+      const id = recording;
+      if (e.key === "Escape") {
+        stop();
+        return;
+      }
+      const b = bindingOf(pressFromEvent(e, platform));
+      if (b === null) return;
+      recording = null;
+      record4(id, b);
+      draw2();
+    };
+    let pressingRecorder = false;
+    const onPointerDown = (e) => {
+      const recorder = recording === null ? null : rows.get(recording)?.recorder ?? null;
+      pressingRecorder = recorder !== null && e.target instanceof Node && recorder.contains(e.target);
+      if (recording !== null && !pressingRecorder) stop();
+    };
+    const onPointerUp = () => {
+      pressingRecorder = false;
+    };
+    window.addEventListener("keydown", onKey, true);
+    window.addEventListener("pointerdown", onPointerDown, true);
+    window.addEventListener("pointerup", onPointerUp, true);
+    disposers.push(() => {
+      recording = null;
+      window.removeEventListener("keydown", onKey, true);
+      window.removeEventListener("pointerdown", onPointerDown, true);
+      window.removeEventListener("pointerup", onPointerUp, true);
+    });
+    const draw2 = () => {
+      for (const d of rowDisposers) d();
+      rowDisposers = [];
+      rows = /* @__PURE__ */ new Map();
+      list2.replaceChildren();
+      footer.replaceChildren();
+      const keymap = createKeymap(opts.get());
+      for (const { context, label } of SHORTCUT_CONTEXTS) {
+        list2.append(el2("h4", "kb-keys-context", label));
+        for (const s of keymap.list(context)) {
+          const row = el2("div", "kb-keys-row");
+          row.append(el2("span", "kb-keys-action", s.label));
+          const key = el2("span", "kb-keys-key");
+          const kbd = el2("kbd", "kb-kbd", keyText(s.binding));
+          key.append(kbd);
+          row.append(key);
+          const actions = el2("span", "kb-keys-buttons");
+          row.append(actions);
+          if (s.fixed) {
+            actions.append(el2("span", "kb-muted", "Fixed"));
+          } else {
+            const recorderButton = mountButton(actions, {
+              label: "Record",
+              variant: "ghost",
+              size: "xs",
+              onClick: () => recording === s.id ? stop() : start2(s.id)
+            });
+            rowDisposers.push(recorderButton.dispose);
+            const recorder = actions.querySelector("button");
+            const hint = el2("span", "kb-keys-recording", "Press keys\u2026 (Esc cancels)");
+            rows.set(s.id, {
+              recorder,
+              show: (on) => {
+                key.replaceChildren(on ? hint : kbd);
+                recorderButton.update({ label: on ? "Cancel" : "Record" });
+              }
+            });
+            recorder?.addEventListener("focusout", () => {
+              if (recording === s.id && !pressingRecorder) stop();
+            });
+            rowDisposers.push(
+              mountButton(actions, {
+                label: "Reset",
+                variant: "ghost",
+                size: "xs",
+                disabled: !keymap.overridden(s.id),
+                onClick: () => {
+                  stop();
+                  note = null;
+                  opts.set(resetOverride(opts.get(), s.id));
+                  draw2();
+                }
+              }).dispose
+            );
+          }
+          list2.append(row);
+          if (note !== null && note.id === s.id) list2.append(el2("p", `kb-keys-note kb-keys-${note.tone}`, note.text));
+        }
+      }
+      rowDisposers.push(
+        mountButton(footer, {
+          label: "Reset all",
+          variant: "outline",
+          size: "xs",
+          disabled: Object.keys(opts.get()).length === 0,
+          onClick: () => {
+            stop();
+            note = null;
+            opts.set({});
+            draw2();
+          }
+        }).dispose
+      );
+    };
+    disposers.push(() => {
+      for (const d of rowDisposers) d();
+      rowDisposers = [];
+    });
+    draw2();
   };
   var drawPresets = (root, disposers, getStored, setStored, redraw, view) => {
     const { setId } = view;
     const sets = listSets(getStored());
-    const current = sets.find((x) => x.id === setId) ?? sets[0];
+    const current2 = sets.find((x) => x.id === setId) ?? sets[0];
     root.append(
       el2("p", "kb-settings-hint", "A preset is a block of instructions added to the agent\u2019s start prompt; a preset set is a list of them. Choose the set a project uses in Global or This project.")
     );
@@ -5167,7 +5653,7 @@ ${ref}`,
     head.append(pickSlot);
     const picker = mountSelect(pickSlot, {
       label: "Set",
-      value: current.id,
+      value: current2.id,
       options: sets.map((x) => ({ id: x.id, label: setOptionLabel(x, view.found, getStored()) })),
       onChange: (id) => {
         picker.update({ value: id });
@@ -5184,12 +5670,12 @@ ${ref}`,
         variant: "outline",
         size: "xs",
         onClick: () => {
-          void askChoice("New preset set", `Start from a copy of \u201C${current.name}\u201D (its texts as they read now), or empty.`, [
+          void askChoice("New preset set", `Start from a copy of \u201C${current2.name}\u201D (its texts as they read now), or empty.`, [
             { id: "empty", label: "Empty", variant: "outline" },
-            { id: "copy", label: `Copy \u201C${current.name}\u201D` }
+            { id: "copy", label: `Copy \u201C${current2.name}\u201D` }
           ]).then((answer) => {
             if (answer === null) return;
-            const added = answer === "copy" ? addSet(getStored(), `${current.name} (copy)`, current.id) : addSet(getStored(), "New set", null);
+            const added = answer === "copy" ? addSet(getStored(), `${current2.name} (copy)`, current2.id) : addSet(getStored(), "New set", null);
             setStored(added.stored);
             view.pick(added.id);
             redraw();
@@ -5197,18 +5683,18 @@ ${ref}`,
         }
       }).dispose
     );
-    if (!current.builtin) {
+    if (!current2.builtin) {
       disposers.push(
         mountButton(setButtons, {
           label: "Delete set",
           variant: "ghost",
           size: "xs",
           onClick: () => {
-            void askChoice(`Delete \u201C${current.name}\u201D?`, "Settings that chose it use the default set instead.", [
+            void askChoice(`Delete \u201C${current2.name}\u201D?`, "Settings that chose it use the default set instead.", [
               { id: "delete", label: "Delete", variant: "destructive" }
             ]).then((answer) => {
               if (answer !== "delete") return;
-              setStored(deleteSet(getStored(), current.id));
+              setStored(deleteSet(getStored(), current2.id));
               view.pick(sets[0].id);
               redraw();
             });
@@ -5219,16 +5705,16 @@ ${ref}`,
       root.append(nameSlot);
       const name = mountTextField(nameSlot, {
         label: "Set name",
-        value: current.name,
+        value: current2.name,
         onChange: (v2) => {
           name.update({ value: v2 });
-          setStored(renameSet(getStored(), current.id, v2));
+          setStored(renameSet(getStored(), current2.id, v2));
         }
       });
       disposers.push(name.dispose);
     }
-    root.append(el2("p", "kb-settings-hint", setStatusLine(current.id, view.found, view.projectOpen, getStored())));
-    const presets2 = listPresets(getStored(), current.id);
+    root.append(el2("p", "kb-settings-hint", setStatusLine(current2.id, view.found, view.projectOpen, getStored())));
+    const presets2 = listPresets(getStored(), current2.id);
     if (presets2.length === 0) root.append(el2("p", "kb-settings-hint", "This set has no presets yet: cards that use it start with the Plain Implement text."));
     for (const preset of presets2) {
       const box = el2("section", "kb-preset");
@@ -5245,14 +5731,14 @@ ${ref}`,
           value: preset.name,
           onChange: (v2) => {
             name.update({ value: v2 });
-            setStored(renamePreset(getStored(), current.id, preset.id, v2));
+            setStored(renamePreset(getStored(), current2.id, preset.id, v2));
           }
         });
         disposers.push(name.dispose);
       }
       const buttons = el2("div", "kb-actions");
       head2.append(buttons);
-      const note = presetSkillsNote(preset, current.id, isEdited(getStored(), current.id, preset.id));
+      const note = presetSkillsNote(preset, current2.id, isEdited(getStored(), current2.id, preset.id));
       const noteLine = note === null ? null : el2("p", "kb-settings-hint", note);
       if (noteLine !== null) box.append(noteLine);
       const textSlot = el2("div", "");
@@ -5265,10 +5751,10 @@ ${ref}`,
         rows: 5,
         onChange: (v2) => {
           text3.update({ value: v2 });
-          const next = setPresetText(getStored(), current.id, preset.id, v2);
+          const next = setPresetText(getStored(), current2.id, preset.id, v2);
           setStored(next);
-          reset?.update({ disabled: !isEdited(next, current.id, preset.id) });
-          if (noteLine !== null) noteLine.textContent = presetSkillsNote(preset, current.id, isEdited(next, current.id, preset.id)) ?? "";
+          reset?.update({ disabled: !isEdited(next, current2.id, preset.id) });
+          if (noteLine !== null) noteLine.textContent = presetSkillsNote(preset, current2.id, isEdited(next, current2.id, preset.id)) ?? "";
         }
       });
       disposers.push(text3.dispose);
@@ -5277,9 +5763,9 @@ ${ref}`,
           label: "Reset",
           variant: "ghost",
           size: "xs",
-          disabled: !isEdited(getStored(), current.id, preset.id),
+          disabled: !isEdited(getStored(), current2.id, preset.id),
           onClick: () => {
-            setStored(resetPreset(getStored(), current.id, preset.id));
+            setStored(resetPreset(getStored(), current2.id, preset.id));
             redraw();
           }
         });
@@ -5295,7 +5781,7 @@ ${ref}`,
                 { id: "delete", label: "Delete", variant: "destructive" }
               ]).then((answer) => {
                 if (answer !== "delete") return;
-                setStored(deletePreset(getStored(), current.id, preset.id));
+                setStored(deletePreset(getStored(), current2.id, preset.id));
                 redraw();
               });
             }
@@ -5311,7 +5797,7 @@ ${ref}`,
         variant: "outline",
         size: "sm",
         onClick: () => {
-          setStored(addPreset(getStored(), current.id, "New preset").stored);
+          setStored(addPreset(getStored(), current2.id, "New preset").stored);
           redraw();
         }
       }).dispose
@@ -5521,6 +6007,31 @@ ${ref}`,
     };
   };
 
+  // src/panel/ui/shortcutHints.ts
+  var ID = "kbShortcut";
+  var LABEL = "kbShortcutLabel";
+  var SELECTOR = "[data-kb-shortcut]";
+  var current = null;
+  var source = () => current ??= { keymap: createKeymap(), platform: detectPlatform() };
+  var hintText = (label, id, keymap, platform) => `${label} (${keymap.label(id, platform)})`;
+  var paint = (node) => {
+    const id = node.dataset[ID];
+    if (id === void 0) return;
+    const { keymap, platform } = source();
+    node.title = hintText(node.dataset[LABEL] ?? "", id, keymap, platform);
+  };
+  var hintShortcut = (target, id, label) => {
+    if (!(target instanceof HTMLElement)) return;
+    target.dataset[ID] = id;
+    target.dataset[LABEL] = label;
+    paint(target);
+  };
+  var hintLastChild = (container, id, label) => hintShortcut(container.lastElementChild, id, label);
+  var setHintKeymap = (keymap, platform) => {
+    current = { keymap, platform };
+    for (const node of document.querySelectorAll(SELECTOR)) paint(node);
+  };
+
   // src/panel/ui/addModal.ts
   var NONE2 = "";
   var el3 = (tag, className, text3) => {
@@ -5710,7 +6221,7 @@ ${ref}`,
         });
         fieldSlot.querySelector("input")?.setAttribute("aria-label", `Sub-task ${i + 1}`);
         fieldSlot.addEventListener("keydown", (e) => {
-          if (e.key !== "Enter" || e.isComposing) return;
+          if (e.key !== "Enter" || e.isComposing || e.metaKey || e.ctrlKey) return;
           e.preventDefault();
           d.subtasks.splice(i + 1, 0, "");
           drawSubtasks(i + 1);
@@ -5822,7 +6333,8 @@ ${ref}`,
       if (tone2 !== null) errorDispose = mountBanner(errorSlot, { tone: tone2, title, body }).dispose;
       if (tone2 !== null) errorSlot.scrollIntoView({ block: "nearest" });
     };
-    const create = mountButton(actions, { label: "Create task", size: "sm", onClick: () => submit() });
+    const create = mountButton(actions, { label: "Create task", size: "sm", onClick: () => void submit() });
+    hintLastChild(actions, "add.create", "Create task");
     let createDisposed = false;
     const cancel = mountButton(actions, { label: "Cancel", variant: "outline", size: "sm", onClick: dismiss });
     const setBusy = (next) => {
@@ -5837,12 +6349,12 @@ ${ref}`,
       lockStart();
     };
     const submit = () => {
-      if (busy || finished) return;
+      if (busy || finished) return false;
       const invalid = validateDraft(d);
       if (invalid.title !== void 0) {
         titleField.update({ error: invalid.title });
         titleSlot.querySelector("input")?.focus();
-        return;
+        return true;
       }
       showBanner(null);
       setBusy(true);
@@ -5861,13 +6373,14 @@ ${ref}`,
         cancel.update({ label: "Close", variant: "default" });
         actions.querySelector("button")?.focus();
       });
+      return true;
     };
     form.addEventListener("submit", (e) => {
       e.preventDefault();
       submit();
     });
     titleSlot.addEventListener("keydown", (e) => {
-      if (e.key !== "Enter" || e.isComposing) return;
+      if (e.key !== "Enter" || e.isComposing || e.metaKey || e.ctrlKey) return;
       e.preventDefault();
       submit();
     });
@@ -5881,6 +6394,7 @@ ${ref}`,
         start2 = next;
         drawStart();
       },
+      submit,
       dispose: () => {
         for (const x of [...disposers, ...blockerDisposers, ...subDisposers, ...existingDisposers]) x();
         for (const h of fixed) h.dispose();
@@ -5891,6 +6405,67 @@ ${ref}`,
         shell.dispose();
       }
     };
+  };
+
+  // src/panel/navigation.ts
+  var layoutOf = (board2) => COLUMNS.map(({ id }) => board2[id].map((c) => c.task.id));
+  var locate = (layout, id) => {
+    for (let column = 0; column < layout.length; column++) {
+      const row = layout[column].indexOf(id);
+      if (row !== -1) return { id, column, row };
+    }
+    return null;
+  };
+  var cell = (layout, column, row) => {
+    const cards = layout[column];
+    const r = Math.min(row, cards.length - 1);
+    return { id: cards[r], column, row: r };
+  };
+  var firstSelected = (layout) => {
+    const column = layout.findIndex((cards) => cards.length > 0);
+    return column === -1 ? null : cell(layout, column, 0);
+  };
+  var keepSelected = (layout, selected) => {
+    if (selected === null) return null;
+    const found = locate(layout, selected.id);
+    if (found !== null) return found;
+    for (let d = 0; d < layout.length; d++) {
+      for (const column of [selected.column - d, selected.column + d]) {
+        if (column >= 0 && column < layout.length && layout[column].length > 0) return cell(layout, column, selected.row);
+      }
+    }
+    return null;
+  };
+  var nextSelected = (layout, selected, direction) => {
+    const from = keepSelected(layout, selected);
+    if (from === null) return firstSelected(layout);
+    if (from.id !== selected?.id) return from;
+    const cards = layout[from.column];
+    switch (direction) {
+      case "up":
+        return from.row === 0 ? from : cell(layout, from.column, from.row - 1);
+      case "down":
+        return from.row === cards.length - 1 ? from : cell(layout, from.column, from.row + 1);
+      case "left":
+      case "right": {
+        const by = direction === "left" ? -1 : 1;
+        for (let column = from.column + by; column >= 0 && column < layout.length; column += by) {
+          if (layout[column].length > 0) return cell(layout, column, from.row);
+        }
+        return from;
+      }
+    }
+  };
+
+  // src/panel/openTask.ts
+  var columnNeighbour = (layout, id, direction) => {
+    const at = locate(layout, id);
+    if (at === null) return null;
+    return layout[at.column][at.row + (direction === "prev" ? -1 : 1)] ?? null;
+  };
+  var columnForDigit = (n, moves) => {
+    const column = COLUMNS[n - 1]?.id;
+    return column !== void 0 && Number.isInteger(n) && moves.includes(column) ? column : null;
   };
 
   // node_modules/markdown-it/lib/common/utils.mjs
@@ -6591,19 +7166,19 @@ ${ref}`,
      */
     stateNamedEntity(str, offset) {
       const { decodeTree } = this;
-      let current = decodeTree[this.treeIndex];
-      let valueLength = (current & BinTrieFlags.VALUE_LENGTH) >> 14;
+      let current2 = decodeTree[this.treeIndex];
+      let valueLength = (current2 & BinTrieFlags.VALUE_LENGTH) >> 14;
       for (; offset < str.length; offset++, this.excess++) {
         const char = str.charCodeAt(offset);
-        this.treeIndex = determineBranch(decodeTree, current, this.treeIndex + Math.max(1, valueLength), char);
+        this.treeIndex = determineBranch(decodeTree, current2, this.treeIndex + Math.max(1, valueLength), char);
         if (this.treeIndex < 0) {
           return this.result === 0 || // If we are parsing an attribute
           this.decodeMode === DecodingMode.Attribute && // We shouldn't have consumed any characters after the entity,
           (valueLength === 0 || // And there should be no invalid characters.
           isEntityInAttributeInvalidEnd(char)) ? 0 : this.emitNotTerminatedNamedEntity();
         }
-        current = decodeTree[this.treeIndex];
-        valueLength = (current & BinTrieFlags.VALUE_LENGTH) >> 14;
+        current2 = decodeTree[this.treeIndex];
+        valueLength = (current2 & BinTrieFlags.VALUE_LENGTH) >> 14;
         if (valueLength !== 0) {
           if (char === CharCodes.SEMI) {
             return this.emitNamedEntityData(this.treeIndex, valueLength, this.consumed + this.excess);
@@ -6703,9 +7278,9 @@ ${ref}`,
       return result;
     };
   }
-  function determineBranch(decodeTree, current, nodeIdx, char) {
-    const branchCount = (current & BinTrieFlags.BRANCH_LENGTH) >> 7;
-    const jumpOffset = current & BinTrieFlags.JUMP_TABLE;
+  function determineBranch(decodeTree, current2, nodeIdx, char) {
+    const branchCount = (current2 & BinTrieFlags.BRANCH_LENGTH) >> 7;
+    const jumpOffset = current2 & BinTrieFlags.JUMP_TABLE;
     if (branchCount === 0) {
       return jumpOffset !== 0 && char === jumpOffset ? nodeIdx : -1;
     }
@@ -6817,15 +7392,15 @@ ${ref}`,
   }
   function assign(obj) {
     const sources = Array.prototype.slice.call(arguments, 1);
-    sources.forEach(function(source) {
-      if (!source) {
+    sources.forEach(function(source2) {
+      if (!source2) {
         return;
       }
-      if (typeof source !== "object") {
-        throw new TypeError(source + "must be object");
+      if (typeof source2 !== "object") {
+        throw new TypeError(source2 + "must be object");
       }
-      Object.keys(source).forEach(function(key) {
-        obj[key] = source[key];
+      Object.keys(source2).forEach(function(key) {
+        obj[key] = source2[key];
       });
     });
     return obj;
@@ -8203,15 +8778,15 @@ ${ref}`,
     let ch = str.charCodeAt(pos);
     let isEscaped = false;
     let lastPos = 0;
-    let current = "";
+    let current2 = "";
     while (pos < max) {
       if (ch === 124) {
         if (!isEscaped) {
-          result.push(current + str.substring(lastPos, pos));
-          current = "";
+          result.push(current2 + str.substring(lastPos, pos));
+          current2 = "";
           lastPos = pos + 1;
         } else {
-          current += str.substring(lastPos, pos - 1);
+          current2 += str.substring(lastPos, pos - 1);
           lastPos = pos;
         }
       }
@@ -8219,7 +8794,7 @@ ${ref}`,
       pos++;
       ch = str.charCodeAt(pos);
     }
-    result.push(current + str.substring(lastPos));
+    result.push(current2 + str.substring(lastPos));
     return result;
   }
   function table(state2, startLine, endLine, silent) {
@@ -10569,12 +11144,12 @@ ${ref}`,
   // node_modules/linkify-it/index.mjs
   function assign2(obj) {
     const sources = Array.prototype.slice.call(arguments, 1);
-    sources.forEach(function(source) {
-      if (!source) {
+    sources.forEach(function(source2) {
+      if (!source2) {
         return;
       }
-      Object.keys(source).forEach(function(key) {
-        obj[key] = source[key];
+      Object.keys(source2).forEach(function(key) {
+        obj[key] = source2[key];
       });
     });
     return obj;
@@ -11828,6 +12403,7 @@ ${ref}`,
       }
     });
     const save = mountButton(actions, { label: "Save", size: "sm", onClick: () => submit() });
+    hintLastChild(actions, "task.saveEdit", "Save");
     const cancel = mountButton(actions, { label: "Cancel", size: "sm", variant: "outline", onClick: () => !busy && onDone() });
     const showError = (message2) => {
       errorDispose?.();
@@ -11858,12 +12434,18 @@ ${ref}`,
       });
     };
     titleSlot.addEventListener("keydown", (e) => {
-      if (e.key !== "Enter" || e.isComposing) return;
+      if (e.key !== "Enter" || e.isComposing || e.metaKey || e.ctrlKey) return;
       e.preventDefault();
       submit();
     });
     return {
       dirty: () => editDirty(initial, draft),
+      /** Save, as its button does (Mod+Enter); false while a save is running. */
+      submit: () => {
+        if (busy) return false;
+        submit();
+        return true;
+      },
       dispose: () => {
         disposed = true;
         errorDispose?.();
@@ -11888,15 +12470,21 @@ ${ref}`,
   };
   var openDetail = (initial, callbacks, options) => {
     let asking = false;
+    const confirmLeave = async () => {
+      if (asking) return false;
+      if (editing === null || !editing.dirty()) return true;
+      asking = true;
+      const answer = await askChoice("Discard changes?", "The title or description you edited has not been saved.", [
+        { id: "discard", label: "Discard", variant: "destructive" }
+      ]);
+      asking = false;
+      return answer === "discard";
+    };
     const dismiss = () => {
       if (asking) return;
       if (editing === null || !editing.dirty()) return callbacks.onDismiss();
-      asking = true;
-      void askChoice("Discard changes?", "The title or description you edited has not been saved.", [
-        { id: "discard", label: "Discard", variant: "destructive" }
-      ]).then((answer) => {
-        asking = false;
-        if (answer === "discard") callbacks.onDismiss();
+      void confirmLeave().then((ok) => {
+        if (ok) callbacks.onDismiss();
       });
     };
     const shell = openModalShell({ label: initial.task.title, onDismiss: dismiss });
@@ -11994,13 +12582,16 @@ ${ref}`,
         disposers.push(
           mountButton(session, { label: "Edit", variant: "ghost", size: "sm", disabled: m.busy, onClick: () => startEdit(m) }).dispose
         );
+        hintLastChild(session, "task.edit", "Edit");
         disposers.push(mountButton(session, { label: "Delete", variant: "ghost", size: "sm", disabled: m.busy, onClick: callbacks.onDelete }).dispose);
+        hintLastChild(session, "task.delete", "Delete");
       }
       if (m.archived) {
         disposers.push(mountButton(session, { label: "Unarchive", variant: "outline", size: "sm", onClick: callbacks.onUnarchive }).dispose);
       }
       if (m.session === "open") {
         disposers.push(mountButton(session, { label: "Open session", variant: "default", size: "sm", onClick: callbacks.onOpenSession }).dispose);
+        hintLastChild(session, "task.openSession", "Open session");
       } else if (m.session === "archived") {
         session.append(el5("span", "kb-muted", "Session archived"));
       } else if (m.session === "missing") {
@@ -12048,11 +12639,11 @@ ${ref}`,
       taskKey = null;
       const form = mountEditForm(box, m.text, (draft) => callbacks.onEdit(m.text, draft), () => {
         stopEdit();
-        if (current !== null) draw2(current);
+        if (current2 !== null) draw2(current2);
       });
       editing = { taskId: m.task.id, ...form };
       taskSec.box.open = true;
-      if (current !== null) draw2(current);
+      if (current2 !== null) draw2(current2);
       box.querySelector("input")?.focus();
     };
     const drawTask = (m) => {
@@ -12109,7 +12700,7 @@ ${ref}`,
               void callbacks.onUnlinkChild(c.id).then((error2) => {
                 if (disposed || error2 === null) return;
                 unlinkError = { taskId, message: error2 };
-                if (current !== null) draw2(current);
+                if (current2 !== null) draw2(current2);
               });
             }
           }).dispose
@@ -12123,6 +12714,7 @@ ${ref}`,
     };
     let quickKey = null;
     let parentError = null;
+    let parentPicker = null;
     let quickDisposers = [];
     const clearQuick = () => {
       for (const d of quickDisposers) d();
@@ -12146,31 +12738,35 @@ ${ref}`,
       if (parents.length > 0 || parent !== null) {
         const parentSlot = el5("div", "kb-field");
         fields.append(parentSlot);
-        const listed = parent !== null && !parents.some((p) => p.id === parent.id) ? [parent, ...parents] : parents;
-        const options2 = parent !== null ? [{ id: NO_PARENT, label: "No parent", hint: "Unlink from the parent" }, ...listed] : listed;
-        disposers2.push(
-          mountSelect(parentSlot, {
-            label: "Parent",
-            value: parent?.id ?? null,
-            placeholder: "No parent",
-            options: options2,
-            searchable: options2.length > FILTER_OVER,
-            disabled: m.busy,
-            onChange: (id) => {
-              if (id === task.parentId) return;
-              const taskId = task.id;
+        hintShortcut(parentSlot, "task.pickParent", "Pick parent");
+        const listed2 = parent !== null && !parents.some((p) => p.id === parent.id) ? [parent, ...parents] : parents;
+        const options2 = parent !== null ? [{ id: NO_PARENT, label: "No parent", hint: "Unlink from the parent" }, ...listed2] : listed2;
+        const select = mountSelect(parentSlot, {
+          label: "Parent",
+          value: parent?.id ?? null,
+          placeholder: "No parent",
+          options: options2,
+          searchable: options2.length > FILTER_OVER,
+          disabled: m.busy,
+          onChange: (id) => {
+            if (id === task.parentId) return;
+            const taskId = task.id;
+            quickKey = null;
+            parentError = null;
+            const change = id === NO_PARENT ? callbacks.onRemoveParent() : callbacks.onSetParent(id);
+            void change.then((error2) => {
+              if (disposed || error2 === null) return;
+              parentError = { taskId: current2?.task.id ?? taskId, message: error2 };
               quickKey = null;
-              parentError = null;
-              const change = id === NO_PARENT ? callbacks.onRemoveParent() : callbacks.onSetParent(id);
-              void change.then((error2) => {
-                if (disposed || error2 === null) return;
-                parentError = { taskId: current?.task.id ?? taskId, message: error2 };
-                quickKey = null;
-                if (current !== null) drawQuick(current);
-              });
-            }
-          }).dispose
-        );
+              if (current2 !== null) drawQuick(current2);
+            });
+          }
+        });
+        const picker = { slot: parentSlot, select };
+        parentPicker = picker;
+        disposers2.push(select.dispose, () => {
+          if (parentPicker === picker) parentPicker = null;
+        });
       }
       if (parentError !== null) {
         const errorSlot = el5("div", "kb-add-error");
@@ -12217,6 +12813,8 @@ ${ref}`,
           disposers2.push(
             mountButton(moveRow, { label, variant: "outline", size: "xs", disabled: m.busy, onClick: () => callbacks.onMove(to) }).dispose
           );
+          const n = COLUMNS.findIndex((c) => c.id === to) + 1;
+          if (n >= 1 && n <= 5) hintLastChild(moveRow, `task.state${n}`, `Move to ${label}`);
         }
         quick.append(moveRow);
       }
@@ -12300,14 +12898,14 @@ ${ref}`,
           linkError = null;
           linkKey = null;
           queueMicrotask(() => {
-            if (!disposed && current !== null) drawLinkChild(current);
+            if (!disposed && current2 !== null) drawLinkChild(current2);
           });
           void linkChildren(chosen, callbacks.onLinkChild).catch((e) => e instanceof Error ? e.message : String(e)).then((error2) => {
             linking = false;
             if (disposed) return;
             if (error2 !== null) linkError = { taskId, message: error2 };
             linkKey = null;
-            if (current !== null) drawLinkChild(current);
+            if (current2 !== null) drawLinkChild(current2);
           });
         }
       });
@@ -12352,7 +12950,7 @@ ${ref}`,
         adderKey = key;
         clearAdderHead();
         const redraw = () => {
-          if (current !== null) drawAdder(current);
+          if (current2 !== null) drawAdder(current2);
         };
         if (adder === null) {
           const actions = el5("div", "kb-actions kb-actions-start");
@@ -12369,6 +12967,7 @@ ${ref}`,
               }
             }).dispose
           );
+          hintLastChild(actions, "task.addSubtask", "Add sub-task");
         } else {
           const open2 = adder;
           const pick = el5("div", "kb-add-sub-modes");
@@ -12408,10 +13007,10 @@ ${ref}`,
       addBox.hidden = adder?.mode !== "new";
       linkBox.hidden = adder?.mode !== "existing";
     };
-    let current = null;
+    let current2 = null;
     let disposed = false;
     const draw2 = (m) => {
-      current = m;
+      current2 = m;
       clear();
       modal.setAttribute("aria-label", m.task.title);
       modal.setAttribute("aria-busy", String(m.busy));
@@ -12424,7 +13023,58 @@ ${ref}`,
     };
     draw2(initial);
     modal.focus();
+    const idle = () => current2 !== null && editing === null && !current2.busy ? current2 : null;
+    const shortcuts2 = {
+      edit: () => {
+        const m = idle();
+        if (m === null) return false;
+        startEdit(m);
+        return true;
+      },
+      saveEdit: () => editing?.submit() ?? false,
+      addSubtask: () => {
+        const m = current2;
+        if (m === null || subSec.box.hidden || !subtaskModes(m.addSubtask, m.links.children.length).includes("new")) return false;
+        adder = { taskId: m.task.id, mode: "new" };
+        subSec.box.open = true;
+        drawAdder(m);
+        const input = addBox.querySelector("input");
+        input?.focus();
+        input?.scrollIntoView({ block: "nearest" });
+        return true;
+      },
+      pickParent: () => {
+        const picker = parentPicker;
+        const trigger = picker?.slot.querySelector(".oc-sdk-trigger") ?? null;
+        if (picker === null || trigger === null || trigger.disabled) return false;
+        if (trigger.getAttribute("aria-expanded") !== "true") {
+          picker.select.update({ searchable: true });
+          trigger.click();
+        }
+        picker.slot.querySelector(".oc-sdk-popup-search input")?.focus();
+        return true;
+      },
+      setColumn: (n) => {
+        const m = current2;
+        const to = m === null || m.busy ? null : columnForDigit(n, m.moves.map((move) => move.to));
+        if (to === null) return false;
+        callbacks.onMove(to);
+        return true;
+      },
+      openSession: () => {
+        if (current2?.session !== "open") return false;
+        callbacks.onOpenSession();
+        return true;
+      },
+      delete: () => {
+        if (idle() === null) return false;
+        callbacks.onDelete();
+        return true;
+      },
+      leave: confirmLeave
+    };
     return {
+      shortcuts: shortcuts2,
       update: draw2,
       dispose: () => {
         disposed = true;
@@ -12739,7 +13389,7 @@ ${ref}`,
   };
 
   // src/panel/taskDelete.ts
-  var plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+  var plural2 = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
   var deleteConfirm = (tracker, task, tasks) => {
     const n = tasks.filter((t) => t.parentId === task.id).length;
     const title = `Delete \u201C${task.title}\u201D?`;
@@ -12748,7 +13398,7 @@ ${ref}`,
         return { title, body: `The file ${task.id} is deleted. This cannot be undone from the board.`, choices: [{ id: "one", label: "Delete", variant: "destructive" }] };
       }
       const folder = task.id.replace(/spec\.md$/, "");
-      const subs = n > 0 ? `, including ${plural(n, "sub-task")} on the board and any older done ones` : "";
+      const subs = n > 0 ? `, including ${plural2(n, "sub-task")} on the board and any older done ones` : "";
       return {
         title,
         body: `The folder ${folder} is deleted with spec.md and all its sub-tasks${subs}. This cannot be undone from the board.`,
@@ -12759,7 +13409,7 @@ ${ref}`,
     if (n === 0) return { title, body: base2, choices: [{ id: "one", label: "Delete", variant: "destructive" }] };
     return {
       title,
-      body: `${base2} It has ${plural(n, "sub-issue")}; kept, they become top-level issues.`,
+      body: `${base2} It has ${plural2(n, "sub-issue")}; kept, they become top-level issues.`,
       choices: [
         { id: "all", label: "Delete with sub-issues", variant: "destructive" },
         { id: "one", label: "Delete only this issue", variant: "secondary" }
@@ -12877,8 +13527,11 @@ ${ref}`,
       if (detail === null) return;
       const task = find(detail.id);
       if (task === null && detail.id === followed) return;
-      if (task === null) closeDetail();
-      else detail.handle.update(detailModel(task));
+      if (task === null) {
+        const id = detail.id;
+        closeDetail();
+        deps.onOpenTaskClosed?.(id, "gone");
+      } else detail.handle.update(detailModel(task));
     };
     const busyWhile = async (id, action, after) => {
       moving.add(id);
@@ -13099,9 +13752,13 @@ ${ref}`,
         },
         onType: (type) => void run(id, (api) => api.setType(id, type)),
         onOpenUrl: (url) => void deps.host.openUrl(url).catch((e) => fail2(errorText2(e))),
-        onDismiss: closeDetail
+        onDismiss: () => {
+          closeDetail();
+          deps.onOpenTaskClosed?.(id, "dismissed");
+        }
       }, { sections: deps.sections.get() });
       detail = { id, handle, onFollow: (next) => id = next };
+      deps.onOpenTaskShown?.(id);
     };
     const closeAdd = () => {
       const m = addModal;
@@ -13213,8 +13870,29 @@ ${ref}`,
       /** Ids whose write is in flight; the board draws them busy. */
       busy: moving,
       showAdd,
+      /** Add task's Create task (Mod+Enter); false when no form is open or it is busy. */
+      submitAddForm: () => addModal?.submit() ?? false,
+      /** Which of the two modals is open, for the Shortcut context: the task modal first. */
+      openModal: () => detail !== null ? "task" : addModal !== null ? "add" : null,
       /** The task modal (also what a click or Enter on a card opens). */
       showDetail,
+      /** The Open task: its task id now and its Shortcuts (ui/detail.ts), or null when no task modal is open. */
+      openTask: () => detail === null ? null : { id: detail.id, shortcuts: detail.handle.shortcuts },
+      /**
+       * Mod+↑/↓: the open modal shows `id` instead, once a changed Edit form is discarded. Resolves
+       * false when it stays (kept, or the modal closed meanwhile).
+       */
+      switchOpenTask: async (id) => {
+        const from = detail;
+        if (from === null || find(id) === null || !await from.handle.shortcuts.leave() || detail !== from) return false;
+        showDetail(id);
+        return true;
+      },
+      /** Moves a card to another column through the same path as a drop (Mod+Shift+←/→). */
+      moveCard: (id, to) => {
+        const from = deps.columnOf(id);
+        if (from !== null) move(id, from, to);
+      },
       /** Project switch or the board went away: drop the modal and the form. */
       reset: () => {
         closeDetail();
@@ -13283,11 +13961,6 @@ ${ref}`,
     }
     return { kind: "board" };
   };
-
-  // src/core/variant.ts
-  var toVariant = (value) => value === "test" ? "test" : "prod";
-  var VARIANT = toVariant(false ? void 0 : "prod");
-  var panelId = (variant) => variant === "test" ? "icf-kanban-test" : "icf-kanban";
 
   // src/panel/launcher.ts
   var SETTLE_MS = 6e4;
@@ -13947,7 +14620,7 @@ ${p.directory}`).join("\n");
        * The project to show: the one the directory names (`recognised`), else the one shown now, else
        * the last used one (`lastId`, kept across frames), else the first.
        */
-      choose: (dir, projects, current, lastId = null) => projectContaining(dir, projects) ?? (dir === null ? null : lookedUp(dir, projects)) ?? current ?? projects.find((p) => p.id === lastId) ?? projects[0] ?? null,
+      choose: (dir, projects, current2, lastId = null) => projectContaining(dir, projects) ?? (dir === null ? null : lookedUp(dir, projects)) ?? current2 ?? projects.find((p) => p.id === lastId) ?? projects[0] ?? null,
       /** `dir` lies outside every project and no lookup has answered for it (and this project list) yet. */
       unknown: (dir, projects) => dir !== null && projectContaining(dir, projects) === null && lookedUp(dir, projects) === void 0,
       /**
@@ -14105,7 +14778,7 @@ ${listKey(projects)}`;
     input.setAttribute("aria-autocomplete", "list");
     let items = [];
     let active2 = -1;
-    const paint = () => {
+    const paint2 = () => {
       list2.replaceChildren();
       list2.hidden = items.length === 0;
       input.setAttribute("aria-expanded", String(items.length > 0));
@@ -14126,13 +14799,13 @@ ${listKey(projects)}`;
     const close = () => {
       items = [];
       active2 = -1;
-      paint();
+      paint2();
     };
     const refresh = () => {
       if (document.activeElement !== input) return close();
       items = deps.suggest(input.value, input.selectionStart ?? input.value.length);
       active2 = -1;
-      paint();
+      paint2();
     };
     const pick = (s) => {
       deps.apply(s.text);
@@ -14146,7 +14819,7 @@ ${listKey(projects)}`;
         e.preventDefault();
         const step2 = e.key === "ArrowDown" ? 1 : -1;
         active2 = active2 < 0 ? step2 > 0 ? 0 : items.length - 1 : (active2 + step2 + items.length) % items.length;
-        paint();
+        paint2();
       } else if (e.key === "Enter" || e.key === "Tab") {
         const s = items[active2];
         if (s === void 0) return;
@@ -14239,9 +14912,26 @@ ${listKey(projects)}`;
       callbacks.onSearch(query);
     };
     mountSearchSuggest(searchSlot, { suggest: callbacks.suggest, apply: setQuery });
+    const searchInput = searchSlot.querySelector("input");
+    searchInput?.addEventListener("keydown", (e) => {
+      if (e.defaultPrevented || e.isComposing || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+      if (e.key === "Escape" && searchInput.value === "") {
+        e.preventDefault();
+        callbacks.onSearchExit();
+      } else if (e.key === "ArrowDown" && callbacks.onSearchDown()) {
+        e.preventDefault();
+      }
+    });
     const add2 = mountButton(addSlot, { label: "Add task", size: "sm", disabled: true, onClick: callbacks.onAdd });
     mountButton(settingsSlot, { label: "Settings", variant: "outline", size: "sm", onClick: callbacks.onSettings });
     const refresh = mountButton(refreshSlot, { label: "Refresh", variant: "outline", size: "sm", onClick: callbacks.onRefresh });
+    hintShortcut(projectSlot, "board.projects", "Switch project");
+    hintShortcut(switchSlot, "board.toggleSubtasks", "Hide or show sub-tasks");
+    hintLastChild(addSlot, "board.addTask", "Add task");
+    hintLastChild(settingsSlot, "board.settings", "Settings");
+    hintLastChild(refreshSlot, "board.refresh", "Refresh");
+    hintShortcut(searchSlot, "board.search", "Search tasks");
+    let refreshBusy = false;
     let statusDispose = null;
     let sessionNoteDispose = null;
     const setSessionNote = (text3) => {
@@ -14254,11 +14944,15 @@ ${listKey(projects)}`;
     let cardDisposers = [];
     const doneTools = (done) => {
       const tools = div3("kb-column-tools");
-      if (done.archivable > 0) {
+      const buttons = div3("kb-archive-buttons");
+      const button2 = (label, onClick) => {
         const slot = div3("kb-archive-button");
-        tools.append(slot);
-        cardDisposers.push(mountButton(slot, { label: "Archive done", variant: "outline", size: "xs", onClick: callbacks.onArchiveDone }).dispose);
-      }
+        buttons.append(slot);
+        cardDisposers.push(mountButton(slot, { label, variant: "outline", size: "xs", onClick }).dispose);
+      };
+      if (done.archivable > 0) button2("Archive done", callbacks.onArchiveDone);
+      if (done.archived > 0) button2("Clear archive", callbacks.onClearArchive);
+      tools.append(buttons);
       if (done.archived > 0) {
         const slot = div3("kb-show-archived");
         tools.append(slot);
@@ -14285,7 +14979,30 @@ ${listKey(projects)}`;
       },
       /** A dismissible info banner above the columns (the rail panel's session note); null removes it. */
       setSessionNote,
-      setBusy: (busy) => refresh.update({ loading: busy, disabled: busy }),
+      setBusy: (busy) => {
+        refreshBusy = busy;
+        refresh.update({ loading: busy, disabled: busy });
+      },
+      /** Refresh is running (its button is disabled), so the Refresh Shortcut does nothing either. */
+      busy: () => refreshBusy,
+      /** Focuses the search field with its text selected (the Search Shortcut). */
+      focusSearch: () => {
+        if (searchInput === null) return false;
+        searchInput.focus();
+        searchInput.select();
+        return true;
+      },
+      /**
+       * Opens the project switcher with its search focused, as a click on it does (the Project
+       * switcher Shortcut). False when it is disabled (no projects); an open one gets its search focused.
+       */
+      openProjects: () => {
+        const trigger = projectSlot.querySelector(".oc-sdk-trigger");
+        if (trigger === null || trigger.disabled) return false;
+        if (trigger.getAttribute("aria-expanded") === "true") projectSlot.querySelector(".oc-sdk-popup-search input")?.focus();
+        else trigger.click();
+        return true;
+      },
       setStatus: (next) => {
         statusDispose?.();
         statusDispose = null;
@@ -14398,6 +15115,140 @@ ${listKey(projects)}`;
     return close;
   };
 
+  // src/panel/cheatSheet.ts
+  var cheatSheetGroups = (keymap, platform) => SHORTCUT_CONTEXTS.map(({ context, label }) => ({
+    context,
+    title: label,
+    rows: keymap.list(context).map((s) => ({ id: s.id, label: s.label, keys: formatBinding(s.binding, platform) }))
+  })).filter((g) => g.rows.length > 0);
+
+  // src/panel/ui/cheatSheet.ts
+  var openCheatSheet = (groups, onClose) => {
+    const backdrop = document.createElement("div");
+    backdrop.className = "kb-backdrop kb-cheat-backdrop";
+    const box = document.createElement("div");
+    box.className = "kb-confirm kb-cheat";
+    box.setAttribute("role", "dialog");
+    box.setAttribute("aria-modal", "true");
+    box.setAttribute("aria-labelledby", "kb-cheat-title");
+    const head = document.createElement("h2");
+    head.className = "kb-confirm-title";
+    head.id = "kb-cheat-title";
+    head.textContent = "Keyboard shortcuts";
+    const body = document.createElement("div");
+    body.className = "kb-cheat-body";
+    for (const g of groups) {
+      const section = document.createElement("section");
+      section.className = "kb-cheat-group";
+      const title = document.createElement("h3");
+      title.className = "kb-settings-heading";
+      title.textContent = g.title;
+      const list2 = document.createElement("dl");
+      list2.className = "kb-cheat-list";
+      for (const r of g.rows) {
+        const dt = document.createElement("dt");
+        dt.textContent = r.label;
+        const dd = document.createElement("dd");
+        const kbd = document.createElement("kbd");
+        kbd.className = "kb-kbd";
+        kbd.textContent = r.keys;
+        dd.append(kbd);
+        list2.append(dt, dd);
+      }
+      section.append(title, list2);
+      body.append(section);
+    }
+    const actions = document.createElement("div");
+    actions.className = "kb-actions";
+    box.append(head, body, actions);
+    backdrop.append(box);
+    let closed = false;
+    const disposers = [];
+    const close = () => {
+      if (closed) return;
+      closed = true;
+      document.removeEventListener("keydown", onKey, true);
+      for (const d of disposers) d();
+      backdrop.remove();
+      onClose();
+    };
+    const onKey = (e) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      e.stopPropagation();
+      close();
+    };
+    disposers.push(mountButton(actions, { label: "Close", variant: "outline", size: "sm", onClick: close }).dispose);
+    backdrop.addEventListener("click", (e) => {
+      if (e.target === backdrop) close();
+    });
+    document.addEventListener("keydown", onKey, true);
+    document.body.append(backdrop);
+    actions.querySelector("button")?.focus();
+    return close;
+  };
+
+  // src/panel/ui/selection.ts
+  var createSelection = (container, options) => {
+    let selected = null;
+    let layout = [];
+    let refocus = false;
+    const cardOf = (id) => container.querySelector(`.kb-card[data-task-id="${CSS.escape(id)}"]`);
+    const mark = () => {
+      for (const el7 of container.querySelectorAll(".kb-card.is-selected")) el7.classList.remove("is-selected");
+      if (selected !== null) cardOf(selected.id)?.classList.add("is-selected");
+    };
+    const focus = (scroll) => {
+      if (selected === null || !options.canFocus()) return;
+      const el7 = cardOf(selected.id);
+      if (el7 === null) return;
+      el7.focus({ preventScroll: true });
+      if (scroll) el7.scrollIntoView({ block: "nearest", inline: "nearest" });
+    };
+    const focusOnBoard = () => {
+      const el7 = activeElement();
+      return el7 === null || el7 === document.body || el7 === document.documentElement || el7 instanceof HTMLElement && el7.classList.contains("kb-card") && container.contains(el7);
+    };
+    const onFocusIn = (e) => {
+      if (!(e.target instanceof HTMLElement) || !e.target.classList.contains("kb-card")) return;
+      const id = e.target.dataset.taskId;
+      if (id === void 0 || id === selected?.id) return;
+      selected = locate(layout, id) ?? { id, column: 0, row: 0 };
+      mark();
+    };
+    container.addEventListener("focusin", onFocusIn);
+    return {
+      get: () => selected?.id ?? null,
+      set: (id, opts) => {
+        if (id === null) selected = null;
+        else selected = locate(layout, id) ?? { id, column: selected?.column ?? 0, row: selected?.row ?? 0 };
+        mark();
+        if (opts?.focus === true) focus(true);
+      },
+      layout: () => layout,
+      step: (direction) => {
+        const next = nextSelected(layout, selected, direction);
+        if (next === null) return false;
+        selected = next;
+        mark();
+        focus(true);
+        return true;
+      },
+      beforeRender: () => {
+        refocus = document.hasFocus() && focusOnBoard();
+      },
+      rendered: (next) => {
+        layout = next;
+        selected = keepSelected(layout, selected);
+        mark();
+        if (refocus) focus(false);
+        refocus = false;
+      },
+      focusOnBoard,
+      dispose: () => container.removeEventListener("focusin", onFocusIn)
+    };
+  };
+
   // src/panel/ui/styles.ts
   var CSS2 = `
 html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg); font-family: var(--oc-font); }
@@ -14446,11 +15297,14 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
 .kb-loading { display: flex; justify-content: center; padding: 2rem 0; }
 .kb-card { cursor: grab; user-select: none; -webkit-user-select: none; touch-action: none; }
 .kb-card:focus-visible { outline: 2px solid var(--oc-focus); outline-offset: 1px; }
+/* The Selected card (keyboard navigation): marked also while focus is elsewhere, e.g. in the search field. */
+.kb-card.is-selected { border-color: var(--oc-focus); }
 .kb-card.is-dragging { opacity: 0.4; }
 .kb-card.is-busy { opacity: 0.6; cursor: progress; }
 .kb-card.is-archived { opacity: 0.55; border-style: dashed; }
 .kb-column-tools { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.375rem 0.5rem;
   padding: 0 0.25rem; font-size: 0.85em; }
+.kb-archive-buttons { display: flex; flex-wrap: wrap; align-items: center; gap: 0.375rem; }
 .kb-ghost { position: fixed; left: 0; top: 0; z-index: 60; pointer-events: none; margin: 0; cursor: grabbing;
   box-shadow: 0 8px 24px rgb(0 0 0 / 0.25); }
 :root.kb-dragging, :root.kb-dragging * { cursor: grabbing !important; }
@@ -14533,6 +15387,15 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
   background: var(--oc-elevated); color: var(--oc-elevated-fg); border: 1px solid var(--oc-border); border-radius: var(--oc-radius); }
 .kb-confirm-title { margin: 0; font-size: 1em; font-weight: 600; overflow-wrap: anywhere; }
 .kb-confirm-body { margin: 0; color: var(--oc-muted); font-size: 0.9em; }
+.kb-cheat-backdrop { z-index: 70; justify-content: center; align-items: center; padding: 1rem; }
+.kb-cheat { width: min(34rem, 100%); max-height: calc(100vh - 2rem); }
+.kb-cheat-body { display: flex; flex-direction: column; gap: 1rem; overflow-y: auto; min-height: 0; }
+.kb-cheat-group { display: flex; flex-direction: column; gap: 0.375rem; }
+.kb-cheat-list { display: grid; grid-template-columns: 1fr auto; gap: 0.25rem 1rem; margin: 0; font-size: 0.9em; }
+.kb-cheat-list dt { margin: 0; overflow-wrap: anywhere; }
+.kb-cheat-list dd { margin: 0; text-align: right; }
+.kb-kbd { font-family: var(--oc-mono); font-size: 0.9em; padding: 0.05em 0.4em; white-space: nowrap;
+  border: 1px solid var(--oc-border); border-radius: 4px; background: var(--oc-muted-surface); }
 .kb-sheet-part { display: flex; flex-direction: column; gap: 0.75rem; }
 .kb-sheet-part:empty, .kb-sheet-part[hidden] { display: none; }
 .kb-start { padding: 0.75rem; border: 1px solid var(--oc-border); border-radius: var(--oc-radius); background: var(--oc-muted-surface); }
@@ -14541,6 +15404,18 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
 .kb-settings-section { display: flex; flex-direction: column; gap: 0.5rem; }
 .kb-settings-heading { margin: 0; font-size: 0.95em; font-weight: 600; }
 .kb-settings-hint { margin: 0; color: var(--oc-muted); font-size: 0.85em; }
+.kb-keys { display: flex; flex-direction: column; gap: 0.25rem; }
+.kb-keys-context { margin: 0.5rem 0 0; font-size: 0.85em; font-weight: 600; color: var(--oc-muted); }
+.kb-keys-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 0.5rem; min-height: 1.75rem; }
+.kb-keys-action { min-width: 0; overflow-wrap: anywhere; }
+.kb-keys-key { min-width: 5rem; text-align: end; }
+.kb-keys-buttons { display: flex; align-items: center; justify-content: flex-end; gap: 0.25rem; min-width: 8rem; }
+.kb-keys-recording { color: var(--oc-primary); font-size: 0.85em; }
+.kb-keys-note { margin: 0; font-size: 0.85em; }
+.kb-keys-error { color: var(--oc-error-text, var(--oc-fg)); }
+.kb-keys-warning { color: var(--oc-warning-text, var(--oc-fg)); }
+.kb-kbd { font-family: var(--oc-mono, ui-monospace, monospace); font-size: 0.85em; padding: 0.05rem 0.35rem;
+  border: 1px solid var(--oc-border); border-radius: 0.25rem; white-space: nowrap; }
 .kb-inherit { display: flex; flex-direction: column; gap: 0.125rem; }
 .kb-inherit-reset { display: flex; justify-content: flex-end; }
 .kb-preset { display: flex; flex-direction: column; gap: 0.5rem; padding: 0.75rem;
@@ -14713,6 +15588,8 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
   };
   var board;
   var editor;
+  var selection2;
+  var shortcuts;
   var unsubscribeSessions = null;
   var generation = 0;
   var project = () => state.projects.find((p) => p.id === state.projectId) ?? null;
@@ -14737,6 +15614,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     return listPresets(state.presets, presetSetOf(state.globalSettings, loaded ? state.projectSettings : {}, state.presets, skills?.found ?? []), skills?.paths ?? {});
   };
   var applySettings = () => {
+    applyKeymap();
     const hide = settings().hideChildren;
     if (hide !== state.hideSubtasks) {
       state.hideSubtasks = hide;
@@ -14854,11 +15732,13 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     setBadge(model.review.length || null);
     const tracker = state.config.tracker;
     const shown = filterBoard(model, state.tasks, state.query, tracker);
+    selection2.beforeRender();
     board.render(shown, editor.busy, (task) => summaries.get(task), {
       archivable: archivableIds(state.tasks, marks).length,
       archived: archivedCount,
       showArchived: state.showArchived
     });
+    selection2.rendered(layoutOf(shown));
     auditLinks();
     focusSession();
     if (state.tasks.length > 0 && state.query.trim() !== "" && Object.values(shown).every((cards) => cards.length === 0)) {
@@ -15009,6 +15889,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     if (id === state.projectId) return;
     state.projectId = id;
     editor.reset();
+    selection2.set(null);
     closeSettings();
     state.settingsFor = null;
     state.skills = null;
@@ -15061,14 +15942,14 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     saver.save(STORAGE_KEYS.lastProject, () => store.saveLastProject(id));
   };
   var followHost = (lookUp = true) => {
-    const current = project();
-    if (state.pinned && current !== null) return;
-    if (lookUp && lookUpHostProject() && current === null) return;
-    if (current === null && !projectsSettled && follow.unknown(state.hostDirectory, state.projects)) return;
+    const current2 = project();
+    if (state.pinned && current2 !== null) return;
+    if (lookUp && lookUpHostProject() && current2 === null) return;
+    if (current2 === null && !projectsSettled && follow.unknown(state.hostDirectory, state.projects)) return;
     const named = follow.recognised(state.hostDirectory, state.projects);
-    if (current === null && named === null && !lastProjectLoaded) return;
+    if (current2 === null && named === null && !lastProjectLoaded) return;
     if (named !== null) rememberProject(named.id);
-    void selectProject(follow.choose(state.hostDirectory, state.projects, current, lastProject)?.id ?? null);
+    void selectProject(follow.choose(state.hostDirectory, state.projects, current2, lastProject)?.id ?? null);
   };
   var summaryRedraw = false;
   var summaryChanged = () => {
@@ -15200,9 +16081,9 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
         archiveSync.written(n);
         pendingMarks.written(projectId, n);
         if (state.archivedTasksFor !== projectId || state.tasks === null) return;
-        const current = state.archivedTasks;
-        const shown = reconcileArchived(mergeArchived(current, next, removedFor(projectId)), state.tasks).marks;
-        if (sameMarks(current, shown)) return;
+        const current2 = state.archivedTasks;
+        const shown = reconcileArchived(mergeArchived(current2, next, removedFor(projectId)), state.tasks).marks;
+        if (sameMarks(current2, shown)) return;
         state.archivedTasks = shown;
         draw();
         editor.refresh();
@@ -15239,6 +16120,52 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     if (id === null || !archivedTasks().has(taskId)) return;
     unarchivedAt.set(id, new Map(removedFor(id)).set(taskId, Date.now()));
     setArchivedTasks(id, unarchiveTask(archivedTasks(), taskId));
+  };
+  var clearing = false;
+  var clearArchive = async () => {
+    if (clearing) return;
+    clearing = true;
+    try {
+      await clearArchiveNow();
+    } finally {
+      clearing = false;
+    }
+  };
+  var clearArchiveNow = async () => {
+    const id = state.projectId;
+    const p = project();
+    if (id === null || p === null || state.view !== "board" || state.config === null || state.tasks === null) return;
+    const tracker = state.config.tracker;
+    const plan = clearArchivePlan(tracker, state.tasks, archivedTasks());
+    const ask = clearConfirm(tracker, plan);
+    if (ask === null) {
+      info("The archived features still have sub-tasks on the board; nothing to delete.");
+      return;
+    }
+    const answer = await askChoice(ask.title, ask.body, [{ id: "clear", label: "Delete all", variant: "destructive" }]);
+    if (answer === null || state.projectId !== id || state.tasks === null) return;
+    const fresh = clearArchivePlan(tracker, state.tasks, archivedTasks());
+    if (JSON.stringify(fresh) !== JSON.stringify(plan)) {
+      info("The archive changed while you were asked; nothing was deleted. Try again.");
+      return;
+    }
+    const api = createApi(host, p.directory);
+    try {
+      const result = await runClearArchive(plan.deletes, (taskId, withChildren) => api.remove(taskId, withChildren));
+      if (result.deleted.length > 0) {
+        info(`Deleted ${result.deleted.length} archived task${result.deleted.length === 1 ? "" : "s"}`);
+        if (state.projectId === id) forgetOrdered(result.deleted);
+        for (const d of result.deleted) await forgetStartOptions(id, d).catch((e) => fail(`Could not drop the start options of ${d}: ${errorText4(e)}`));
+      }
+      for (const f of result.failed) fail(`Could not delete ${f.id}: ${errorText4(f.error)}`);
+    } finally {
+      await load();
+    }
+  };
+  var forgetStartOptions = async (projectId, taskId) => {
+    await saver.idle();
+    await store.forgetCard(projectId, taskId);
+    await store.forgetNoType(projectId, taskId);
   };
   var sessionFocus = createSessionFocus(null);
   var panelSession = null;
@@ -15294,8 +16221,8 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
   };
   var audited = /* @__PURE__ */ new Set();
   var auditLinks = () => {
-    const listed = new Set(state.sessions.map((s) => s.id));
-    const ids = starter.links().filter((l) => l.status === "idle" && !listed.has(l.sessionId) && !audited.has(l.sessionId)).map((l) => l.sessionId);
+    const listed2 = new Set(state.sessions.map((s) => s.id));
+    const ids = starter.links().filter((l) => l.status === "idle" && !listed2.has(l.sessionId) && !audited.has(l.sessionId)).map((l) => l.sessionId);
     if (ids.length === 0) return;
     for (const id of ids) audited.add(id);
     void checkSessions(ids).then((r) => {
@@ -15308,6 +16235,113 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
   var saveSections = (next) => {
     sections = next;
     saver.save(STORAGE_KEYS.detailSections, () => store.saveSections(next));
+  };
+  var setHideSubtasks = (hide) => {
+    state.hideSubtasks = hide;
+    const id = state.settingsFor;
+    if (id !== null && id === state.projectId) saveProjectSettings(id, { ...state.projectSettings, hideChildren: hide });
+    draw();
+  };
+  var installBoardNavigation = () => {
+    const arrow = (direction) => () => selection2.focusOnBoard() && selection2.step(direction);
+    shortcuts.on("board.selectUp", arrow("up"));
+    shortcuts.on("board.selectDown", arrow("down"));
+    shortcuts.on("board.selectLeft", arrow("left"));
+    shortcuts.on("board.selectRight", arrow("right"));
+    shortcuts.on("board.openSelected", () => {
+      const id = selection2.get();
+      if (id === null || !selection2.focusOnBoard() || !state.columns.has(id)) return false;
+      editor.showDetail(id);
+    });
+    const moveSelected = (by) => () => {
+      if (focusInTextField()) return false;
+      const id = selection2.get();
+      const from = id === null ? void 0 : state.columns.get(id);
+      if (id === null || from === void 0) return false;
+      const to = COLUMNS[COLUMNS.findIndex((c) => c.id === from) + by];
+      if (to !== void 0) editor.moveCard(id, to.id);
+      return true;
+    };
+    shortcuts.on("board.moveCardPrev", moveSelected(-1));
+    shortcuts.on("board.moveCardNext", moveSelected(1));
+    shortcuts.on("board.toggleSubtasks", () => {
+      if (state.config === null) return false;
+      const hide = !state.hideSubtasks;
+      board.setHideSubtasks(hide);
+      setHideSubtasks(hide);
+    });
+  };
+  var appliedKeys = null;
+  var applyKeymap = () => {
+    if (typeof shortcuts === "undefined") return;
+    const overrides = state.globalSettings.shortcuts ?? {};
+    const text3 = JSON.stringify(overrides);
+    if (text3 === appliedKeys) return;
+    appliedKeys = text3;
+    const keymap = createKeymap(overrides);
+    shortcuts.setKeymap(keymap);
+    setHintKeymap(keymap, shortcuts.platform);
+  };
+  var installShortcuts = () => {
+    shortcuts = createShortcuts();
+    shortcuts.addLayer(() => document.querySelector(".kb-confirm-backdrop") !== null ? "none" : null);
+    shortcuts.addLayer(() => settingsSheet !== null ? "none" : null);
+    shortcuts.addLayer(() => editor.openModal());
+    shortcuts.addLayer(() => state.view === "board" && document.querySelector('[aria-modal="true"]') === null ? "board" : "none");
+    shortcuts.on("board.addTask", () => {
+      if (state.config === null) return false;
+      editor.showAdd();
+    });
+    shortcuts.on("add.create", () => editor.submitAddForm());
+    installBoardNavigation();
+    installOpenTaskShortcuts(shortcuts);
+    installToolbarShortcuts(shortcuts);
+    installCheatSheet(shortcuts);
+    applyKeymap();
+  };
+  var installOpenTaskShortcuts = (shortcuts2) => {
+    const act = (run) => () => {
+      const open = editor.openTask();
+      if (open !== null) run(open.shortcuts);
+      return true;
+    };
+    const step2 = (direction) => () => {
+      if (focusInTextField()) return false;
+      const open = editor.openTask();
+      const id = open === null ? null : columnNeighbour(selection2.layout(), open.id, direction);
+      if (id !== null) void editor.switchOpenTask(id);
+      return true;
+    };
+    shortcuts2.on("task.prev", step2("prev"));
+    shortcuts2.on("task.next", step2("next"));
+    shortcuts2.on("task.edit", act((s) => s.edit()));
+    shortcuts2.on("task.saveEdit", () => editor.openTask()?.shortcuts.saveEdit() ?? false);
+    shortcuts2.on("task.addSubtask", act((s) => s.addSubtask()));
+    shortcuts2.on("task.pickParent", act((s) => s.pickParent()));
+    const states = ["task.state1", "task.state2", "task.state3", "task.state4", "task.state5"];
+    states.forEach((id, i) => shortcuts2.on(id, act((s) => s.setColumn(i + 1))));
+    shortcuts2.on("task.openSession", act((s) => s.openSession()));
+    shortcuts2.on("task.delete", () => !focusInTextField() && act((s) => s.delete())());
+  };
+  var installToolbarShortcuts = (shortcuts2) => {
+    shortcuts2.on("board.projects", () => board.openProjects());
+    shortcuts2.on("board.settings", () => showSettings());
+    shortcuts2.on("board.search", () => board.focusSearch());
+    shortcuts2.on("board.refresh", () => {
+      if (!board.busy()) void load();
+    });
+    shortcuts2.reserve("board.refresh");
+  };
+  var installCheatSheet = (shortcuts2) => {
+    let open = false;
+    shortcuts2.addLayer(() => open ? "none" : null, { front: true });
+    shortcuts2.on("board.cheatSheet", () => {
+      if (open) return false;
+      open = true;
+      openCheatSheet(cheatSheetGroups(shortcuts2.keymap(), shortcuts2.platform), () => {
+        open = false;
+      });
+    });
   };
   var start = (ctx) => {
     injectStyles();
@@ -15333,17 +16367,25 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
         rememberProject(id);
         void selectProject(id);
       },
-      onHideSubtasks: (hide) => {
-        state.hideSubtasks = hide;
-        const id = state.settingsFor;
-        if (id !== null && id === state.projectId) saveProjectSettings(id, { ...state.projectSettings, hideChildren: hide });
-        draw();
-      },
+      onHideSubtasks: setHideSubtasks,
       onSearch: (query) => {
         state.query = query;
         draw();
       },
       suggest: (text3, caret) => searchSuggestions(text3, caret, boardTypes()),
+      // Second Esc: focus back on the Selected card, or on the Board itself when there is none.
+      onSearchExit: () => {
+        const id = selection2.get();
+        if (id !== null) selection2.set(id, { focus: true });
+        if (id === null || !selection2.focusOnBoard()) document.activeElement?.blur();
+      },
+      // ↓: the first card the search left, in Navigation order.
+      onSearchDown: () => {
+        const first = firstSelected(selection2.layout());
+        if (first === null) return false;
+        selection2.set(first.id, { focus: true });
+        return true;
+      },
       onRefresh: () => void load(),
       onAdd: () => editor.showAdd(),
       onSettings: showSettings,
@@ -15351,8 +16393,10 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
       onShowArchived: (show) => {
         state.showArchived = show;
         draw();
-      }
+      },
+      onClearArchive: () => void clearArchive()
     });
+    selection2 = createSelection(board.columns, { canFocus: () => shortcuts.context() === "board" });
     editor = createEditor({
       host,
       board,
@@ -15376,6 +16420,18 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
         open: (id) => void host.openSession(id).catch((e) => fail(`Could not open the session: ${errorText4(e)}`))
       },
       sections: { get: () => sections, save: saveSections },
+      // The Open task is the Selected card while it is drawn (a hidden sub-task is not), so a redraw
+      // that drops it (deleted) falls back to the nearest card in its column.
+      onOpenTaskShown: (taskId) => {
+        if (locate(selection2.layout(), taskId) !== null) selection2.set(taskId);
+      },
+      // Closed: the task last shown gets focus while it is drawn. When it left the board (deleted),
+      // the card the Selected card fell back to gets it instead (now if the board already redrew,
+      // else on the redraw, which keeps focus on the Selected card).
+      onOpenTaskClosed: (taskId, how) => {
+        const id = locate(selection2.layout(), taskId) !== null ? taskId : how === "gone" ? selection2.get() : null;
+        if (id !== null) selection2.set(id, { focus: true });
+      },
       archive: { has: (task) => isArchived(task, archivedTasks()), unarchive },
       order: { reorder: reorderCard, rename: renameOrdered, forget: forgetOrdered },
       baseTypes: () => settings().types,
@@ -15389,11 +16445,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
           await store.moveCard(projectId, from, to);
           await store.moveNoType(projectId, from, to);
         },
-        forget: async (projectId, taskId) => {
-          await saver.idle();
-          await store.forgetCard(projectId, taskId);
-          await store.forgetNoType(projectId, taskId);
-        },
+        forget: forgetStartOptions,
         markNoType: (projectId, taskId) => store.markNoType(projectId, taskId)
       },
       summary: {
@@ -15404,6 +16456,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
       // Global only; off until the global layer is read.
       suggest: { enabled: () => suggestEnabled(globalLoaded, state.globalSettings), suggester }
     });
+    installShortcuts();
     if (ctx.features?.lateGenerateResults === true) host.onLateGenerateResult((late) => void summaries.acceptLate(late));
     void loadGlobalSettings();
     board.setStatus({ kind: "loading" });
@@ -15436,9 +16489,14 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
       if (document.visibilityState === "visible" && Date.now() - state.lastLoad >= POLL_MS) backgroundLoad();
     });
   };
+  host.onResolve(async () => {
+    await host.openSurface(`plugin:${panelId(VARIANT)}`);
+    return null;
+  });
   var mounted = false;
   host.onReady((ctx) => {
     applyHostReady(ctx, document.documentElement);
+    if (ctx.surface === "background") return;
     if (mounted) return;
     mounted = true;
     start(ctx);
