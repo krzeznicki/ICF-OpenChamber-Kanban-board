@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
-import { writeConfig } from '../src/core/config.ts';
+import { withAdditionalSources, writeConfig } from '../src/core/config.ts';
 import type { Exec, Task } from '../src/core/types.ts';
 import { handle } from '../src/service/routes.ts';
 
@@ -444,4 +444,40 @@ test('POST /tasks/delete: a failing session-link cleanup is logged and the queue
   assert.deepEqual(queue.queue, []);
   assert.equal(logged.length, 1);
   assert.match(logged[0]!, /session links/);
+});
+
+test('/config/read names the sources, the primary one and their capabilities', async (t) => {
+  const directory = await local(t);
+  const one = (await handle('POST', '/config/read', { directory }, deps)).json as {
+    config: { primary: string; sources: { id: string; label: string; capabilities: Record<string, boolean> }[] };
+  };
+  assert.equal(one.config.primary, 'local');
+  assert.deepEqual(one.config.sources.map((s) => s.id), ['local']);
+
+  const path = join(directory, 'docs/agents/issue-tracker.md');
+  await writeFile(path, withAdditionalSources(await readFile(path, 'utf8'), ['github']));
+  const two = (await handle('POST', '/config/read', { directory }, deps)).json as typeof one;
+  assert.equal(two.config.primary, 'local');
+  assert.deepEqual(two.config.sources.map((s) => [s.id, s.label]), [['local', 'Local'], ['github', 'GitHub']]);
+  assert.equal(two.config.sources[1]!.capabilities.subtasks, true);
+});
+
+test('/tasks/list returns the tasks of working sources and the errors of failing ones', async (t) => {
+  const { fakeGh } = await import('./fakeGh.ts');
+  const directory = await local(t);
+  const path = join(directory, 'docs/agents/issue-tracker.md');
+  await writeFile(path, withAdditionalSources(await readFile(path, 'utf8'), ['github']));
+  await handle('POST', '/tasks/create', { directory, input: { title: 'Private' } }, deps);
+
+  const ok = await handle('POST', '/tasks/list', { directory }, { exec: fakeGh([{ number: 3, title: 'Public' }]).exec });
+  assert.equal(ok.status, 200);
+  const both = ok.json as { tasks: Task[]; errors: unknown[] };
+  assert.deepEqual(both.tasks.map((x) => x.source).sort(), ['github', 'local']);
+  assert.deepEqual(both.errors, []);
+
+  const down = await handle('POST', '/tasks/list', { directory }, { exec: fakeGh([], { authed: false }).exec });
+  assert.equal(down.status, 200);
+  const partial = down.json as { tasks: Task[]; errors: { source: string; code: string; availability: string }[] };
+  assert.deepEqual(partial.tasks.map((x) => x.title), ['Private']);
+  assert.deepEqual(partial.errors.map((e) => [e.source, e.code, e.availability]), [['github', 'GH_AUTH', 'needs-login']]);
 });

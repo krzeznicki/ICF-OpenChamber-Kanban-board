@@ -8,6 +8,7 @@ import { readSessionEventRequest, SESSION_EVENTS_PATH, type GuestSessionEventReq
 import { readConfig, readLabels, writeConfig, type ProjectConfig } from '../core/config.ts';
 import { createGithubTracker } from '../core/githubTracker.ts';
 import { openTracker } from '../core/openTracker.ts';
+import { type CombinedTracker, sourceInfo } from '../core/sources.ts';
 import type { Exec, NewTask, Task, TaskEdit, TaskState, Tracker } from '../core/types.ts';
 import { TrackerError } from '../core/types.ts';
 import type { QueueEntry } from '../core/queue.ts';
@@ -274,7 +275,10 @@ const agentList = (deps: Deps): AgentList => {
 let defaultSkills: SkillDetector | null = null;
 const skillDetector = (deps: Deps): SkillDetector => deps.skills ?? (defaultSkills ??= createSkillDetector());
 
-const tracker = (dir: string, deps: Deps): Promise<Tracker> => openTracker(dir, deps.exec);
+const tracker = (dir: string, deps: Deps): Promise<CombinedTracker> => openTracker(dir, deps.exec);
+
+/** The config as the panel gets it: each source with its label and capabilities, the primary first. */
+const configAnswer = (config: ProjectConfig) => ({ ...config, sources: config.sources.map(sourceInfo) });
 
 /**
  * A task that got a new id (local: its file moved) takes its session links and queue entry along.
@@ -371,7 +375,7 @@ const POST: Record<string, Route> = {
   },
   '/config/read': async (_body, dir) => {
     try {
-      return { config: await readConfig(dir) };
+      return { config: configAnswer(await readConfig(dir)) };
     } catch (e) {
       // The panel branches on these: an unconfigured project shows the tracker picker.
       if (e instanceof TrackerError && (e.code === 'NOT_CONFIGURED' || e.code === 'UNSUPPORTED')) {
@@ -403,10 +407,11 @@ const POST: Record<string, Route> = {
     const config = await readConfig(dir);
     if (config.tracker !== kind) alreadySetUp(config.tracker);
     await gh?.setupLabels();
-    return { config };
+    return { config: configAnswer(config) };
   },
   '/config/detect': async (_body, dir, deps) => ({ remote: await detectRemote(dir, deps.exec) }),
-  '/tasks/list': async (_body, dir, deps) => ({ tasks: await (await tracker(dir, deps)).list() }),
+  /** `errors`: one per source that failed (SourceError); the other sources' tasks are still listed. */
+  '/tasks/list': async (_body, dir, deps) => await (await tracker(dir, deps)).listAll(),
   '/tasks/get': async (body, dir, deps) => {
     const id = str(body, 'id');
     return { task: await (await tracker(dir, deps)).get(id) };
