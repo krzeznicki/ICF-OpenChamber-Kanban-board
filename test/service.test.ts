@@ -119,11 +119,11 @@ test('/config/init writes the config and /config/read returns it', async (t) => 
   const directory = await tmp(t);
   const init = await handle('POST', '/config/init', { directory, tracker: 'local' }, deps);
   assert.equal(init.status, 200, JSON.stringify(init.json));
-  assert.equal((init.json as { config: { tracker: string } }).config.tracker, 'local');
+  assert.equal((init.json as { config: { primary: string } }).config.primary, 'local');
   const read = await handle('POST', '/config/read', { directory }, deps);
   assert.equal(read.status, 200);
-  const config = (read.json as { config: { tracker: string; labels: Record<string, string> } }).config;
-  assert.equal(config.tracker, 'local');
+  const config = (read.json as { config: { primary: string; labels: Record<string, string> } }).config;
+  assert.equal(config.primary, 'local');
   assert.equal(config.labels['ready-for-agent'], 'ready-for-agent');
 
   const other = await handle('POST', '/config/init', { directory, tracker: 'github' }, deps);
@@ -324,7 +324,7 @@ test('/config/init github writes the config and creates only the missing labels'
   const gh = fakeGh([], { labels: ['bug', 'needs-info'] });
   const r = await handle('POST', '/config/init', { directory, tracker: 'github' }, { exec: gh.exec });
   assert.equal(r.status, 200, JSON.stringify(r.json));
-  assert.equal((r.json as { config: { tracker: string } }).config.tracker, 'github');
+  assert.equal((r.json as { config: { primary: string } }).config.primary, 'github');
   const created = gh.calls.filter((c) => c[1] === 'label' && c[2] === 'create').map((c) => c[3]);
   assert.deepEqual(created.sort(), ['enhancement', 'needs-triage', 'ready-for-agent', 'ready-for-human', 'wontfix']);
   assert.equal(gh.calls.filter((c) => c[1] === '--version').length, 1, 'one preflight');
@@ -460,6 +460,18 @@ test('/config/read names the sources, the primary one and their capabilities', a
   assert.equal(two.config.primary, 'local');
   assert.deepEqual(two.config.sources.map((s) => [s.id, s.label]), [['local', 'Local'], ['github', 'GitHub']]);
   assert.equal(two.config.sources[1]!.capabilities.subtasks, true);
+});
+
+test('/config/read lists every supported source as known, and an unknown additional source is a warning, not an error', async (t) => {
+  const directory = await local(t);
+  const path = join(directory, 'docs/agents/issue-tracker.md');
+  await writeFile(path, `${await readFile(path, 'utf8')}\n## Additional sources\n\n- \`jira\`: later\n`);
+  const read = await handle('POST', '/config/read', { directory }, deps);
+  assert.equal(read.status, 200);
+  const { config } = read.json as { config: { sources: { id: string }[]; known: { id: string; label: string }[]; warnings: string[] } };
+  assert.deepEqual(config.sources.map((s) => s.id), ['local']);
+  assert.deepEqual(config.known.map((s) => [s.id, s.label]), [['local', 'Local'], ['github', 'GitHub']]);
+  assert.match(config.warnings[0]!, /jira/);
 });
 
 test('/tasks/list returns the tasks of working sources and the errors of failing ones', async (t) => {

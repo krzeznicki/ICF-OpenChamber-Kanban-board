@@ -19,9 +19,9 @@ import {
 import { createGithubTracker } from '../core/githubTracker.ts';
 import { openTracker } from '../core/openTracker.ts';
 import { publishTask } from '../core/publish.ts';
-import { type CombinedTracker, sourceInfo } from '../core/sources.ts';
+import { type CombinedTracker, knownSources, sourceInfo } from '../core/sources.ts';
 import type { Exec, NewTask, Task, TaskEdit, TaskState } from '../core/types.ts';
-import { TrackerError } from '../core/types.ts';
+import { errorMessage, TrackerError } from '../core/types.ts';
 import type { QueueEntry } from '../core/queue.ts';
 import { createAgentList, createModelList, type AgentList, type ModelList } from './models.ts';
 import { createSkillDetector, type SkillDetector } from './skills.ts';
@@ -130,7 +130,8 @@ const newTask = (v: unknown): NewTask => {
   if (v.state !== undefined) task.state = state(v.state, 'input.state');
   if (v.parentId !== undefined) task.parentId = str(v, 'parentId');
   // The Source to create it in; default the primary one, and with parentId the parent's one.
-  if (v.source !== undefined) task.source = str(v, 'source');
+  // An id the project does not have is INVALID in the combined tracker, with the project's sources named.
+  if (v.source !== undefined) task.source = str(v, 'source') as SourceId;
   if (v.blockedBy !== undefined) {
     const b = v.blockedBy;
     task.blockedBy =
@@ -201,14 +202,13 @@ const start = async (dir: string, input: Omit<Parameters<typeof startSession>[0]
 /** Where background failures go: `deps.log`, else stderr. */
 const logOf = (deps: Deps): ((message: string) => void) => deps.log ?? ((m: string) => console.error(m));
 
-const errorText = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
 /** Runs a cleanup after a change that already happened: a failure is logged as `message: why`, never thrown. */
 const bestEffort = async (deps: Deps, message: string, action: () => Promise<unknown>): Promise<void> => {
   try {
     await action();
   } catch (e) {
-    logOf(deps)(`${message}: ${errorText(e)}`);
+    logOf(deps)(`${message}: ${errorMessage(e)}`);
   }
 };
 
@@ -232,10 +232,10 @@ export const drainProject = async (dir: string, deps: Deps): Promise<void> => {
         await start(dir, { taskId: e.taskId, title: e.title, prompt: e.prompt, model: e.model, agent: e.agent, variant: e.variant ?? null, location: e.location }, deps);
         forgetRemoval(queueFile(deps), dir, e.taskId);
       } catch (err) {
-        const why = (err instanceof Error ? err.message : String(err)).slice(0, ERROR_MAX);
+        const why = errorMessage(err).slice(0, ERROR_MAX);
         log(`icf-kanban: could not start the queued task ${e.taskId}: ${why}`);
         await requeueFailed(queueFile(deps), dir, e, why).catch((w: unknown) =>
-          log(`icf-kanban: could not put ${e.taskId} back in the queue: ${w instanceof Error ? w.message : String(w)}`),
+          log(`icf-kanban: could not put ${e.taskId} back in the queue: ${errorMessage(w)}`),
         );
       }
     }),
@@ -290,8 +290,11 @@ const skillDetector = (deps: Deps): SkillDetector => deps.skills ?? (defaultSkil
 
 const tracker = (dir: string, deps: Deps): Promise<CombinedTracker> => openTracker(dir, deps.exec);
 
-/** The config as the panel gets it: each source with its label and capabilities, the primary first. */
-const configAnswer = (config: ProjectConfig) => ({ ...config, sources: config.sources.map(sourceInfo) });
+/**
+ * The config as the panel gets it: each source with its label and capabilities, the primary first,
+ * and every source ICF-kanban supports (`known`), so the panel keeps no list of its own.
+ */
+const configAnswer = (config: ProjectConfig) => ({ ...config, sources: config.sources.map(sourceInfo), known: knownSources() });
 
 /**
  * A task that got a new id (local: its file moved) takes its session links and queue entry along.
@@ -421,7 +424,7 @@ const POST: Record<string, Route> = {
       );
     };
     const existing = await existingConfig(dir);
-    if (existing !== null && existing.tracker !== kind) alreadySetUp(existing.tracker);
+    if (existing !== null && existing.primary !== kind) alreadySetUp(existing.primary);
     // GitHub needs a github.com remote (gh works on it); without one nothing is written.
     if (kind === 'github' && (await detectRemote(dir, deps.exec)) === null) {
       throw new TrackerError('INVALID', 'This folder has no GitHub remote; add one or choose Local');
@@ -432,7 +435,7 @@ const POST: Record<string, Route> = {
     await gh?.preflight();
     await writeConfig(dir, kind);
     const config = await readConfig(dir);
-    if (config.tracker !== kind) alreadySetUp(config.tracker);
+    if (config.primary !== kind) alreadySetUp(config.primary);
     await gh?.setupLabels();
     return { config: configAnswer(config) };
   },
@@ -459,7 +462,7 @@ const POST: Record<string, Route> = {
       if (e instanceof EditedTemplateError) {
         const label = (id: SourceId): string => sourceInfo(id).label;
         return {
-          confirm: `The ${label(e.primary)} instructions in docs/agents/issue-tracker.md were edited by hand. Making ${label((change as { primary: SourceId }).primary)} the primary source replaces them with its template, and those edits are lost.`,
+          confirm: `The ${label(e.primary)} instructions in docs/agents/issue-tracker.md were edited by hand. Making ${label((change as { primary: SourceId }).primary)} the primary source replaces them with its template, and those edits are lost. Sections added after them are kept.`,
         };
       }
       throw e;
@@ -624,6 +627,6 @@ export const handle = async (method: string, path: string, body: unknown, deps: 
   } catch (e) {
     if (e instanceof InvalidRequest) return error(400, 'INVALID', e.message);
     if (e instanceof TrackerError) return error(422, e.code, e.message);
-    return error(500, 'FAILED', errorText(e));
+    return error(500, 'FAILED', errorMessage(e));
   }
 };

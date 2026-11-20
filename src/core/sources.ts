@@ -2,12 +2,12 @@
 // and the service use. The combined tracker is a Tracker over the adapters: `list` merges theirs,
 // every operation on an id goes to the source that owns it, `create` goes to the parent's source, the
 // named one or the primary one. Links (parent, blockers) never cross sources.
-// Adding a source (Linear, Jira, ...) is one adapter here plus its id in config.ts SOURCE_IDS.
-import type { ProjectConfig, SourceId } from './config.ts';
+// Adding a source (Linear, Jira, ...) is one adapter here plus its id in types.ts SOURCE_IDS.
+import type { ProjectConfig } from './config.ts';
 import { createGithubTracker } from './githubTracker.ts';
 import { createLocalTracker } from './localTracker.ts';
-import type { Exec, NewTask, Task, Tracker, TrackerErrorCode } from './types.ts';
-import { TrackerError, errorMessage } from './types.ts';
+import type { Exec, NewTask, SourceId, Task, Tracker, TrackerErrorCode } from './types.ts';
+import { errorMessage, SOURCE_IDS, TrackerError, unknownSource } from './types.ts';
 
 /** What a source can do; the panel and the CLI ask these instead of checking the source's kind. */
 export type SourceCapabilities = {
@@ -65,6 +65,9 @@ export const SOURCES: Record<SourceId, Omit<SourceInfo, 'id'>> = {
 
 export const sourceInfo = (id: SourceId): SourceInfo => ({ id, ...SOURCES[id] });
 
+/** Every source ICF-kanban supports, with label and capabilities (the panel offers these in Settings → Sources). */
+export const knownSources = (): SourceInfo[] => SOURCE_IDS.map(sourceInfo);
+
 const availabilityOf = (e: unknown): Exclude<SourceAvailability, { status: 'ok' }> => {
   return { status: e instanceof TrackerError && e.code === 'GH_AUTH' ? 'needs-login' : 'unavailable', message: errorMessage(e) };
 };
@@ -118,10 +121,11 @@ export const createCombinedTracker = (primary: SourceId, sources: readonly Sourc
     throw new TrackerError('NOT_FOUND', `No source of this project has a task "${id}" (sources: ${known()})`);
   };
   const primarySource = sources.find((s) => s.id === primary) ?? sources[0]!;
-  const known = (): string => sources.map((s) => s.id).join(', ');
+  const ids = (): SourceId[] => sources.map((s) => s.id);
+  const known = (): string => ids().join(', ');
   const named = (id: string): SourceAdapter => {
     const source = sources.find((s) => s.id === id);
-    if (source === undefined) throw new TrackerError('INVALID', `Unknown source "${id}": this project has ${known()}`);
+    if (source === undefined) throw unknownSource(id, ids());
     return source;
   };
   const NO_LINKS = 'tasks of different sources are never linked';
@@ -164,7 +168,7 @@ export const createCombinedTracker = (primary: SourceId, sources: readonly Sourc
   const listAll = async (opts: { source?: string } = {}): Promise<SourcedList> => {
     const asked = opts.source === undefined ? sources : sources.filter((s) => s.id === opts.source);
     if (asked.length === 0) {
-      throw new TrackerError('INVALID', `Unknown source "${opts.source}": this project has ${known()}`);
+      throw unknownSource(String(opts.source), ids());
     }
     const results = await Promise.allSettled(asked.map((s) => s.list()));
     const failed = results.flatMap((r) => (r.status === 'rejected' ? [r.reason as unknown] : []));

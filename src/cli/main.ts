@@ -3,13 +3,13 @@
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { parseArgs } from 'node:util';
-import { changeSources, readConfig, SOURCE_IDS, writeConfig, type ProjectConfig, type SourceChange, type SourceId } from '../core/config.ts';
+import { changeSources, readConfig, writeConfig, type ProjectConfig, type SourceChange } from '../core/config.ts';
 import { realExec } from '../core/exec.ts';
 import { openTracker } from '../core/openTracker.ts';
 import { publishTask } from '../core/publish.ts';
 import type { CombinedTracker } from '../core/sources.ts';
-import type { Exec, Task, TaskState } from '../core/types.ts';
-import { TrackerError } from '../core/types.ts';
+import type { Exec, SourceId, Task, TaskState } from '../core/types.ts';
+import { isSourceId, TrackerError, unknownSource } from '../core/types.ts';
 
 export type CliIO = {
   stdout: (text: string) => void;
@@ -148,7 +148,7 @@ const line = (t: Task, withSource = false): string =>
 const sourcesLine = (config: ProjectConfig): string =>
   config.sources.map((id) => (id === config.primary ? `${id} (primary)` : id)).join(', ');
 
-const sourcesAnswer = (config: ProjectConfig) => ({ tracker: config.tracker, primary: config.primary, sources: config.sources });
+const sourcesAnswer = (config: ProjectConfig) => ({ primary: config.primary, sources: config.sources });
 
 const readStdin = async (stdin: CliIO['stdin']): Promise<string> => {
   if (stdin === undefined) return '';
@@ -180,7 +180,7 @@ const parse = (argv: string[]): { command: string | null; args: string[]; values
     if (changes.length > 1) usage('init takes one of --add, --remove and --primary');
     if (values.force && values.primary === undefined) usage('--force applies to init --primary');
     for (const k of changes) {
-      if (!(SOURCE_IDS as readonly string[]).includes(values[k]!)) usage(`Unknown source "${values[k]}": use ${SOURCE_IDS.join(' or ')}`);
+      if (!isSourceId(values[k])) usage(unknownSource(values[k]!).message);
     }
     // With a source change init takes no tracker argument.
     if (changes.length === 1 && args.length !== 0) usage('init takes a tracker or a source option, not both');
@@ -263,7 +263,8 @@ export const main = async (argv: string[], io: CliIO): Promise<number> => {
           ...(values.parent === undefined ? {} : { parentId: values.parent }),
           ...(blockedBy.length === 0 ? {} : { blockedBy }),
           ...(state === undefined ? {} : { state }),
-          ...(values.source === undefined ? {} : { source: values.source }),
+          // An id the project does not have is INVALID in the combined tracker, with the project's sources named.
+          ...(values.source === undefined ? {} : { source: values.source as SourceId }),
         });
         print(task, line(task, tracker.sources.length > 1));
         return 0;
@@ -339,13 +340,14 @@ export const main = async (argv: string[], io: CliIO): Promise<number> => {
         if (kind !== 'local' && kind !== 'github') return usage(`Unknown tracker "${kind}": use local or github`);
         await writeConfig(root, kind);
         const config = await readConfig(root);
-        if (config.tracker !== kind) {
+        if (config.primary !== kind) {
           throw new TrackerError(
             'INVALID',
-            `docs/agents/issue-tracker.md already configures the ${config.tracker} tracker; it was left unchanged`,
+            `docs/agents/issue-tracker.md already configures the ${config.primary} tracker; it was left unchanged`,
           );
         }
-        print({ tracker: config.tracker }, `Tracker: ${config.tracker} (docs/agents/issue-tracker.md)\n`);
+        // `tracker` in --json: the output predates several sources.
+        print({ tracker: config.primary }, `Tracker: ${config.primary} (docs/agents/issue-tracker.md)\n`);
         return 0;
       }
       default:

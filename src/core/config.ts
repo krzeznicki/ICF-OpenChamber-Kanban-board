@@ -5,17 +5,11 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { TEMPLATES } from './templates/index.ts';
-import type { TaskState } from './types.ts';
-import { TrackerError } from './types.ts';
+import { isSourceId, SOURCE_IDS, type SourceId, type TaskState, TrackerError, unknownSource } from './types.ts';
 
-export type TrackerKind = 'local' | 'github';
+export { isSourceId, SOURCE_IDS, type SourceId };
 export type LabelRole = Exclude<TaskState, 'done'>;
-/** A Source's id; today the same as its kind. A future source with colliding task ids prefixes them (`jira:ENG-12`). */
-export type SourceId = TrackerKind;
-export const SOURCE_IDS: readonly SourceId[] = ['local', 'github'];
 export type ProjectConfig = {
-  /** The primary source's kind; always equal to `primary` (kept for callers that predate several sources). */
-  tracker: TrackerKind;
   /** Where a new task goes when nobody names a source. */
   primary: SourceId;
   /** Every source of the project, the primary first; one entry when there is no Additional sources section. */
@@ -60,8 +54,6 @@ const SECTION_END = /^ {0,3}#{1,2}\s/;
  * id (`- github`). Any other item (`- Ask Ola before closing`) is a hand-written note.
  */
 const SOURCE_ITEM = /^\s*[-*+]\s+(?:`([A-Za-z][\w.-]*)`(?=[\s:.,;]|$)|([A-Za-z][\w.-]*)\s*$)/;
-
-const isSourceId = (id: string): id is SourceId => (SOURCE_IDS as readonly string[]).includes(id);
 
 /** The id a source line names (lower case), or null for any other line. */
 const sourceItem = (line: string): string | null => {
@@ -174,7 +166,7 @@ export const withAdditionalSources = (text: string, ids: readonly SourceId[]): s
   return assemble(before, after, ids, notes);
 };
 
-const detect = (text: string): TrackerKind => {
+const detect = (text: string): SourceId => {
   const heading = firstHeading(text);
   if (heading === null) {
     throw new TrackerError('UNSUPPORTED', `${ISSUE_TRACKER} has no heading naming the tracker`);
@@ -217,7 +209,7 @@ export const readConfig = async (root: string): Promise<ProjectConfig> => {
   const primary = detect(tracker);
   const additional = additionalSources(tracker);
   const sources = [primary, ...additional.ids.filter((id) => id !== primary)];
-  return { tracker: primary, primary, sources, labels: await readLabels(root), warnings: additional.warnings };
+  return { primary, sources, labels: await readLabels(root), warnings: additional.warnings };
 };
 
 /** Writes `path` only when it does not exist yet. */
@@ -230,7 +222,7 @@ const writeNew = async (path: string, text: string): Promise<void> => {
 };
 
 /** Seeds Matt's issue-tracker template for `tracker`; an existing file is never overwritten. */
-export const writeConfig = async (root: string, tracker: TrackerKind): Promise<void> => {
+export const writeConfig = async (root: string, tracker: SourceId): Promise<void> => {
   if (tracker !== 'local' && tracker !== 'github') {
     throw new TrackerError('INVALID', `Unknown tracker "${String(tracker)}": use local or github`);
   }
@@ -311,9 +303,7 @@ const templateEnd = (text: string, template: string): number => {
  */
 export const changeSources = async (root: string, change: SourceChange, opts: { force?: boolean } = {}): Promise<ProjectConfig> => {
   const id = sourceOf(change);
-  if (!(SOURCE_IDS as readonly string[]).includes(id)) {
-    throw new TrackerError('INVALID', `Unknown source "${String(id)}": use ${SOURCE_IDS.join(' or ')}`);
-  }
+  if (!isSourceId(id)) throw unknownSource(String(id));
   const config = await readConfig(root);
   const path = join(root, ISSUE_TRACKER);
   const text = await readFile(path, 'utf8');

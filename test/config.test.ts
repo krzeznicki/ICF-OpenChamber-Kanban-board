@@ -67,12 +67,12 @@ test('local fixture is detected as local with default labels', async (t) => {
     'issue-tracker.md': await fixture('issue-tracker-local.md'),
     'triage-labels.md': await fixture('triage-labels.md'),
   });
-  assert.deepEqual(await readConfig(root), { tracker: 'local', primary: 'local', sources: ['local'], labels: DEFAULT_LABELS, warnings: [] });
+  assert.deepEqual(await readConfig(root), { primary: 'local', sources: ['local'], labels: DEFAULT_LABELS, warnings: [] });
 });
 
 test('github fixture is detected as github', async (t) => {
   const root = await repo(t, { 'issue-tracker.md': await fixture('issue-tracker-github.md') });
-  assert.deepEqual(await readConfig(root), { tracker: 'github', primary: 'github', sources: ['github'], labels: DEFAULT_LABELS, warnings: [] });
+  assert.deepEqual(await readConfig(root), { primary: 'github', sources: ['github'], labels: DEFAULT_LABELS, warnings: [] });
 });
 
 test('gitlab fixture is UNSUPPORTED and names the heading', async (t) => {
@@ -89,7 +89,7 @@ test('first heading decides, even after leading blank lines', async (t) => {
   const root = await repo(t, {
     'issue-tracker.md': '\n\n# Issue tracker: Local Markdown\n\n## GitHub mirror\n',
   });
-  assert.equal((await readConfig(root)).tracker, 'local');
+  assert.equal((await readConfig(root)).primary, 'local');
 });
 
 test('missing issue-tracker.md is NOT_CONFIGURED', async (t) => {
@@ -134,13 +134,13 @@ test('writeConfig writes Matt\'s templates for a fresh repo', async (t) => {
   await writeConfig(root, 'local');
   assert.equal(await readFile(join(root, 'docs/agents/issue-tracker.md'), 'utf8'), await fixture('issue-tracker-local.md'));
   assert.equal(existsSync(join(root, 'docs/agents/triage-labels.md')), false, 'triage-labels.md must not be created');
-  assert.deepEqual(await readConfig(root), { tracker: 'local', primary: 'local', sources: ['local'], labels: DEFAULT_LABELS, warnings: [] });
+  assert.deepEqual(await readConfig(root), { primary: 'local', sources: ['local'], labels: DEFAULT_LABELS, warnings: [] });
 
   const gh = await repo(t);
   await writeConfig(gh, 'github');
   assert.equal(await readFile(join(gh, 'docs/agents/issue-tracker.md'), 'utf8'), await fixture('issue-tracker-github.md'));
   assert.equal(existsSync(join(gh, 'docs/agents/triage-labels.md')), false, 'triage-labels.md must not be created');
-  assert.equal((await readConfig(gh)).tracker, 'github');
+  assert.equal((await readConfig(gh)).primary, 'github');
 });
 
 test('writeConfig twice leaves the first file untouched', async (t) => {
@@ -148,7 +148,7 @@ test('writeConfig twice leaves the first file untouched', async (t) => {
   await writeConfig(root, 'local');
   await writeConfig(root, 'github');
   assert.equal(await readFile(join(root, 'docs/agents/issue-tracker.md'), 'utf8'), await fixture('issue-tracker-local.md'));
-  assert.equal((await readConfig(root)).tracker, 'local');
+  assert.equal((await readConfig(root)).primary, 'local');
 });
 
 test('writeConfig never overwrites existing user files', async (t) => {
@@ -191,7 +191,6 @@ test('an Additional sources section adds sources after the primary one', async (
   const root = await repo(t, { 'issue-tracker.md': text });
   const config = await readConfig(root);
   assert.equal(config.primary, 'local');
-  assert.equal(config.tracker, 'local');
   assert.deepEqual(config.sources, ['local', 'github']);
 });
 

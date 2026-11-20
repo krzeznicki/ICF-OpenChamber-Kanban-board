@@ -481,7 +481,7 @@ test('init --add / --remove / --primary change the sources in docs/agents/issue-
 
   const primary = await run(['init', '--primary', 'github', '--json'], root);
   assert.equal(primary.code, 0, primary.err);
-  assert.deepEqual(json<{ primary: string; sources: string[] }>(primary), { tracker: 'github', primary: 'github', sources: ['github', 'local'] });
+  assert.deepEqual(json<{ primary: string; sources: string[] }>(primary), { primary: 'github', sources: ['github', 'local'] });
   assert.equal(await file(), withAdditionalSources(TEMPLATES.github, ['local']));
 
   const removed = await run(['init', '--remove', 'local'], root);

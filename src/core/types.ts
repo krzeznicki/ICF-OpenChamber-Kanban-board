@@ -11,6 +11,21 @@ export const TASK_STATES: readonly TaskState[] = ['needs-triage', 'needs-info', 
 
 export type TaskKind = 'parent' | 'ticket';
 
+/**
+ * A Source's id (ADR 0001): where a task lives. Today the same as the source's kind; a future source
+ * with colliding task ids prefixes them (`jira:ENG-12`).
+ */
+export type SourceId = 'local' | 'github';
+/** Every source ICF-kanban supports, in the order they are offered. */
+export const SOURCE_IDS: readonly SourceId[] = ['local', 'github'];
+
+/** True when `id` is a source ICF-kanban supports. */
+export const isSourceId = (id: unknown): id is SourceId => (SOURCE_IDS as readonly unknown[]).includes(id);
+
+/** The INVALID error for a source id that is not one of `known`. */
+export const unknownSource = (id: string, known: readonly string[] = SOURCE_IDS): TrackerError =>
+  new TrackerError('INVALID', `Unknown source "${id}": use ${known.join(' or ')}`);
+
 export type Task = {
   /** local: ".scratch/<feature>/issues/01-slug.md" or ".scratch/<feature>/spec.md"; github: "#42" */
   id: string;
@@ -34,8 +49,8 @@ export type Task = {
    * Only counts while the task is ready-for-agent and its parent's orchestrator session runs.
    */
   claimed: boolean;
-  /** The Source the task lives in (`local`, `github`); every id belongs to exactly one source. */
-  source: string;
+  /** The Source the task lives in; every id belongs to exactly one source. */
+  source: SourceId;
 };
 
 export type NewTask = {
@@ -47,9 +62,10 @@ export type NewTask = {
   blockedBy?: string[];
   /**
    * The Source to create it in (combined tracker); default the primary source. With `parentId` the
-   * task goes to the parent's source, and a different `source` is INVALID.
+   * task goes to the parent's source, and a different `source` is INVALID. An id the project does
+   * not have (typed by a user) is INVALID too.
    */
-  source?: string;
+  source?: SourceId;
 };
 
 /** What publishing a local task to GitHub did (core/publish.ts; the service's /tasks/publish answer). */

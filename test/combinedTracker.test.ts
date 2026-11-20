@@ -162,7 +162,7 @@ test('listAll({ source }) reads only that source', async (t) => {
   assert.ok(!gh.calls.some((c) => c[0] === 'gh'), 'gh not called');
   const github = await tracker.listAll({ source: 'github' });
   assert.deepEqual(github.tasks.map((x) => x.id).sort(), ['#5', '#6']);
-  await rejectsWith(tracker.listAll({ source: 'jira' }), 'INVALID', /jira/);
+  await rejectsWith(tracker.listAll({ source: 'jira' as never }), 'INVALID', /jira/);
 });
 
 test('sources declare capabilities and availability', async (t) => {
@@ -190,7 +190,7 @@ test('create --source puts the task in that source; an unknown source is INVALID
   assert.equal(shared.id, '#7');
   assert.ok(gh.calls.some((c) => c[1] === 'issue' && c[2] === 'create'));
   assert.equal((await tracker.create({ title: 'Private', source: 'local' })).source, 'local');
-  await rejectsWith(tracker.create({ title: 'X', source: 'jira' }), 'INVALID', /jira.*local, github/);
+  await rejectsWith(tracker.create({ title: 'X', source: 'jira' as never }), 'INVALID', /jira.*local or github/);
 });
 
 test('create with a parent goes to the parent\'s source; a different --source is INVALID', async (t) => {
