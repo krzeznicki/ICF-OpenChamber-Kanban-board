@@ -14,7 +14,11 @@ const STATES = TASK_STATES.join(', ');
 /** A shell word: kept bare when it is plainly safe, else single-quoted (a GitHub id starts with #). */
 export const shellWord = (s: string): string => (/^[A-Za-z0-9_./:@%+=,-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`);
 
-const isGithub = (task: Task): boolean => task.url !== null || /^#\d+$/.test(task.id);
+/** What a task of each source is, for the agent: the first line of the prompt's tracker section. */
+const SOURCE_LINE: Record<string, string> = {
+  github: 'This task is a GitHub issue of this repository.',
+  local: 'This task is a local issue file under .scratch/ in this repository.',
+};
 
 /** The project root without a trailing slash ("/" stays "/"). */
 const rootOf = (projectDir: string): string => projectDir.replace(/\/+$/, '') || '/';
@@ -23,7 +27,7 @@ const under = (projectDir: string, rel: string): string => `${rootOf(projectDir)
 /** How to put a note on the task: at the root's issue file (never a worktree copy), or a GitHub comment. */
 const noteHow = (task: Task, projectDir: string): string => {
   const n = /^#(\d+)$/.exec(task.id)?.[1] ?? /\/issues\/(\d+)/.exec(task.url ?? '')?.[1];
-  if (isGithub(task) && n !== undefined) return `post it with \`gh issue comment ${n} --body-file -\``;
+  if (task.source === 'github' && n !== undefined) return `post it with \`gh issue comment ${n} --body-file -\``;
   return `append it to the issue file \`${shellWord(under(projectDir, task.id))}\``;
 };
 
@@ -75,9 +79,7 @@ export const buildPrompt = (
   const head = [`# Task: ${task.title}`, `Id: ${task.id}`, ...(task.url !== null ? [`URL: ${task.url}`] : [])].join('\n');
   const tracker = [
     '## Tracker',
-    isGithub(task)
-      ? 'This task is a GitHub issue of this repository.'
-      : 'This task is a local issue file under .scratch/ in this repository.',
+    SOURCE_LINE[task.source] ?? `This task is in the ${task.source} source of this project.`,
     `Move it with the task-board CLI: ${cli} state ${id} <state>`,
     ...otherSourceLines(task, cli, primary),
     'Always pass --dir exactly as shown (the project root), even in a worktree: without it the CLI misses the tracker or writes to a copy the board never reads.',

@@ -217,3 +217,12 @@ test('prompt: a task in the primary source (or with no primary known) has no sou
     assert.ok(!p.includes('primary source'));
   }
 });
+
+test('prompt: the tracker section follows the task\'s source, not the shape of its id or url', () => {
+  const local = buildPrompt(task({ url: 'https://example.com/board/03-drag' }), BUILTIN_PRESETS.find((p) => p.id === 'triage')!, CLI, DIR, []);
+  assert.match(local, /local issue file/);
+  assert.doesNotMatch(local, /GitHub issue/);
+  assert.doesNotMatch(local, /gh issue comment/);
+  const gh = buildPrompt(task({ id: '#42', url: null, source: 'github' }), implement, CLI, DIR, []);
+  assert.match(gh, /This task is a GitHub issue/);
+});
