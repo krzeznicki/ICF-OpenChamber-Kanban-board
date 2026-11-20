@@ -15,7 +15,8 @@ import { VARIANT, panelId } from '../core/variant.ts';
 import type { Task } from '../core/types.ts';
 import { archivableIds, archivedShown, archiveTasks, archiveWriteJob, createStorageSync, createPendingMarks, isArchived, mergeArchived, reconcileArchived, unarchiveTask } from './archive.ts';
 import { clearArchivePlan, clearConfirm, runClearArchive } from './clearArchive.ts';
-import { ApiError, createApi, type Api, type ConfigResult, type ProjectConfig } from './api.ts';
+import { ApiError, createApi, type Api, type ConfigResult, type ProjectConfig, type SourceError } from './api.ts';
+import { sourceBanners } from './sourceBanner.ts';
 import { applyOrder, forgetInOrder, pruneOrder, renameInOrder, reorder } from './order.ts';
 import { COLUMNS, groupTasks, pruneArchived, resolveSession, sessionForTask, sessionTarget, type Column, type SessionLookup } from './columns.ts';
 import { createEditor, type Editor } from './edit.ts';
@@ -79,6 +80,10 @@ type State = {
   sessionsReady: boolean;
   config: ProjectConfig | null;
   tasks: Task[] | null;
+  /** The sources that failed to list in the last load (a banner each); the board shows the others. */
+  sourceErrors: SourceError[];
+  /** True for an id of a source that failed to list: pruning the archive marks and order keeps it. */
+  unlisted: (id: string) => boolean;
   hideSubtasks: boolean;
   /** When the last load was attempted, successful or not. */
   lastLoad: number;
@@ -124,6 +129,8 @@ const state: State = {
   sessionsReady: false,
   config: null,
   tasks: null,
+  sourceErrors: [],
+  unlisted: () => false,
   hideSubtasks: false,
   lastLoad: 0,
   view: 'none',
@@ -382,11 +389,13 @@ const draw = (): void => {
   if (state.config === null || tasks === null || view === null) {
     board.setSources(null, null);
     setBadge(null);
+    board.setSourceBanners([], () => {});
     board.render(null);
     return;
   }
   const { sources } = state.config;
   board.setSources(sourceSwitcher(sources), view);
+  board.setSourceBanners(sourceBanners(state.sourceErrors, sources), () => void load());
   const marks = archivedTasks();
   const archivedCount = archivedShown(tasks, marks);
   if (archivedCount === 0) state.showArchived = false;
@@ -528,7 +537,7 @@ const load = async (): Promise<void> => {
     // Links and the start queue come from the service's own files (starter.ts).
     const token = archiveSync.loadToken();
     const orderToken = orderSync.loadToken();
-    const [tasks, marks, gone, shelved, ranked, pickedSource] = await Promise.all([
+    const [listed, marks, gone, shelved, ranked, pickedSource] = await Promise.all([
       api.list(),
       store.loadDetached(p.id).catch(() => null),
       store.loadArchived(p.id).catch(() => null),
@@ -543,6 +552,9 @@ const load = async (): Promise<void> => {
       state.sourceView = pickedSource as SourceView | null;
       state.sourceViewFor = p.id;
     }
+    // A source that failed to list keeps its tasks' archive marks and places (listedBoard).
+    const { tasks, errors, unlisted } = listed;
+    state.unlisted = unlisted;
     // Stored marks (also those of the board's other frame) join this frame's own; unreadable ones keep memory.
     if (marks !== null) {
       const merged = new Map(detached());
@@ -560,7 +572,7 @@ const load = async (): Promise<void> => {
     // that is written back.
     const base =
       shelved === null ? archivedTasks() : archiveSync.trusts(token) ? shelved : mergeArchived(archivedTasks(), shelved, removedFor(p.id));
-    const fixed = reconcileArchived(base, tasks);
+    const fixed = reconcileArchived(base, tasks, unlisted);
     state.archivedTasks = fixed.marks;
     state.archivedTasksFor = p.id;
     if (fixed.changed) writeArchivedTasks(p.id, fixed.marks, tasks);
@@ -569,13 +581,14 @@ const load = async (): Promise<void> => {
     // but only when nothing changed the order since the load began: a task moved meanwhile (new id)
     // may be missing from this list yet.
     if (ranked !== null && (orderSync.trusts(orderToken) || state.orderFor !== p.id)) {
-      const pruned = pruneOrder(ranked, tasks);
+      const pruned = pruneOrder(ranked, tasks, unlisted);
       state.order = pruned;
       state.orderFor = p.id;
       if (pruned.length !== ranked.length && orderSync.trusts(orderToken)) setOrder(p.id, pruned);
     }
     state.config = result.config;
     state.tasks = tasks;
+    state.sourceErrors = errors;
     state.view = 'board';
     draw();
     editor.refresh();
@@ -623,6 +636,8 @@ const selectProject = async (id: string | null): Promise<void> => {
   starter.reset();
   state.config = null;
   state.tasks = null;
+  state.sourceErrors = [];
+  state.unlisted = () => false;
   board.setProjects(projectOptions(), id);
   unsubscribeSessions?.();
   unsubscribeSessions = null;
@@ -825,7 +840,7 @@ const reorderCard = (taskId: string, column: Column, before: string | null): voi
   const id = state.projectId;
   if (id === null || state.tasks === null) return;
   const ids = [...state.columns].filter(([, c]) => c === column).map(([t]) => t);
-  const next = pruneOrder(reorder(order(), ids, taskId, before), state.tasks);
+  const next = pruneOrder(reorder(order(), ids, taskId, before), state.tasks, state.unlisted);
   setOrder(id, next);
   draw();
 };
@@ -856,7 +871,7 @@ const writeArchivedTasks = (projectId: string, marks: ReadonlyMap<string, number
   // Joined with marks still queued: a job this one replaces may hold some memory no longer has.
   const snapshot = pendingMarks.queue(projectId, marks, removed, n);
   const job = archiveWriteJob(
-    { marks: snapshot, removed, tasks },
+    { marks: snapshot, removed, tasks, unlisted: state.unlisted },
     { load: () => store.loadArchivedTasks(projectId), save: (next) => store.saveArchivedTasks(projectId, next) },
     (next) => {
       archiveSync.written(n);
@@ -864,7 +879,7 @@ const writeArchivedTasks = (projectId: string, marks: ReadonlyMap<string, number
       // The other frame's marks (or, after a switch back, this job's own) join what the board shows.
       if (state.archivedTasksFor !== projectId || state.tasks === null) return;
       const current = state.archivedTasks;
-      const shown = reconcileArchived(mergeArchived(current, next, removedFor(projectId)), state.tasks).marks;
+      const shown = reconcileArchived(mergeArchived(current, next, removedFor(projectId)), state.tasks, state.unlisted).marks;
       if (sameMarks(current, shown)) return;
       state.archivedTasks = shown;
       draw();
