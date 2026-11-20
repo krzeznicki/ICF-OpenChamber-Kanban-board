@@ -7,6 +7,7 @@ import { Readable } from 'node:stream';
 import { main } from '../src/cli/main.ts';
 import type { CliIO } from '../src/cli/main.ts';
 import { withAdditionalSources, writeConfig } from '../src/core/config.ts';
+import { TEMPLATES } from '../src/core/templates/index.ts';
 import { fakeGh, type FakeGhOptions } from './fakeGh.ts';
 import { createLocalTracker } from '../src/core/localTracker.ts';
 import type { Exec, Task } from '../src/core/types.ts';
@@ -411,4 +412,58 @@ test('show, state and close reach a GitHub task by its id with no source named',
   assert.equal((await cli(['state', '#6', 'ready-for-human'])).code, 0);
   assert.equal((await cli(['close', '#6'])).code, 0);
   assert.ok(gh.calls.some((c) => c[1] === 'issue' && c[2] === 'close'));
+});
+
+test('init --add / --remove / --primary change the sources in docs/agents/issue-tracker.md', async (t) => {
+  const root = await tmp(t);
+  await writeConfig(root, 'local');
+  const file = (): Promise<string> => readFile(join(root, 'docs/agents/issue-tracker.md'), 'utf8');
+
+  const added = await run(['init', '--add', 'github'], root);
+  assert.equal(added.code, 0, added.err);
+  assert.equal(added.out, 'Sources: local (primary), github (docs/agents/issue-tracker.md)\n');
+  assert.equal(await file(), withAdditionalSources(TEMPLATES.local, ['github']));
+
+  const primary = await run(['init', '--primary', 'github', '--json'], root);
+  assert.equal(primary.code, 0, primary.err);
+  assert.deepEqual(json<{ primary: string; sources: string[] }>(primary), { tracker: 'github', primary: 'github', sources: ['github', 'local'] });
+  assert.equal(await file(), withAdditionalSources(TEMPLATES.github, ['local']));
+
+  const removed = await run(['init', '--remove', 'local'], root);
+  assert.equal(removed.code, 0, removed.err);
+  assert.equal(await file(), TEMPLATES.github);
+
+  const primaryGone = await run(['init', '--remove', 'github', '--json'], root);
+  assert.equal(primaryGone.code, 4);
+  assert.equal(json<{ error: { code: string } }>(primaryGone).error.code, 'INVALID');
+});
+
+test('init --primary over a hand-edited template exits 4 and names --force; --force replaces it', async (t) => {
+  const root = await tmp(t);
+  await mkdir(join(root, 'docs/agents'), { recursive: true });
+  const edited = `${TEMPLATES.local.replace('# Issue tracker: Local Markdown', '# Issue tracker: Local Markdown (ours)')}`;
+  await writeFile(join(root, 'docs/agents/issue-tracker.md'), edited);
+  const refused = await run(['init', '--primary', 'github'], root);
+  assert.equal(refused.code, 4);
+  assert.match(refused.err, /edited by hand.*--force/);
+  assert.equal(await readFile(join(root, 'docs/agents/issue-tracker.md'), 'utf8'), edited);
+  const forced = await run(['init', '--primary', 'github', '--force'], root);
+  assert.equal(forced.code, 0, forced.err);
+  assert.equal(await readFile(join(root, 'docs/agents/issue-tracker.md'), 'utf8'), withAdditionalSources(TEMPLATES.github, ['local']));
+});
+
+test('init usage: a tracker or exactly one of --add/--remove/--primary', async (t) => {
+  const root = await tmp(t);
+  await writeConfig(root, 'local');
+  for (const argv of [
+    ['init'],
+    ['init', 'local', '--add', 'github'],
+    ['init', '--add', 'github', '--remove', 'local'],
+    ['init', '--add', 'jira'],
+    ['init', 'local', '--force'],
+    ['list', '--add', 'github'],
+  ]) {
+    const r = await run(argv, root);
+    assert.equal(r.code, 2, `${argv.join(' ')} -> ${r.code} ${r.err}`);
+  }
 });

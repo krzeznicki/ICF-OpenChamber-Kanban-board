@@ -3,7 +3,7 @@
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { parseArgs } from 'node:util';
-import { readConfig, writeConfig } from '../core/config.ts';
+import { changeSources, readConfig, SOURCE_IDS, writeConfig, type ProjectConfig, type SourceChange, type SourceId } from '../core/config.ts';
 import { realExec } from '../core/exec.ts';
 import { openTracker } from '../core/openTracker.ts';
 import type { CombinedTracker } from '../core/sources.ts';
@@ -38,7 +38,12 @@ Commands:
                                         which changes in a local tracker: the file moves)
   next [--source <id>]                  first ready-for-agent ticket with no open blocker
   close <id> [--with-children]          close a task (and a feature's tickets)
-  init <local|github>                   write docs/agents/issue-tracker.md
+  init <local|github>                   write docs/agents/issue-tracker.md (the primary source)
+  init --add <id> | --remove <id> | --primary <id> [--force]
+                                        add or remove a source, or make one primary; this
+                                        rewrites docs/agents/issue-tracker.md as Settings does.
+                                        Removing deletes nothing (its files or issues stay).
+                                        --force: replace a primary template edited by hand
 
 Sources: list and next read every source in docs/agents/issue-tracker.md (the primary one and
 any under ## Additional sources); --source local|github reads only that one. Commands on an id
@@ -69,6 +74,10 @@ const OPTIONS = {
   'blocked-by': { type: 'string', multiple: true },
   'with-children': { type: 'boolean' },
   source: { type: 'string' },
+  add: { type: 'string' },
+  remove: { type: 'string' },
+  primary: { type: 'string' },
+  force: { type: 'boolean' },
 } as const;
 
 type Option = keyof typeof OPTIONS;
@@ -91,7 +100,7 @@ const COMMANDS: Record<string, { positionals: number; options: Option[] }> = {
   parent: { positionals: 2, options: [] },
   next: { positionals: 0, options: ['source'] },
   close: { positionals: 1, options: ['with-children'] },
-  init: { positionals: 1, options: [] },
+  init: { positionals: 1, options: ['add', 'remove', 'primary', 'force'] },
 };
 const GLOBAL: Option[] = ['dir', 'json', 'help'];
 
@@ -120,6 +129,12 @@ const readyTickets = (tasks: Task[]): Task[] => {
 const line = (t: Task, withSource = false): string =>
   `${t.id}  ${withSource ? `${t.source}  ` : ''}[${t.state}${t.claimed ? ', claimed' : ''}]  ${t.title}\n`;
 
+/** `local (primary), github`: the project's sources, the primary first. */
+const sourcesLine = (config: ProjectConfig): string =>
+  config.sources.map((id) => (id === config.primary ? `${id} (primary)` : id)).join(', ');
+
+const sourcesAnswer = (config: ProjectConfig) => ({ tracker: config.tracker, primary: config.primary, sources: config.sources });
+
 const readStdin = async (stdin: CliIO['stdin']): Promise<string> => {
   if (stdin === undefined) return '';
   if (typeof stdin === 'function') return stdin();
@@ -144,6 +159,17 @@ const parse = (argv: string[]): { command: string | null; args: string[]; values
   if (spec === undefined) return usage(`Unknown command "${command}"`);
   for (const key of Object.keys(values) as Option[]) {
     if (!GLOBAL.includes(key) && !spec.options.includes(key)) usage(`Option --${key} does not apply to ${command}`);
+  }
+  if (command === 'init') {
+    const changes = (['add', 'remove', 'primary'] as const).filter((k) => values[k] !== undefined);
+    if (changes.length > 1) usage('init takes one of --add, --remove and --primary');
+    if (values.force && values.primary === undefined) usage('--force applies to init --primary');
+    for (const k of changes) {
+      if (!(SOURCE_IDS as readonly string[]).includes(values[k]!)) usage(`Unknown source "${values[k]}": use ${SOURCE_IDS.join(' or ')}`);
+    }
+    // With a source change init takes no tracker argument.
+    if (changes.length === 1 && args.length !== 0) usage('init takes a tracker or a source option, not both');
+    if (changes.length === 1) return { command, args, values };
   }
   if (args.length !== spec.positionals) {
     usage(`${command} takes ${spec.positionals} argument${spec.positionals === 1 ? '' : 's'}, got ${args.length}`);
@@ -267,6 +293,19 @@ export const main = async (argv: string[], io: CliIO): Promise<number> => {
         return 0;
       }
       case 'init': {
+        const change: SourceChange | null =
+          values.add !== undefined
+            ? { add: values.add as SourceId }
+            : values.remove !== undefined
+              ? { remove: values.remove as SourceId }
+              : values.primary !== undefined
+                ? { primary: values.primary as SourceId }
+                : null;
+        if (change !== null) {
+          const config = await changeSources(root, change, { force: values.force === true });
+          print(sourcesAnswer(config), `Sources: ${sourcesLine(config)} (docs/agents/issue-tracker.md)\n`);
+          return 0;
+        }
         const kind = args[0];
         if (kind !== 'local' && kind !== 'github') return usage(`Unknown tracker "${kind}": use local or github`);
         await writeConfig(root, kind);

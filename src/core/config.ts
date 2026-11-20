@@ -181,3 +181,67 @@ export const writeConfig = async (root: string, tracker: TrackerKind): Promise<v
   await writeNew(join(root, ISSUE_TRACKER), tracker === 'local' ? TEMPLATES.local : TEMPLATES.github);
   // triage-labels.md is not written: the spec writes it only when the user keeps the triage skill.
 };
+
+/** One change of the project's sources: Settings → Sources and `task-board init --add/--remove/--primary`. */
+export type SourceChange = { add: SourceId } | { remove: SourceId } | { primary: SourceId };
+
+/**
+ * A primary change would drop a primary template that was edited by hand (the file does not start
+ * with Matt's template for it). The caller asks the user and retries with `force`.
+ */
+export class EditedTemplateError extends TrackerError {
+  /** The primary source whose edited template would be replaced. */
+  public primary: SourceId;
+
+  constructor(primary: SourceId) {
+    super(
+      'INVALID',
+      `The ${primary} part of ${ISSUE_TRACKER} was edited by hand; changing the primary source replaces it with the new template and the edits are lost. Run it again with force (--force) to go ahead.`,
+    );
+    this.name = 'EditedTemplateError';
+    this.primary = primary;
+  }
+}
+
+const sourceOf = (change: SourceChange): SourceId => ('add' in change ? change.add : 'remove' in change ? change.remove : change.primary);
+
+/**
+ * The issue-tracker.md text after `change`. Adding or removing rewrites only the Additional sources
+ * section. A new primary source swaps the template: text after the old template (sections added by
+ * hand) is kept; a template edited by hand is replaced only with `force`, else EditedTemplateError.
+ */
+const changedText = (text: string, config: ProjectConfig, change: SourceChange, force: boolean): string => {
+  const others = config.sources.filter((id) => id !== config.primary);
+  if ('add' in change) return withAdditionalSources(text, others.includes(change.add) || change.add === config.primary ? others : [...others, change.add]);
+  if ('remove' in change) {
+    if (change.remove === config.primary) {
+      throw new TrackerError('INVALID', `${change.remove} is the primary source; make another source primary before removing it`);
+    }
+    return withAdditionalSources(text, others.filter((id) => id !== change.remove));
+  }
+  const primary = change.primary;
+  if (primary === config.primary) return text;
+  const rest = [config.primary, ...others].filter((id) => id !== primary);
+  const base = withAdditionalSources(text, []);
+  const old = TEMPLATES[config.primary];
+  if (!base.startsWith(old) && !force) throw new EditedTemplateError(config.primary);
+  const kept = base.startsWith(old) ? base.slice(old.length) : '';
+  return withAdditionalSources(`${TEMPLATES[primary]}${kept}`, rest);
+};
+
+/**
+ * Applies `change` to `root`'s issue-tracker.md and answers the new config. Removing a source deletes
+ * nothing: its files or issues stay, the board only stops showing them.
+ */
+export const changeSources = async (root: string, change: SourceChange, opts: { force?: boolean } = {}): Promise<ProjectConfig> => {
+  const id = sourceOf(change);
+  if (!(SOURCE_IDS as readonly string[]).includes(id)) {
+    throw new TrackerError('INVALID', `Unknown source "${String(id)}": use ${SOURCE_IDS.join(' or ')}`);
+  }
+  const config = await readConfig(root);
+  const path = join(root, ISSUE_TRACKER);
+  const text = await readFile(path, 'utf8');
+  const next = changedText(text, config, change, opts.force === true);
+  if (next !== text) await writeFile(path, next);
+  return readConfig(root);
+};

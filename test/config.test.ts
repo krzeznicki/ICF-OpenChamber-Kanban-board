@@ -5,7 +5,7 @@ import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readConfig, withAdditionalSources, writeConfig } from '../src/core/config.ts';
+import { changeSources, readConfig, withAdditionalSources, writeConfig } from '../src/core/config.ts';
 import { openTracker } from '../src/core/openTracker.ts';
 import { TEMPLATES } from '../src/core/templates/index.ts';
 import type { Exec } from '../src/core/types.ts';
@@ -224,4 +224,77 @@ test('withAdditionalSources keeps sections written after it by hand', () => {
   const again = withAdditionalSources(text, []);
   assert.match(again, /## Notes\n\nMine\.\n$/);
   assert.doesNotMatch(again, /Additional sources/);
+});
+
+// --- Changing the sources (Settings → Sources and `task-board init --add/--remove/--primary`) ---
+
+const trackerFile = (root: string): Promise<string> => readFile(join(root, 'docs/agents/issue-tracker.md'), 'utf8');
+
+test('adding github to a local project writes the Additional sources section; removing it takes it out', async (t) => {
+  const root = await repo(t, { 'issue-tracker.md': TEMPLATES.local });
+  const added = await changeSources(root, { add: 'github' });
+  assert.deepEqual(added.sources, ['local', 'github']);
+  assert.equal(await trackerFile(root), withAdditionalSources(TEMPLATES.local, ['github']));
+  // Adding it again changes nothing.
+  await changeSources(root, { add: 'github' });
+  assert.equal(await trackerFile(root), withAdditionalSources(TEMPLATES.local, ['github']));
+
+  const removed = await changeSources(root, { remove: 'github' });
+  assert.deepEqual(removed.sources, ['local']);
+  assert.equal(await trackerFile(root), TEMPLATES.local);
+});
+
+test('the primary source cannot be removed, and an unknown source is INVALID', async (t) => {
+  const root = await repo(t, { 'issue-tracker.md': withAdditionalSources(TEMPLATES.local, ['github']) });
+  await rejectsWith(changeSources(root, { remove: 'local' }), 'INVALID', /primary/);
+  await rejectsWith(changeSources(root, { add: 'jira' as never }), 'INVALID', /jira/);
+  assert.equal(await trackerFile(root), withAdditionalSources(TEMPLATES.local, ['github']));
+});
+
+test('a new primary source rewrites the file: its template plus the others under Additional sources', async (t) => {
+  const root = await repo(t, { 'issue-tracker.md': withAdditionalSources(TEMPLATES.local, ['github']) });
+  const config = await changeSources(root, { primary: 'github' });
+  assert.equal(config.primary, 'github');
+  assert.deepEqual(config.sources, ['github', 'local']);
+  assert.equal(await trackerFile(root), withAdditionalSources(TEMPLATES.github, ['local']));
+  // And back: the same file as a local project that added github.
+  await changeSources(root, { primary: 'local' });
+  assert.equal(await trackerFile(root), withAdditionalSources(TEMPLATES.local, ['github']));
+});
+
+test('a primary source that was not a source yet is added; the old primary stays as an additional one', async (t) => {
+  const root = await repo(t, { 'issue-tracker.md': TEMPLATES.local });
+  const config = await changeSources(root, { primary: 'github' });
+  assert.deepEqual(config.sources, ['github', 'local']);
+});
+
+test('text added by hand after the template and other sections survive a primary change', async (t) => {
+  const text = `${TEMPLATES.local}\n## Our notes\n\nKeep PRs small.\n\n## Additional sources\n\n- \`github\`\n\n## Later\n\nMine too.\n`;
+  const root = await repo(t, { 'issue-tracker.md': text });
+  await changeSources(root, { primary: 'github' });
+  const out = await trackerFile(root);
+  assert.ok(out.startsWith(TEMPLATES.github), out);
+  assert.match(out, /## Our notes\n\nKeep PRs small\./);
+  assert.match(out, /## Later\n\nMine too\./);
+  assert.doesNotMatch(out, /Local Markdown/);
+  assert.deepEqual((await readConfig(root)).sources, ['github', 'local']);
+});
+
+test('a primary template edited by hand is not replaced without force; with force it is', async (t) => {
+  const edited = TEMPLATES.local.replace('one file per ticket', 'one file per ticket (we number from 10)');
+  const root = await repo(t, { 'issue-tracker.md': edited });
+  await rejectsWith(changeSources(root, { primary: 'github' }), 'INVALID', /edited by hand.*force/s);
+  assert.equal(await trackerFile(root), edited, 'nothing written');
+  // Adding and removing keep the template as it is, so they need no force.
+  await changeSources(root, { add: 'github' });
+  assert.ok((await trackerFile(root)).startsWith(edited));
+
+  const config = await changeSources(root, { primary: 'github' }, { force: true });
+  assert.equal(config.primary, 'github');
+  assert.equal(await trackerFile(root), withAdditionalSources(TEMPLATES.github, ['local']));
+});
+
+test('changing the sources of an unconfigured project is NOT_CONFIGURED', async (t) => {
+  const root = await repo(t);
+  await rejectsWith(changeSources(root, { add: 'github' }), 'NOT_CONFIGURED');
 });
