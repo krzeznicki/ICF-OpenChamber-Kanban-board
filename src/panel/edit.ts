@@ -3,8 +3,20 @@
 // drags of it are ignored), reports a failure in a toast and reloads the board afterwards.
 import type { HostClient } from '@openchamber/sdk';
 import type { NewTask, Task, TaskState } from '../core/types.ts';
-import { MODEL_PICK, type TrackerKind, canAddSubtask, createWithSubtasks, existingToLink, parentChoices, partialMessage, subtasksToCreate, toNewTask, type AddDraft } from './addTask.ts';
-import type { Api } from './api.ts';
+import {
+  MODEL_PICK,
+  type TrackerKind,
+  addSource,
+  canAddSubtask,
+  createWithSubtasks,
+  existingToLink,
+  partialMessage,
+  sourceTasks,
+  subtasksToCreate,
+  toNewTask,
+  type AddDraft,
+} from './addTask.ts';
+import type { Api, SourceInfo } from './api.ts';
 import type { Preset } from './presets.ts';
 import type { StartLists } from './models.ts';
 import { resolveStart, type CardOptions, type Sections, type Settings } from './settings.ts';
@@ -17,7 +29,7 @@ import { askChoice } from './ui/confirm.ts';
 import { openDetail, type DetailHandle, type DetailModel, type OpenTaskShortcuts, type SessionView, type SummaryModel } from './ui/detail.ts';
 import { attachDrag } from './ui/dnd.ts';
 import { canLinkUnder, followingMove, linkChoices, linkConfirm, unlinkConfirm } from './link.ts';
-import { sourceKind } from './sources.ts';
+import { kindOfSource, sourceKind } from './sources.ts';
 import { deleteConfirm } from './taskDelete.ts';
 import { editChanges, editConflict, editableText, type EditText } from './taskEdit.ts';
 
@@ -27,8 +39,13 @@ export type EditorDeps = {
   /** Null when no board is shown (no project, wizard, notice). */
   api: () => Api | null;
   tasks: () => Task[];
-  /** The primary source's kind: new tasks (Add task) go there. A listed task goes by its own source (kindOf). */
+  /** The primary source's kind (and id). A listed task goes by its own source (kindOf), a new one by Add task's source. */
   tracker: () => TrackerKind;
+  /**
+   * Where Add task creates (addTask.ts addSource): the switcher's view (main.ts sourceView: a source
+   * id, `all`, or null without a config) and the project's sources with what each can do.
+   */
+  sources: () => { view: string | null; sources: SourceInfo[] };
   labels: () => Record<string, string>;
   /** Where a listed task is drawn now; null when hidden (e.g. "Hide sub-tasks"). */
   columnOf: (id: string) => Column | null;
@@ -543,9 +560,11 @@ export const createEditor = (deps: EditorDeps) => {
     const api = deps.api();
     if (api === null) return { kind: 'error', message: 'No project is open.' };
     const ctx = deps.start.context();
-    const tracker = deps.tracker();
+    // The draft's source decides how it is handled; its parent and links are of that source only.
+    const source = draft.source === '' ? deps.tracker() : draft.source;
+    const tracker = kindOfSource(source, deps.tracker());
     const subtasks = subtasksToCreate(draft, tracker);
-    const existing = existingToLink(draft, tracker, deps.tasks()).map((id) => ({ id, label: find(id)?.title ?? id }));
+    const existing = existingToLink(draft, tracker, sourceTasks(deps.tasks(), source)).map((id) => ({ id, label: find(id)?.title ?? id }));
     /** Never throws: the task exists by now, so a storage hiccup is a toast, not "could not create". */
     const saveStart = (taskId: string): void => {
       if (ctx === null || Object.keys(draft.start).length === 0) return;
@@ -622,12 +641,14 @@ export const createEditor = (deps: EditorDeps) => {
     const tasks = deps.tasks();
     const types = taskTypes(tasks, deps.baseTypes()).filter((t) => t !== MODEL_PICK);
     addOffer = { types, suggest: deps.suggest.enabled() && deps.suggest.suggester.available() };
+    const { view, sources } = deps.sources();
     addModal = openAddModal(
       {
         tracker: deps.tracker(),
         types,
         suggest: addOffer.suggest,
-        parents: parentChoices(tasks),
+        source: addSource(view, sources, deps.tracker()),
+        sources,
         tasks,
         labels: deps.labels(),
         start: addStart(),

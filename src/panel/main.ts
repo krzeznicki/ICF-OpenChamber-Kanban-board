@@ -1303,6 +1303,7 @@ const start = (ctx: HostReadyContext): void => {
     },
     tasks: () => state.tasks ?? [],
     tracker: () => state.config?.tracker ?? 'local',
+    sources: () => ({ view: sourceView(), sources: state.config?.sources ?? [] }),
     labels: () => state.config?.labels ?? {},
     columnOf: (id) => state.columns.get(id) ?? null,
     reload: load,

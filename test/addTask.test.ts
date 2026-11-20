@@ -1,8 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { NewTask, Task } from '../src/core/types.ts';
+import type { SourceInfo } from '../src/panel/api.ts';
 import {
   CREATE_STATES,
+  addSource,
+  sourceTasks,
+  withSource,
   blockerChoices,
   canAddSubtask,
   subtaskModes,
@@ -61,7 +65,7 @@ const GITHUB: Task[] = [
 ];
 
 test('emptyDraft starts in needs-triage with nothing chosen', () => {
-  assert.deepEqual(emptyDraft(), { title: '', type: '', parentId: '', state: 'needs-triage', blockedBy: [], body: '', subtasks: [], existing: [], start: {} });
+  assert.deepEqual(emptyDraft(), { title: '', type: '', parentId: '', state: 'needs-triage', blockedBy: [], body: '', subtasks: [], existing: [], start: {}, source: '' });
 });
 
 test('CREATE_STATES offers the open states, needs-triage first', () => {
@@ -347,4 +351,72 @@ test('subtaskModes: "Add sub-task" offers a new task and/or the existing tasks t
   assert.deepEqual(subtaskModes(true, 0), ['new']);
   assert.deepEqual(subtaskModes(false, 2), ['existing']);
   assert.deepEqual(subtaskModes(false, 0), []);
+});
+
+// --- several sources (ticket 04): the source Add task creates in ---
+
+const CAPS = { create: true, subtasks: true, blockedBy: true, claim: true, delete: true };
+const SOURCES: SourceInfo[] = [
+  { id: 'local', label: 'Local files', capabilities: CAPS },
+  { id: 'github', label: 'GitHub Issues', capabilities: CAPS },
+];
+
+test('addSource: a source picked in the switcher is where the task goes, with no picker', () => {
+  assert.deepEqual(addSource('github', SOURCES, 'local'), { source: 'github', picker: null });
+  assert.deepEqual(addSource('local', SOURCES, 'local'), { source: 'local', picker: null });
+});
+
+test('addSource: in All the form offers every source, starting on the primary', () => {
+  assert.deepEqual(addSource('all', SOURCES, 'github'), {
+    source: 'github',
+    picker: [
+      { id: 'local', label: 'Local files' },
+      { id: 'github', label: 'GitHub Issues' },
+    ],
+  });
+});
+
+test('addSource: a source that cannot create is not offered; one left means no picker', () => {
+  const sources: SourceInfo[] = [SOURCES[0]!, { ...SOURCES[1]!, capabilities: { ...CAPS, create: false } }];
+  assert.deepEqual(addSource('all', sources, 'local'), { source: 'local', picker: null });
+  assert.deepEqual(addSource('all', sources, 'github'), { source: 'local', picker: null });
+});
+
+test('addSource: without a view (one source, no config yet) the task goes to the primary', () => {
+  assert.deepEqual(addSource(null, [], 'local'), { source: 'local', picker: null });
+});
+
+const MIXED: Task[] = [...LOCAL, ...GITHUB];
+
+test('sourceTasks: parent, blocker and existing sub-task choices come only from the chosen source', () => {
+  const gh = sourceTasks(MIXED, 'github');
+  assert.deepEqual(parentChoices(gh).map((c) => c.id), ['#1']);
+  assert.deepEqual(blockerChoices(gh, 'github', '').map((c) => c.id), ['#1', '#2', '#3']);
+  assert.deepEqual(existingSubtaskChoices(gh, 'github', '').map((c) => c.id), ['#1', '#2', '#3']);
+  const local = sourceTasks(MIXED, 'local');
+  assert.deepEqual(parentChoices(local).map((c) => c.id), ['.scratch/f/spec.md', '.scratch/g/spec.md']);
+});
+
+test('withSource: switching the source drops the parent, blockers and existing sub-tasks of the other one', () => {
+  const d = draft({ title: 'T', source: 'local', parentId: '.scratch/f/spec.md', blockedBy: ['.scratch/f/issues/01-a.md'], existing: [], subtasks: ['s'] });
+  assert.deepEqual(withSource(d, 'github', MIXED, CAPS), { ...d, source: 'github', parentId: '', blockedBy: [], existing: [] });
+  const g = draft({ source: 'github', parentId: '#1', blockedBy: ['#3'], existing: ['#2'] });
+  assert.deepEqual(withSource(g, 'github', MIXED, CAPS), g);
+});
+
+test('withSource: what the source cannot do is cleared (parent and sub-tasks without subtasks, blockers without blockedBy)', () => {
+  const g = draft({ source: 'github', parentId: '#1', blockedBy: ['#3'], existing: ['#2'], subtasks: ['s'] });
+  assert.deepEqual(withSource(g, 'github', MIXED, { ...CAPS, subtasks: false }), { ...g, parentId: '', existing: [], subtasks: [] });
+  assert.deepEqual(withSource(g, 'github', MIXED, { ...CAPS, blockedBy: false }), { ...g, blockedBy: [] });
+});
+
+test('toNewTask: a task without a parent goes to the chosen source; a parent decides the source itself', () => {
+  assert.equal(toNewTask(draft({ title: 'T', source: 'github' }), 'github').source, 'github');
+  assert.equal('source' in toNewTask(draft({ title: 'T', source: 'github', parentId: '#1' }), 'github'), false);
+  assert.equal('source' in toNewTask(draft({ title: 'T' }), 'local'), false); // no source chosen: the primary
+});
+
+test('isDirty: a changed source counts as a changed choice', () => {
+  assert.equal(isDirty(draft({ source: 'github' }), draft({ source: 'local' })), true);
+  assert.equal(isDirty(draft({ source: 'local' }), draft({ source: 'local' })), false);
 });

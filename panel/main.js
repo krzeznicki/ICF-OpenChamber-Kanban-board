@@ -2826,7 +2826,8 @@ ${GUEST_UI_LOOK_CSS}`;
   };
 
   // src/panel/sources.ts
-  var sourceKind = (task, fallback) => task.source === "local" || task.source === "github" ? task.source : fallback;
+  var kindOfSource = (source2, fallback) => source2 === "local" || source2 === "github" ? source2 : fallback;
+  var sourceKind = (task, fallback) => kindOfSource(task.source, fallback);
 
   // src/panel/clearArchive.ts
   var plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
@@ -3236,9 +3237,29 @@ ${GUEST_UI_LOOK_CSS}`;
     body: "",
     subtasks: [],
     existing: [],
-    start: {}
+    start: {},
+    source: ""
   });
-  var isDirty = (draft, initial = emptyDraft()) => draft.title.trim() !== "" || draft.body.trim() !== "" || draft.subtasks.some((row) => row.trim() !== "") || draft.type !== initial.type || draft.parentId !== initial.parentId || draft.state !== initial.state || draft.blockedBy.length > 0 || draft.existing.length > 0 || Object.values(draft.start).some((v2) => v2 !== void 0);
+  var isDirty = (draft, initial = emptyDraft()) => draft.title.trim() !== "" || draft.body.trim() !== "" || draft.subtasks.some((row) => row.trim() !== "") || draft.type !== initial.type || draft.source !== initial.source || draft.parentId !== initial.parentId || draft.state !== initial.state || draft.blockedBy.length > 0 || draft.existing.length > 0 || Object.values(draft.start).some((v2) => v2 !== void 0);
+  var addSource = (view, sources, primary2) => {
+    if (view !== null && view !== "all") return { source: view, picker: null };
+    const creatable = sources.filter((s) => s.capabilities.create);
+    const source2 = creatable.some((s) => s.id === primary2) ? primary2 : creatable[0]?.id ?? primary2;
+    return { source: source2, picker: creatable.length > 1 ? creatable.map((s) => ({ id: s.id, label: s.label })) : null };
+  };
+  var sourceTasks = (tasks, source2) => tasks.filter((t) => t.source === source2);
+  var withSource = (d, source2, tasks, capabilities) => {
+    const own2 = new Set(sourceTasks(tasks, source2).map((t) => t.id));
+    const subtasks = capabilities.subtasks;
+    return {
+      ...d,
+      source: source2,
+      parentId: subtasks && own2.has(d.parentId) ? d.parentId : "",
+      blockedBy: capabilities.blockedBy ? d.blockedBy.filter((id) => own2.has(id)) : [],
+      existing: subtasks ? d.existing.filter((id) => own2.has(id)) : [],
+      subtasks: subtasks ? d.subtasks : []
+    };
+  };
   var CREATE_STATES = ["needs-triage", "needs-info", "ready-for-agent", "ready-for-human"];
   var choice = (t) => ({ id: t.id, label: t.title, hint: t.id });
   var parentChoices = (tasks) => tasks.filter((t) => t.kind === "parent" && t.state !== "done").map(choice);
@@ -3273,7 +3294,7 @@ ${GUEST_UI_LOOK_CSS}`;
       state: d.state === MODEL_PICK ? "needs-triage" : d.state,
       ...type !== null ? { type } : {},
       ...body !== "" ? { body } : {},
-      ...d.parentId !== "" ? { parentId: d.parentId } : {},
+      ...d.parentId !== "" ? { parentId: d.parentId } : d.source !== "" ? { source: d.source } : {},
       ...blockers.length > 0 ? { blockedBy: [...blockers] } : {}
     };
   };
@@ -6096,6 +6117,12 @@ ${ref}`,
   var openAddModal = (model, callbacks) => {
     const d = emptyDraft(model.suggest);
     if (!model.suggest) d.type = model.types.includes("enhancement") ? "enhancement" : NONE2;
+    d.source = model.source.source;
+    const ALL_CAPS = { create: true, subtasks: true, blockedBy: true, claim: true, delete: true };
+    const caps = () => model.sources.find((s) => s.id === d.source)?.capabilities ?? ALL_CAPS;
+    const kind = () => kindOfSource(d.source, model.tracker);
+    const tasks = () => sourceTasks(model.tasks, d.source);
+    const parentOptions = () => [{ id: NONE2, label: kind() === "local" ? "None (new feature)" : "None" }, ...parentChoices(tasks())];
     const types = model.types.filter((t) => t !== MODEL_PICK);
     const pick = model.suggest ? [{ id: MODEL_PICK, label: "Let the model pick", hint: "Small Model, after the task is created" }] : [];
     const initial = { ...d };
@@ -6143,7 +6170,9 @@ ${ref}`,
     const stateSlot = el3("div", "kb-field");
     row1.append(typeSlot, stateSlot);
     const parentSlot = part("kb-fields");
+    const sourceCell = el3("div", "kb-field");
     const parentCell = el3("div", "kb-field");
+    if (model.source.picker !== null) parentSlot.append(sourceCell);
     parentSlot.append(parentCell);
     const blockersBox = part("kb-sheet-part kb-add-group");
     const bodySlot = part("kb-add-body");
@@ -6187,11 +6216,25 @@ ${ref}`,
         stateSelect.update({ value: id });
       }
     });
+    const sourceSelect = model.source.picker === null ? null : mountSelect(sourceCell, {
+      label: "Source",
+      value: d.source,
+      options: model.source.picker,
+      onChange: (id) => {
+        Object.assign(d, withSource(d, id, model.tasks, model.sources.find((s) => s.id === id)?.capabilities ?? ALL_CAPS));
+        sourceSelect?.update({ value: id });
+        drawParent();
+        drawBlockers();
+        drawSubtasks();
+        drawExisting();
+        drawStart();
+      }
+    });
     const parentSelect = mountSelect(parentCell, {
       label: "Parent",
       value: d.parentId,
-      options: [{ id: NONE2, label: model.tracker === "local" ? "None (new feature)" : "None" }, ...model.parents],
-      searchable: model.parents.length > FILTER_OVER,
+      options: parentOptions(),
+      searchable: parentOptions().length - 1 > FILTER_OVER,
       onChange: (id) => {
         d.parentId = id;
         parentSelect.update({ value: id });
@@ -6212,18 +6255,26 @@ ${ref}`,
         bodyField.update({ value: v2 });
       }
     });
-    const fixed = [titleField, typeSelect, stateSelect, parentSelect, bodyField];
+    const drawParent = () => {
+      const options = parentOptions();
+      parentCell.hidden = !caps().subtasks;
+      parentSelect.update({ value: d.parentId, options, searchable: options.length - 1 > FILTER_OVER });
+    };
+    drawParent();
+    const fixed = [titleField, typeSelect, stateSelect, parentSelect, bodyField, ...sourceSelect === null ? [] : [sourceSelect]];
     let blockerDisposers = [];
     let blockerFilter = "";
     const drawBlockers = () => {
       for (const x of blockerDisposers) x();
       blockerDisposers = [];
       blockersBox.replaceChildren();
-      const offered = blockerChoices(model.tasks, model.tracker, d.parentId);
+      const offered = caps().blockedBy ? blockerChoices(tasks(), kind(), d.parentId) : [];
       d.blockedBy = keepOffered(d.blockedBy, offered);
+      blockersBox.hidden = !caps().blockedBy;
+      if (blockersBox.hidden) return;
       blockersBox.append(el3("h3", "kb-settings-heading", "Blocked by"));
       if (offered.length === 0) {
-        const why = model.tracker === "local" ? d.parentId === NONE2 ? "A new feature has no blockers; pick a parent to choose tickets of that feature." : "That feature has no open tickets." : "No open issues.";
+        const why = kind() === "local" ? d.parentId === NONE2 ? "A new feature has no blockers; pick a parent to choose tickets of that feature." : "That feature has no open tickets." : "No open issues.";
         blockersBox.append(el3("p", "kb-muted", why));
         return;
       }
@@ -6244,8 +6295,10 @@ ${ref}`,
       for (const x of subDisposers) x();
       subDisposers = [];
       subBox.replaceChildren();
+      subBox.hidden = !caps().subtasks;
+      if (subBox.hidden) return;
       subBox.append(el3("h3", "kb-settings-heading", "Sub-tasks"));
-      if (!canHaveSubtasks(model.tracker, d.parentId)) {
+      if (!canHaveSubtasks(kind(), d.parentId)) {
         subBox.append(el3("p", "kb-muted", "A ticket of a feature cannot have sub-tasks here; choose no parent to create a feature with sub-tasks."));
         return;
       }
@@ -6253,7 +6306,7 @@ ${ref}`,
         el3(
           "p",
           "kb-muted",
-          model.tracker === "local" ? "Created as tickets of the new feature, in this order." : "Created as sub-issues of the new issue, in this order."
+          kind() === "local" ? "Created as tickets of the new feature, in this order." : "Created as sub-issues of the new issue, in this order."
         )
       );
       d.subtasks.forEach((value, i) => {
@@ -6317,20 +6370,20 @@ ${ref}`,
       for (const x of existingDisposers) x();
       existingDisposers = [];
       existingBox.replaceChildren();
-      const offered = existingSubtaskChoices(model.tasks, model.tracker, d.parentId);
+      const offered = caps().subtasks ? existingSubtaskChoices(tasks(), kind(), d.parentId) : [];
       d.existing = keepOffered(d.existing, offered);
-      existingBox.hidden = !canHaveSubtasks(model.tracker, d.parentId);
+      existingBox.hidden = !caps().subtasks || !canHaveSubtasks(kind(), d.parentId);
       if (existingBox.hidden) return;
       existingBox.append(el3("h3", "kb-settings-heading", "Existing sub-tasks"));
       if (offered.length === 0) {
-        existingBox.append(el3("p", "kb-muted", model.tracker === "local" ? "No open tickets or features without tickets to move." : "No open issues."));
+        existingBox.append(el3("p", "kb-muted", kind() === "local" ? "No open tickets or features without tickets to move." : "No open issues."));
         return;
       }
       existingBox.append(
         el3(
           "p",
           "kb-muted",
-          model.tracker === "local" ? "Moved into the new feature as its tickets once it is created." : "Linked as sub-issues of the new issue once it is created."
+          kind() === "local" ? "Moved into the new feature as its tickets once it is created." : "Linked as sub-issues of the new issue once it is created."
         )
       );
       existingDisposers = mountCheckList(existingBox, {
@@ -6355,7 +6408,7 @@ ${ref}`,
     };
     const drawStart = () => {
       const s = start2;
-      const inherited = s === null ? null : s.inherited(draftType(d), draftSubtasks(d, model.tracker));
+      const inherited = s === null ? null : s.inherited(draftType(d), draftSubtasks(d, kind()));
       const key = s === null ? "loading" : JSON.stringify([s.projectId, inherited, s.summaryLanguage, s.presets.map((p) => [p.id, p.name])]);
       lockStart();
       if (key === startKey) return;
@@ -13824,9 +13877,10 @@ ${ref}`,
       const api = deps.api();
       if (api === null) return { kind: "error", message: "No project is open." };
       const ctx = deps.start.context();
-      const tracker = deps.tracker();
+      const source2 = draft.source === "" ? deps.tracker() : draft.source;
+      const tracker = kindOfSource(source2, deps.tracker());
       const subtasks = subtasksToCreate(draft, tracker);
-      const existing = existingToLink(draft, tracker, deps.tasks()).map((id) => ({ id, label: find(id)?.title ?? id }));
+      const existing = existingToLink(draft, tracker, sourceTasks(deps.tasks(), source2)).map((id) => ({ id, label: find(id)?.title ?? id }));
       const saveStart = (taskId) => {
         if (ctx === null || Object.keys(draft.start).length === 0) return;
         try {
@@ -13893,12 +13947,14 @@ ${ref}`,
       const tasks = deps.tasks();
       const types = taskTypes(tasks, deps.baseTypes()).filter((t) => t !== MODEL_PICK);
       addOffer = { types, suggest: deps.suggest.enabled() && deps.suggest.suggester.available() };
+      const { view, sources } = deps.sources();
       addModal = openAddModal(
         {
           tracker: deps.tracker(),
           types,
           suggest: addOffer.suggest,
-          parents: parentChoices(tasks),
+          source: addSource(view, sources, deps.tracker()),
+          sources,
           tasks,
           labels: deps.labels(),
           start: addStart(),
@@ -16583,6 +16639,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
       },
       tasks: () => state.tasks ?? [],
       tracker: () => state.config?.tracker ?? "local",
+      sources: () => ({ view: sourceView(), sources: state.config?.sources ?? [] }),
       labels: () => state.config?.labels ?? {},
       columnOf: (id) => state.columns.get(id) ?? null,
       reload: load,
