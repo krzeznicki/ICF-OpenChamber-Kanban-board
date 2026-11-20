@@ -8,6 +8,7 @@ import type { TrackerKind } from './addTask.ts';
 import { foldText } from '../core/localFormat.ts';
 import { COLUMNS, type BoardModel, type Column } from './columns.ts';
 import { editableText } from './taskEdit.ts';
+import { sourceKind } from './sources.ts';
 
 /** The filter keys a query understands, as `key:value` or `key=value`. */
 export const FILTER_KEYS = ['type', 'state', 'status', 'column'] as const;
@@ -79,7 +80,7 @@ const matchesParsed = (task: Task, q: ParsedQuery, tracker: TrackerKind, column:
   // The same key twice means either; different keys must all hold.
   for (const [key, wanted] of q.filters) if (!wanted.some((w) => FILTERS[key].holds(task, column, w))) return false;
   if (q.words.length === 0) return true;
-  const { title, body } = editableText(tracker, task);
+  const { title, body } = editableText(sourceKind(task, tracker), task);
   const text = foldText(`${title}\n${body}`);
   return q.words.every((w) => text.includes(w));
 };

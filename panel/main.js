@@ -2825,9 +2825,23 @@ ${GUEST_UI_LOOK_CSS}`;
     };
   };
 
+  // src/panel/sources.ts
+  var sourceKind = (task, fallback) => task.source === "local" || task.source === "github" ? task.source : fallback;
+
   // src/panel/clearArchive.ts
   var plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
   var clearArchivePlan = (tracker, tasks, marks) => {
+    const plan = { deletes: [], skipped: [], count: 0, sources: [] };
+    for (const kind of [tracker, ...["local", "github"].filter((k) => k !== tracker)]) {
+      const part = planFor(kind, tasks.filter((t) => sourceKind(t, tracker) === kind), marks);
+      plan.deletes.push(...part.deletes);
+      plan.skipped.push(...part.skipped);
+      plan.count += part.count;
+      if (part.deletes.length > 0) plan.sources.push(kind);
+    }
+    return plan;
+  };
+  var planFor = (tracker, tasks, marks) => {
     const archived2 = tasks.filter((t) => isArchived(t, marks));
     const ids = new Set(archived2.map((t) => t.id));
     const children = /* @__PURE__ */ new Map();
@@ -2848,7 +2862,10 @@ ${GUEST_UI_LOOK_CSS}`;
   };
   var clearConfirm = (tracker, plan) => {
     if (plan.deletes.length === 0) return null;
-    const where = tracker === "local" ? "Their files in .scratch/ are deleted; a feature goes with its whole folder, including done sub-tasks older than 30 days the board no longer lists." : "Their issues are deleted on GitHub (only repository admins can delete issues); sub-issues not archived stay as top-level issues.";
+    const kinds = plan.sources.length > 0 ? plan.sources : [tracker];
+    const where = kinds.map(
+      (kind) => kind === "local" ? "Their files in .scratch/ are deleted; a feature goes with its whole folder, including done sub-tasks older than 30 days the board no longer lists." : "Their issues are deleted on GitHub (only repository admins can delete issues); sub-issues not archived stay as top-level issues."
+    ).join(" ");
     const k = plan.skipped.length;
     const kept = k > 0 ? ` ${plural(k, "archived feature")} with sub-tasks still on the board stay${k === 1 ? "s" : ""}.` : "";
     return { title: `Delete ${plural(plan.count, "archived task")} for good?`, body: `${where}${kept} This cannot be undone from the board.` };
@@ -2887,6 +2904,11 @@ ${GUEST_UI_LOOK_CSS}`;
     const message2 = typeof e?.message === "string" ? e.message : `The service answered ${status}`;
     return new ApiError(code2, message2);
   };
+  var listedTasks = (r) => {
+    const failed = r.errors?.[0];
+    if (failed !== void 0) throw new ApiError(failed.code, `${failed.source}: ${failed.message}`);
+    return r.tasks;
+  };
   var createApi = (host2, directory) => {
     const call = async (method, path, body) => {
       let res;
@@ -2910,7 +2932,8 @@ ${GUEST_UI_LOOK_CSS}`;
       initConfig: (tracker) => call("POST", "/config/init", { tracker }).then((r) => r.config),
       /** The github.com remote of the project (origin first), or null. */
       detect: () => call("POST", "/config/detect").then((r) => r.remote),
-      list: () => call("POST", "/tasks/list").then((r) => r.tasks),
+      /** The tasks of every source; `/tasks/list` also answers `errors` (SourceError[]) for the sources that failed. */
+      list: () => call("POST", "/tasks/list").then(listedTasks),
       get: (id) => call("POST", "/tasks/get", { id }).then((r) => r.task),
       create: (input) => call("POST", "/tasks/create", { input }).then((r) => r.task),
       setState: (id, state2) => call("POST", "/tasks/state", { id, state: state2 }).then((r) => r.task),
@@ -3135,6 +3158,7 @@ ${GUEST_UI_LOOK_CSS}`;
   var canLinkUnder = (tracker, child, parent, tasks) => {
     if (child.id === parent.id || child.state === "done" || parent.state === "done") return false;
     if (child.parentId === parent.id) return false;
+    if (child.source !== parent.source) return false;
     if (tracker === "local") return parent.kind === "parent" && movableLocally(child, tasks);
     return !isOrAbove(child.id, parent.parentId, tasks);
   };
@@ -13427,6 +13451,7 @@ ${ref}`,
     let card = null;
     let lookup = null;
     const find = (id) => deps.tasks().find((t) => t.id === id) ?? null;
+    const kindOf = (task) => sourceKind(task, deps.tracker());
     const info2 = (message2) => void deps.host.toast({ kind: "info", message: message2 }).catch(() => {
     });
     const fail2 = (message2) => void deps.host.toast({ kind: "error", message: message2 }).catch(() => {
@@ -13494,17 +13519,17 @@ ${ref}`,
         summary: deps.summary.model(task),
         session: sessionView(task),
         children: tasks.filter((t) => t.parentId === task.id).map((t) => ({ id: t.id, title: t.title, state: t.state })),
-        addSubtask: canAddSubtask(task, deps.tracker()),
+        addSubtask: canAddSubtask(task, kindOf(task)),
         archived: deps.archive.has(task),
         links: (() => {
           const parent = task.parentId === null ? null : find(task.parentId);
-          const offered = linkChoices(deps.tracker(), task, tasks);
+          const offered = linkChoices(kindOf(task), task, tasks);
           return {
             parent: task.parentId === null ? null : { id: task.parentId, label: parent?.title ?? task.parentId, hint: task.parentId },
             ...offered
           };
         })(),
-        text: editableText(deps.tracker(), task)
+        text: editableText(kindOf(task), task)
       };
     };
     const loadCard = (taskId) => {
@@ -13638,7 +13663,7 @@ ${ref}`,
       const child = find(id);
       const parent = find(parentId);
       if (child === null || parent === null || moving.has(id)) return;
-      const { title, body } = linkConfirm(deps.tracker(), child, parent);
+      const { title, body } = linkConfirm(kindOf(child), child, parent);
       if (await askChoice(title, body, [{ id: "link", label: "Make sub-task" }]) !== "link") return;
       const error2 = await linkTask(id, parentId);
       if (error2 !== null) fail2(error2);
@@ -13654,7 +13679,8 @@ ${ref}`,
       return busyWhile(
         id,
         () => attempt(async () => {
-          const conflict = editConflict(deps.tracker(), await api.get(id), from, changes);
+          const stored2 = await api.get(id);
+          const conflict = editConflict(kindOf(stored2), stored2, from, changes);
           if (conflict !== null) throw new Error(conflict);
           await api.edit(id, changes);
         })
@@ -13664,7 +13690,7 @@ ${ref}`,
       const task = find(id);
       const api = deps.api();
       if (task === null || api === null || moving.has(id)) return;
-      const { title, body, choices } = deleteConfirm(deps.tracker(), task, deps.tasks());
+      const { title, body, choices } = deleteConfirm(kindOf(task), task, deps.tasks());
       const answer = await askChoice(title, body, choices);
       if (answer === null) return;
       let deleted = [];
@@ -13718,7 +13744,7 @@ ${ref}`,
           const child = find(childId);
           const parent = find(id);
           if (child === null || parent === null) return null;
-          const { title, body } = unlinkConfirm(deps.tracker(), child, parent.title);
+          const { title, body } = unlinkConfirm(kindOf(child), child, parent.title);
           if (await askChoice(title, body, [{ id: "unlink", label: "Unlink", variant: "destructive" }]) !== "unlink") return null;
           return unlinkTask(childId);
         },
@@ -13858,7 +13884,7 @@ ${ref}`,
       canLink: (id, parentId) => {
         const child = find(id);
         const parent = find(parentId);
-        return child !== null && parent !== null && canLinkUnder(deps.tracker(), child, parent, deps.tasks());
+        return child !== null && parent !== null && canLinkUnder(kindOf(child), child, parent, deps.tasks());
       },
       onLink: (id, parentId) => void link2(id, parentId),
       onReorder: (id, column, before) => {
@@ -14526,7 +14552,7 @@ ${note}` : note;
   var matchesParsed = (task, q, tracker, column) => {
     for (const [key, wanted] of q.filters) if (!wanted.some((w) => FILTERS[key].holds(task, column, w))) return false;
     if (q.words.length === 0) return true;
-    const { title, body } = editableText(tracker, task);
+    const { title, body } = editableText(sourceKind(task, tracker), task);
     const text3 = foldText(`${title}
 ${body}`);
     return q.words.every((w) => text3.includes(w));

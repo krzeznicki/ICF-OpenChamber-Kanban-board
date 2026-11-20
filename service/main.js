@@ -345,6 +345,7 @@ var TrackerError = class extends Error {
 };
 
 // src/core/config.ts
+var SOURCE_IDS = ["local", "github"];
 var DIR = "docs/agents";
 var ISSUE_TRACKER = `${DIR}/issue-tracker.md`;
 var TRIAGE_LABELS = `${DIR}/triage-labels.md`;
@@ -365,6 +366,36 @@ var firstHeading = (text) => {
     if (m) return m[1];
   }
   return null;
+};
+var ADDITIONAL = "Additional sources";
+var ADDITIONAL_HEADING = /^ {0,3}##\s+additional sources\s*#*\s*$/i;
+var SECTION_END = /^ {0,3}#{1,2}\s/;
+var SOURCE_ITEM = /^\s*[-*+]\s+`?([A-Za-z][\w.-]*)`?/;
+var additionalRange = (lines) => {
+  const start2 = lines.findIndex((l) => ADDITIONAL_HEADING.test(l));
+  if (start2 === -1) return null;
+  let end = start2 + 1;
+  while (end < lines.length && !SECTION_END.test(lines[end])) end++;
+  return { start: start2, end };
+};
+var additionalSources = (text) => {
+  const lines = text.split(/\r?\n/);
+  const range = additionalRange(lines);
+  if (range === null) return [];
+  const out = [];
+  for (const line of lines.slice(range.start + 1, range.end)) {
+    const m = SOURCE_ITEM.exec(line);
+    if (m === null) continue;
+    const id = m[1].toLowerCase();
+    if (!SOURCE_IDS.includes(id)) {
+      throw new TrackerError(
+        "UNSUPPORTED",
+        `Unsupported source "${m[1]}" under ## ${ADDITIONAL} in ${ISSUE_TRACKER}: ICF-kanban supports ${SOURCE_IDS.join(" and ")}`
+      );
+    }
+    if (!out.includes(id)) out.push(id);
+  }
+  return out;
 };
 var detect = (text) => {
   const heading = firstHeading(text);
@@ -399,7 +430,9 @@ var readConfig = async (root) => {
   if (tracker2 === null) {
     throw new TrackerError("NOT_CONFIGURED", `No ${ISSUE_TRACKER}: choose a tracker (Local Markdown or GitHub) first`);
   }
-  return { tracker: detect(tracker2), labels: await readLabels(root) };
+  const primary = detect(tracker2);
+  const sources = [primary, ...additionalSources(tracker2).filter((id) => id !== primary)];
+  return { tracker: primary, primary, sources, labels: await readLabels(root) };
 };
 var writeNew = async (path, text) => {
   try {
@@ -563,7 +596,8 @@ var createGithubTracker = (root, exec, labels) => {
     blockedBy: (rel.blockedBy ?? bodyBlockers(issue.body)).map(idOf),
     url: issue.url,
     updatedAt: Date.parse(issue.updatedAt) || 0,
-    claimed: issue.assignees.length > 0
+    claimed: issue.assignees.length > 0,
+    source: "github"
   });
   const load = async (n) => {
     const g = (await graph([n], true)).get(n) ?? null;
@@ -1103,7 +1137,8 @@ var createLocalTracker = (root) => {
         blockedBy: [],
         url: null,
         updatedAt: s.mtimeMs,
-        claimed: false
+        claimed: false,
+        source: "local"
       };
     }
     const p = parseSpec(file.text, feature);
@@ -1118,7 +1153,8 @@ var createLocalTracker = (root) => {
       blockedBy: [],
       url: null,
       updatedAt: file.mtime,
-      claimed: false
+      claimed: false,
+      source: "local"
     };
   };
   const resolveBlockers = (feature, numbers, files) => {
@@ -1149,7 +1185,8 @@ var createLocalTracker = (root) => {
       blockedBy: resolveBlockers(feature, p.blockedBy, siblings),
       url: null,
       updatedAt: data.mtime,
-      claimed: p.claimed
+      claimed: p.claimed,
+      source: "local"
     };
   };
   const get = async (id) => {
@@ -1415,11 +1452,96 @@ var createLocalTracker = (root) => {
   };
 };
 
+// src/core/sources.ts
+var ALL = { create: true, subtasks: true, blockedBy: true, claim: true, delete: true };
+var SOURCES = {
+  local: { label: "Local", capabilities: ALL },
+  github: { label: "GitHub", capabilities: ALL }
+};
+var sourceInfo = (id) => ({ id, ...SOURCES[id] });
+var availabilityOf = (e) => {
+  const message3 = e instanceof Error ? e.message : String(e);
+  return { status: e instanceof TrackerError && e.code === "GH_AUTH" ? "needs-login" : "unavailable", message: message3 };
+};
+var sourceError = (source, e) => ({
+  source,
+  code: e instanceof TrackerError ? e.code : "FAILED",
+  message: e instanceof Error ? e.message : String(e),
+  availability: availabilityOf(e).status
+});
+var createLocalSource = (root) => ({
+  ...createLocalTracker(root),
+  ...sourceInfo("local"),
+  owns: (id) => id.startsWith(".scratch/"),
+  availability: async () => ({ status: "ok" })
+});
+var createGithubSource = (root, exec, labels) => {
+  const tracker2 = createGithubTracker(root, exec, labels);
+  return {
+    ...tracker2,
+    ...sourceInfo("github"),
+    // `42` is accepted as well as `#42`, as the GitHub tracker always did.
+    owns: (id) => /^\s*#?\d+\s*$/.test(id),
+    availability: async () => {
+      try {
+        await tracker2.preflight();
+        return { status: "ok" };
+      } catch (e) {
+        return availabilityOf(e);
+      }
+    }
+  };
+};
+var createCombinedTracker = (primary, sources) => {
+  const sourceOf = (id) => {
+    const owner = sources.find((s) => s.owns(id));
+    if (owner !== void 0) return owner;
+    if (sources.length === 1) return sources[0];
+    throw new TrackerError("NOT_FOUND", `No source of this project has a task "${id}" (sources: ${sources.map((s) => s.id).join(", ")})`);
+  };
+  const primarySource = sources.find((s) => s.id === primary) ?? sources[0];
+  const listAll = async (opts = {}) => {
+    const asked = opts.source === void 0 ? sources : sources.filter((s) => s.id === opts.source);
+    if (asked.length === 0) {
+      throw new TrackerError("INVALID", `Unknown source "${opts.source}": this project has ${sources.map((s) => s.id).join(", ")}`);
+    }
+    const results = await Promise.allSettled(asked.map((s) => s.list()));
+    const failed = results.flatMap((r) => r.status === "rejected" ? [r.reason] : []);
+    if (failed.length === asked.length) throw failed[0];
+    const tasks = [];
+    const errors = [];
+    results.forEach((r, i) => {
+      if (r.status === "fulfilled") tasks.push(...r.value);
+      else errors.push(sourceError(asked[i].id, r.reason));
+    });
+    return { tasks, errors };
+  };
+  return {
+    primary: primarySource.id,
+    sources,
+    sourceOf,
+    listAll,
+    list: async () => (await listAll()).tasks,
+    get: async (id) => sourceOf(id).get(id),
+    create: async (input) => primarySource.create(input),
+    setState: async (id, state2) => sourceOf(id).setState(id, state2),
+    setType: async (id, type) => sourceOf(id).setType(id, type),
+    edit: async (id, changes) => sourceOf(id).edit(id, changes),
+    claim: async (id) => sourceOf(id).claim(id),
+    setParent: async (id, parentId) => sourceOf(id).setParent(id, parentId),
+    removeParent: async (id) => sourceOf(id).removeParent(id),
+    close: async (id, opts) => sourceOf(id).close(id, opts),
+    remove: async (id, opts) => sourceOf(id).remove(id, opts)
+  };
+};
+
 // src/core/openTracker.ts
 var openTracker = async (root, exec) => {
   const config = await readConfig(root);
-  if (config.tracker === "local") return createLocalTracker(root);
-  return createGithubTracker(root, exec, config.labels);
+  const sources = config.sources.map(
+    (id) => id === "local" ? createLocalSource(root) : createGithubSource(root, exec, config.labels)
+  );
+  return createCombinedTracker(config.primary, sources);
 };
 
 // src/service/models.ts
@@ -2142,6 +2264,7 @@ var agentList = (deps2) => {
 var defaultSkills = null;
 var skillDetector = (deps2) => deps2.skills ?? (defaultSkills ??= createSkillDetector());
 var tracker = (dir, deps2) => openTracker(dir, deps2.exec);
+var configAnswer = (config) => ({ ...config, sources: config.sources.map(sourceInfo) });
 var followMove = async (id, task, dir, deps2) => {
   if (task.id === id) return;
   const rekey = (what, action) => bestEffort(deps2, `icf-kanban: ${id} is now ${task.id}, but its ${what} could not follow`, action);
@@ -2206,7 +2329,7 @@ var POST = {
   },
   "/config/read": async (_body, dir) => {
     try {
-      return { config: await readConfig(dir) };
+      return { config: configAnswer(await readConfig(dir)) };
     } catch (e) {
       if (e instanceof TrackerError && (e.code === "NOT_CONFIGURED" || e.code === "UNSUPPORTED")) {
         return { error: { code: e.code, message: e.message } };
@@ -2234,10 +2357,11 @@ var POST = {
     const config = await readConfig(dir);
     if (config.tracker !== kind) alreadySetUp(config.tracker);
     await gh?.setupLabels();
-    return { config };
+    return { config: configAnswer(config) };
   },
   "/config/detect": async (_body, dir, deps2) => ({ remote: await detectRemote(dir, deps2.exec) }),
-  "/tasks/list": async (_body, dir, deps2) => ({ tasks: await (await tracker(dir, deps2)).list() }),
+  /** `errors`: one per source that failed (SourceError); the other sources' tasks are still listed. */
+  "/tasks/list": async (_body, dir, deps2) => await (await tracker(dir, deps2)).listAll(),
   "/tasks/get": async (body, dir, deps2) => {
     const id = str(body, "id");
     return { task: await (await tracker(dir, deps2)).get(id) };

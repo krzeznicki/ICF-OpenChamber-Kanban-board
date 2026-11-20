@@ -17,6 +17,7 @@ import { askChoice } from './ui/confirm.ts';
 import { openDetail, type DetailHandle, type DetailModel, type OpenTaskShortcuts, type SessionView, type SummaryModel } from './ui/detail.ts';
 import { attachDrag } from './ui/dnd.ts';
 import { canLinkUnder, followingMove, linkChoices, linkConfirm, unlinkConfirm } from './link.ts';
+import { sourceKind } from './sources.ts';
 import { deleteConfirm } from './taskDelete.ts';
 import { editChanges, editConflict, editableText, type EditText } from './taskEdit.ts';
 
@@ -26,6 +27,7 @@ export type EditorDeps = {
   /** Null when no board is shown (no project, wizard, notice). */
   api: () => Api | null;
   tasks: () => Task[];
+  /** The primary source's kind: new tasks (Add task) go there. A listed task goes by its own source (kindOf). */
   tracker: () => TrackerKind;
   labels: () => Record<string, string>;
   /** Where a listed task is drawn now; null when hidden (e.g. "Hide sub-tasks"). */
@@ -120,6 +122,8 @@ export const createEditor = (deps: EditorDeps) => {
   let lookup: { id: string; result: SessionLookup; inflight: boolean } | null = null;
 
   const find = (id: string): Task | null => deps.tasks().find((t) => t.id === id) ?? null;
+  /** How `task` is handled (wording, local file rules): by the source it lives in. */
+  const kindOf = (task: Task): TrackerKind => sourceKind(task, deps.tracker());
   const info = (message: string): void => void deps.host.toast({ kind: 'info', message }).catch(() => {});
   const fail = (message: string): void => void deps.host.toast({ kind: 'error', message }).catch(() => {});
 
@@ -204,17 +208,17 @@ export const createEditor = (deps: EditorDeps) => {
       summary: deps.summary.model(task),
       session: sessionView(task),
       children: tasks.filter((t) => t.parentId === task.id).map((t) => ({ id: t.id, title: t.title, state: t.state })),
-      addSubtask: canAddSubtask(task, deps.tracker()),
+      addSubtask: canAddSubtask(task, kindOf(task)),
       archived: deps.archive.has(task),
       links: (() => {
         const parent = task.parentId === null ? null : find(task.parentId);
-        const offered = linkChoices(deps.tracker(), task, tasks);
+        const offered = linkChoices(kindOf(task), task, tasks);
         return {
           parent: task.parentId === null ? null : { id: task.parentId, label: parent?.title ?? task.parentId, hint: task.parentId },
           ...offered,
         };
       })(),
-      text: editableText(deps.tracker(), task),
+      text: editableText(kindOf(task), task),
     };
   };
 
@@ -395,7 +399,7 @@ export const createEditor = (deps: EditorDeps) => {
     const child = find(id);
     const parent = find(parentId);
     if (child === null || parent === null || moving.has(id)) return;
-    const { title, body } = linkConfirm(deps.tracker(), child, parent);
+    const { title, body } = linkConfirm(kindOf(child), child, parent);
     if ((await askChoice(title, body, [{ id: 'link', label: 'Make sub-task' }])) !== 'link') return;
     const error = await linkTask(id, parentId);
     if (error !== null) fail(error);
@@ -416,7 +420,8 @@ export const createEditor = (deps: EditorDeps) => {
     const changes = result.changes;
     return busyWhile(id, () =>
       attempt(async () => {
-        const conflict = editConflict(deps.tracker(), await api.get(id), from, changes);
+        const stored = await api.get(id);
+        const conflict = editConflict(kindOf(stored), stored, from, changes);
         if (conflict !== null) throw new Error(conflict);
         await api.edit(id, changes);
       }),
@@ -428,7 +433,7 @@ export const createEditor = (deps: EditorDeps) => {
     const task = find(id);
     const api = deps.api();
     if (task === null || api === null || moving.has(id)) return;
-    const { title, body, choices } = deleteConfirm(deps.tracker(), task, deps.tasks());
+    const { title, body, choices } = deleteConfirm(kindOf(task), task, deps.tasks());
     const answer = await askChoice(title, body, choices);
     if (answer === null) return;
     let deleted: string[] = [];
@@ -484,7 +489,7 @@ export const createEditor = (deps: EditorDeps) => {
         const child = find(childId);
         const parent = find(id);
         if (child === null || parent === null) return null;
-        const { title, body } = unlinkConfirm(deps.tracker(), child, parent.title);
+        const { title, body } = unlinkConfirm(kindOf(child), child, parent.title);
         if ((await askChoice(title, body, [{ id: 'unlink', label: 'Unlink', variant: 'destructive' }])) !== 'unlink') return null;
         return unlinkTask(childId);
       },
@@ -638,7 +643,7 @@ export const createEditor = (deps: EditorDeps) => {
     canLink: (id, parentId) => {
       const child = find(id);
       const parent = find(parentId);
-      return child !== null && parent !== null && canLinkUnder(deps.tracker(), child, parent, deps.tasks());
+      return child !== null && parent !== null && canLinkUnder(kindOf(child), child, parent, deps.tasks());
     },
     onLink: (id, parentId) => void link(id, parentId),
     onReorder: (id, column, before) => {

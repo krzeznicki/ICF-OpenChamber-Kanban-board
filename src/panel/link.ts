@@ -4,6 +4,7 @@
 // offers a link the service would refuse.
 // Local tracker: a parent is a feature (spec.md); a ticket, or a feature without tickets, may move
 // under another feature. GitHub: any issue may take any other, but never one of its own ancestors.
+// Tasks of different sources are never linked; `tracker` is the kind of the tasks' source.
 import type { Task } from '../core/types.ts';
 import type { TrackerKind } from './addTask.ts';
 
@@ -25,6 +26,8 @@ const movableLocally = (child: Task, tasks: readonly Task[]): boolean =>
 export const canLinkUnder = (tracker: TrackerKind, child: Task, parent: Task, tasks: readonly Task[]): boolean => {
   if (child.id === parent.id || child.state === 'done' || parent.state === 'done') return false;
   if (child.parentId === parent.id) return false;
+  // No links across sources (ADR 0001): a public issue never points at a private file.
+  if (child.source !== parent.source) return false;
   if (tracker === 'local') return parent.kind === 'parent' && movableLocally(child, tasks);
   // GitHub: linking under a descendant would make a cycle.
   return !isOrAbove(child.id, parent.parentId, tasks);

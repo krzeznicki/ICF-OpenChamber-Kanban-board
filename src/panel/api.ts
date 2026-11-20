@@ -8,8 +8,27 @@ import type { AgentsAnswer, ModelsAnswer } from './models.ts';
 /** `/links/list` reports a failed status lookup as `unknown`. */
 export type LinkRecord = { taskId: string; sessionId: string; directory: string; createdAt: number; status: Exclude<LinkStatus, 'error'> };
 
-/** Mirrors core/config.ts's ProjectConfig without pulling Node code into the page's type graph. */
-export type ProjectConfig = { tracker: 'local' | 'github'; labels: Record<string, string> };
+/** Mirrors core/sources.ts's SourceInfo (what the board knows about a source without opening it). */
+export type SourceInfo = {
+  id: 'local' | 'github';
+  label: string;
+  capabilities: { create: boolean; subtasks: boolean; blockedBy: boolean; claim: boolean; delete: boolean };
+};
+
+/**
+ * Mirrors the service's answer for core/config.ts's ProjectConfig without pulling Node code into the
+ * page's type graph: `tracker` is the primary source's kind (same as `primary`), `sources` every
+ * source with the primary first.
+ */
+export type ProjectConfig = {
+  tracker: 'local' | 'github';
+  primary: 'local' | 'github';
+  sources: SourceInfo[];
+  labels: Record<string, string>;
+};
+
+/** Mirrors core/sources.ts's SourceError: a source that failed while listing; the others still listed. */
+export type SourceError = { source: string; code: string; message: string; availability: 'needs-login' | 'unavailable' };
 
 export type ConfigResult = { config: ProjectConfig } | { error: { code: string; message: string } };
 
@@ -39,6 +58,17 @@ const errorOf = (json: unknown, status: number): ApiError => {
   return new ApiError(code, message);
 };
 
+/**
+ * The tasks of a `/tasks/list` answer. A source that failed fails the whole load for now (its
+ * ApiError), as with one tracker: a partial list would prune the archive marks and the order of
+ * that source's tasks. Showing the others with a banner instead is a later step.
+ */
+export const listedTasks = (r: { tasks: Task[]; errors?: SourceError[] }): Task[] => {
+  const failed = r.errors?.[0];
+  if (failed !== undefined) throw new ApiError(failed.code, `${failed.source}: ${failed.message}`);
+  return r.tasks;
+};
+
 export const createApi = (host: HostClient, directory: string) => {
   const call = async <T>(method: 'GET' | 'POST', path: string, body?: Record<string, unknown>): Promise<T> => {
     let res: { status: number; body: string };
@@ -64,7 +94,8 @@ export const createApi = (host: HostClient, directory: string) => {
       call<{ config: ProjectConfig }>('POST', '/config/init', { tracker }).then((r) => r.config),
     /** The github.com remote of the project (origin first), or null. */
     detect: () => call<{ remote: string | null }>('POST', '/config/detect').then((r) => r.remote),
-    list: () => call<{ tasks: Task[] }>('POST', '/tasks/list').then((r) => r.tasks),
+    /** The tasks of every source; `/tasks/list` also answers `errors` (SourceError[]) for the sources that failed. */
+    list: () => call<{ tasks: Task[]; errors?: SourceError[] }>('POST', '/tasks/list').then(listedTasks),
     get: (id: string) => call<{ task: Task }>('POST', '/tasks/get', { id }).then((r) => r.task),
     create: (input: NewTask) => call<{ task: Task }>('POST', '/tasks/create', { input }).then((r) => r.task),
     setState: (id: string, state: TaskState) =>

@@ -9,7 +9,7 @@ import { readConfig, readLabels, writeConfig, type ProjectConfig } from '../core
 import { createGithubTracker } from '../core/githubTracker.ts';
 import { openTracker } from '../core/openTracker.ts';
 import { type CombinedTracker, sourceInfo } from '../core/sources.ts';
-import type { Exec, NewTask, Task, TaskEdit, TaskState, Tracker } from '../core/types.ts';
+import type { Exec, NewTask, Task, TaskEdit, TaskState } from '../core/types.ts';
 import { TrackerError } from '../core/types.ts';
 import type { QueueEntry } from '../core/queue.ts';
 import { createAgentList, createModelList, type AgentList, type ModelList } from './models.ts';

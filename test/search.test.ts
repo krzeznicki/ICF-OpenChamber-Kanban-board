@@ -221,3 +221,12 @@ test('searchSuggestions: nothing while the caret sits inside a word', () => {
   assert.deepEqual(searchSuggestions('ty', 1, []), []);
   assert.deepEqual(searchSuggestions('type:re', 6, ['research']), []);
 });
+
+test('matchesQuery reads each task as its own source stores it, whatever the primary source', () => {
+  const body = localIssue('X', 'plain words');
+  // A GitHub issue's body is searched whole, even on a board whose primary source is local...
+  assert.equal(matchesQuery(task('#7', { body }), 'enhancement', 'local'), true);
+  // ...and a local file's field lines are never searched, even when the primary source is GitHub.
+  assert.equal(matchesQuery(task('.scratch/f/issues/01-x.md', { body }), 'enhancement', 'github'), false);
+  assert.equal(matchesQuery(task('.scratch/f/issues/01-x.md', { body }), 'plain', 'github'), true);
+});

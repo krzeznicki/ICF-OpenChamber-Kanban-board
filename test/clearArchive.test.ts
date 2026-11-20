@@ -93,3 +93,24 @@ test('clearConfirm: counts what goes (a kept feature does not), says how it is d
   assert.equal(gh?.title, 'Delete 1 archived task for good?');
   assert.match(gh?.body ?? '', /repository admins/);
 });
+
+test('several sources: each archived task goes by its own source rules, and the confirm names both', () => {
+  const tasks = [
+    task(SPEC, 'done', { kind: 'parent' }),
+    task(T1, 'done', { parentId: SPEC }),
+    task('#1', 'done', { kind: 'parent' }),
+    task('#2', 'done', { parentId: '#1' }),
+  ];
+  const plan = clearArchivePlan('local', tasks, marks(SPEC, T1, '#1', '#2'));
+  assert.deepEqual(plan.deletes, [
+    { id: SPEC, withChildren: true },
+    { id: '#2', withChildren: false },
+    { id: '#1', withChildren: false },
+  ]);
+  assert.equal(plan.count, 4);
+  const ask = clearConfirm('local', plan);
+  assert.match(ask!.body, /\.scratch\//);
+  assert.match(ask!.body, /deleted on GitHub/);
+  // One source on the board: only its wording.
+  assert.doesNotMatch(clearConfirm('local', clearArchivePlan('local', tasks.slice(0, 2), marks(SPEC, T1)))!.body, /GitHub/);
+});

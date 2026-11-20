@@ -236,3 +236,16 @@ test('linkChildren links the picked tasks one after another and names the ones t
   assert.equal(await linkChildren([{ id: 'b', label: 'Beta' }], link), '1 task was not linked: “Beta” (refused)');
   assert.equal(await linkChildren(picked.slice(0, 1), link), null);
 });
+
+test('several sources: a task is never linked under a task of another source', () => {
+  const feature = task(A, { kind: 'parent' });
+  const lone = task(C, { kind: 'parent' });
+  const epic = task('#1');
+  const issue = task('#2');
+  const tasks = [feature, lone, epic, issue];
+  assert.equal(canLinkUnder('github', issue, feature, tasks), false);
+  assert.equal(canLinkUnder('local', lone, epic, tasks), false);
+  assert.deepEqual(parentTargets('github', issue, tasks).map((t) => t.id), ['#1']);
+  assert.deepEqual(childCandidates('local', feature, tasks).map((t) => t.id), [C]);
+  assert.deepEqual(linkChoices('github', epic, tasks), { parents: [{ id: '#2', label: '#2', hint: '#2' }], children: [{ id: '#2', label: '#2', hint: '#2' }] });
+});
