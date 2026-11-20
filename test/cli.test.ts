@@ -6,7 +6,8 @@ import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { main } from '../src/cli/main.ts';
 import type { CliIO } from '../src/cli/main.ts';
-import { writeConfig } from '../src/core/config.ts';
+import { withAdditionalSources, writeConfig } from '../src/core/config.ts';
+import { fakeGh, type FakeGhOptions } from './fakeGh.ts';
 import { createLocalTracker } from '../src/core/localTracker.ts';
 import type { Exec, Task } from '../src/core/types.ts';
 
@@ -337,4 +338,77 @@ test('edit <id> --title / --body-file changes the title and description, keeping
   assert.match(task.body, /New description\./);
   assert.equal((await run(['edit', ids[0]!], root)).code, 2);
   assert.match((await run(['--help'], root)).out, /edit <id>/);
+});
+
+/** Local primary (the `project` feature) plus GitHub: #5 ready-for-agent, #6 needs-triage. */
+const twoSources = async (t: T, ghOptions?: FakeGhOptions) => {
+  const p = await project(t);
+  const path = join(p.root, 'docs/agents/issue-tracker.md');
+  await writeFile(path, withAdditionalSources(await readFile(path, 'utf8'), ['github']));
+  const gh = fakeGh(
+    [
+      { number: 5, title: 'Public ready', labels: ['ready-for-agent'] },
+      { number: 6, title: 'Public triage' },
+    ],
+    ghOptions,
+  );
+  const runIn = async (argv: string[]): Promise<Run> => {
+    let out = '';
+    let err = '';
+    const code = await main(argv, { stdout: (s) => void (out += s), stderr: (s) => void (err += s), cwd: p.root, exec: gh.exec });
+    return { code, out, err };
+  };
+  return { ...p, gh, run: runIn };
+};
+
+test('with several sources list shows every source and names it on each line; --source narrows', async (t) => {
+  const { run: cli, spec, ids } = await twoSources(t);
+  const all = await cli(['list']);
+  assert.equal(all.code, 0, all.err);
+  assert.match(all.out, /^#5  github  \[ready-for-agent\]  Public ready$/m);
+  assert.match(all.out, new RegExp(`^${ids[2]}  local  \\[ready-for-agent\\]  Third$`, 'm'));
+
+  const json = JSON.parse((await cli(['list', '--json'])).out) as Task[];
+  assert.deepEqual(json.map((x) => [x.id, x.source]).sort(), [
+    ['#5', 'github'], ['#6', 'github'], [spec, 'local'], [ids[0]!, 'local'], [ids[1]!, 'local'], [ids[2]!, 'local'],
+  ].sort());
+
+  const github = await cli(['list', '--source', 'github', '--json']);
+  assert.deepEqual((JSON.parse(github.out) as Task[]).map((x) => x.id), ['#5', '#6']);
+  const unknown = await cli(['list', '--source', 'jira']);
+  assert.equal(unknown.code, 4);
+  assert.match(unknown.err, /INVALID: Unknown source "jira"/);
+});
+
+test('with one source list text stays as it was, and --json carries the source', async (t) => {
+  const { root, ids } = await project(t);
+  const r = await run(['list'], root);
+  assert.match(r.out, new RegExp(`^${ids[2]}  \\[ready-for-agent\\]  Third$`, 'm'));
+  assert.ok((JSON.parse((await run(['list', '--json'], root)).out) as Task[]).every((x) => x.source === 'local'));
+});
+
+test('list --ready and next take ready tickets from every source; --source narrows next', async (t) => {
+  const { run: cli, ids } = await twoSources(t);
+  const ready = JSON.parse((await cli(['list', '--ready', '--json'])).out) as Task[];
+  assert.deepEqual(ready.map((x) => x.id).sort(), ['#5', ids[2]!].sort());
+  const next = await cli(['next']);
+  assert.equal(next.out, `${ids[2]}  local  Third\n`);
+  const github = await cli(['next', '--source', 'github', '--json']);
+  assert.equal((JSON.parse(github.out) as Task).id, '#5');
+});
+
+test('a source that fails is reported on stderr while the others are listed', async (t) => {
+  const { run: cli, ids } = await twoSources(t, { authed: false });
+  const r = await cli(['list']);
+  assert.equal(r.code, 0);
+  assert.match(r.out, new RegExp(`^${ids[2]}  local  `, 'm'));
+  assert.match(r.err, /^task-board: source github: GH_AUTH: gh is not logged in/m);
+});
+
+test('show, state and close reach a GitHub task by its id with no source named', async (t) => {
+  const { run: cli, gh } = await twoSources(t);
+  assert.match((await cli(['show', '#6'])).out, /Public triage/);
+  assert.equal((await cli(['state', '#6', 'ready-for-human'])).code, 0);
+  assert.equal((await cli(['close', '#6'])).code, 0);
+  assert.ok(gh.calls.some((c) => c[1] === 'issue' && c[2] === 'close'));
 });

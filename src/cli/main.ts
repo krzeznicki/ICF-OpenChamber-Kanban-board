@@ -6,6 +6,7 @@ import { parseArgs } from 'node:util';
 import { readConfig, writeConfig } from '../core/config.ts';
 import { realExec } from '../core/exec.ts';
 import { openTracker } from '../core/openTracker.ts';
+import type { CombinedTracker } from '../core/sources.ts';
 import type { Exec, Task, TaskState } from '../core/types.ts';
 import { TrackerError } from '../core/types.ts';
 
@@ -22,7 +23,9 @@ export type CliIO = {
 export const USAGE = `Usage: task-board <command> [options]
 
 Commands:
-  list [--state <state>] [--ready]      tasks, one per line
+  list [--state <state>] [--ready] [--source <id>]
+                                        tasks, one per line; with several sources each line
+                                        names its source (--json always has "source")
   show <id>                             one task with its body
   create --title <t> [--type <x>] [--body-file <f>|-] [--parent <id>] [--state <state>]
          [--blocked-by <id>[,<id>...]]...   blockers: repeat the option or separate ids with commas
@@ -33,9 +36,13 @@ Commands:
   claim <id>                            take a sub-task before working on it (orchestrator)
   parent <id> <parentId>                make an existing task a sub-task of another (prints its id,
                                         which changes in a local tracker: the file moves)
-  next                                  first ready-for-agent ticket with no open blocker
+  next [--source <id>]                  first ready-for-agent ticket with no open blocker
   close <id> [--with-children]          close a task (and a feature's tickets)
   init <local|github>                   write docs/agents/issue-tracker.md
+
+Sources: list and next read every source in docs/agents/issue-tracker.md (the primary one and
+any under ## Additional sources); --source local|github reads only that one. Commands on an id
+go to the source that owns it. A source that fails is reported on stderr; the others still list.
 
 Options for every command:
   --dir <path>   project root (default: current directory)
@@ -61,6 +68,7 @@ const OPTIONS = {
   parent: { type: 'string' },
   'blocked-by': { type: 'string', multiple: true },
   'with-children': { type: 'boolean' },
+  source: { type: 'string' },
 } as const;
 
 type Option = keyof typeof OPTIONS;
@@ -74,14 +82,14 @@ type Values = {
 
 /** Command -> its positional count and the options it accepts besides --dir, --json and --help. */
 const COMMANDS: Record<string, { positionals: number; options: Option[] }> = {
-  list: { positionals: 0, options: ['state', 'ready'] },
+  list: { positionals: 0, options: ['state', 'ready', 'source'] },
   show: { positionals: 1, options: [] },
   create: { positionals: 0, options: ['title', 'type', 'body-file', 'parent', 'state', 'blocked-by'] },
   state: { positionals: 2, options: [] },
   edit: { positionals: 1, options: ['title', 'body-file'] },
   claim: { positionals: 1, options: [] },
   parent: { positionals: 2, options: [] },
-  next: { positionals: 0, options: [] },
+  next: { positionals: 0, options: ['source'] },
   close: { positionals: 1, options: ['with-children'] },
   init: { positionals: 1, options: [] },
 };
@@ -108,7 +116,9 @@ const readyTickets = (tasks: Task[]): Task[] => {
     .sort(byId);
 };
 
-const line = (t: Task): string => `${t.id}  [${t.state}${t.claimed ? ', claimed' : ''}]  ${t.title}\n`;
+/** `withSource`: the project has several sources, so the line names the task's one after its id. */
+const line = (t: Task, withSource = false): string =>
+  `${t.id}  ${withSource ? `${t.source}  ` : ''}[${t.state}${t.claimed ? ', claimed' : ''}]  ${t.title}\n`;
 
 const readStdin = async (stdin: CliIO['stdin']): Promise<string> => {
   if (stdin === undefined) return '';
@@ -172,15 +182,24 @@ export const main = async (argv: string[], io: CliIO): Promise<number> => {
     }
   };
 
+  /** The tasks of every source (or only `source`); each source that failed is reported on stderr. */
+  const listed = async (tracker: CombinedTracker, source: string | undefined): Promise<Task[]> => {
+    const { tasks, errors } = await tracker.listAll(source === undefined ? {} : { source });
+    for (const e of errors) io.stderr(`task-board: source ${e.source}: ${e.code}: ${e.message}\n`);
+    return tasks;
+  };
+
   try {
     switch (command) {
       case 'list': {
         const state = values.state === undefined ? undefined : toState(values.state, 'state');
-        const all = await (await openTracker(root, exec)).list();
+        const tracker = await openTracker(root, exec);
+        const all = await listed(tracker, values.source);
         // Readiness is judged on the full list, so a blocker hidden by --state still counts.
         const ready = values.ready ? new Set(readyTickets(all).map((t) => t.id)) : null;
         const tasks = all.filter((t) => (state === undefined || t.state === state) && (ready === null || ready.has(t.id)));
-        print(tasks, tasks.map(line).join(''));
+        const several = tracker.sources.length > 1;
+        print(tasks, tasks.map((t) => line(t, several)).join(''));
         return 0;
       }
       case 'show': {
@@ -233,17 +252,18 @@ export const main = async (argv: string[], io: CliIO): Promise<number> => {
         return 0;
       }
       case 'next': {
-        const [task] = readyTickets(await (await openTracker(root, exec)).list());
+        const tracker = await openTracker(root, exec);
+        const [task] = readyTickets(await listed(tracker, values.source));
         if (task === undefined) {
           io.stderr('task-board: no ready ticket (ready-for-agent with no open blocker)\n');
           return 3;
         }
-        print(task, `${task.id}  ${task.title}\n`);
+        print(task, `${task.id}  ${tracker.sources.length > 1 ? `${task.source}  ` : ''}${task.title}\n`);
         return 0;
       }
       case 'close': {
         const closed = await (await openTracker(root, exec)).close(args[0]!, { withChildren: values['with-children'] === true });
-        print(closed, closed.map(line).join(''));
+        print(closed, closed.map((t) => line(t)).join(''));
         return 0;
       }
       case 'init': {
