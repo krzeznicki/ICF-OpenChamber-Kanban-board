@@ -2743,6 +2743,12 @@ ${GUEST_UI_LOOK_CSS}`;
   var VARIANT = toVariant(false ? void 0 : "prod");
   var panelId = (variant) => variant === "test" ? "icf-kanban-test" : "icf-kanban";
 
+  // src/core/types.ts
+  var TASK_STATES = ["needs-triage", "needs-info", "ready-for-agent", "ready-for-human", "wontfix", "done"];
+  var SOURCE_IDS = ["local", "github"];
+  var isSourceId = (id) => SOURCE_IDS.includes(id);
+  var errorMessage = (e) => e instanceof Error ? e.message : String(e);
+
   // src/panel/archive.ts
   var ARCHIVE_MAX = 400;
   var record = (v2) => typeof v2 === "object" && v2 !== null && !Array.isArray(v2) ? v2 : null;
@@ -2825,16 +2831,12 @@ ${GUEST_UI_LOOK_CSS}`;
     };
   };
 
-  // src/panel/sources.ts
-  var kindOfSource = (source2, fallback) => source2 === "local" || source2 === "github" ? source2 : fallback;
-  var sourceKind = (task, fallback) => kindOfSource(task.source, fallback);
-
   // src/panel/clearArchive.ts
   var plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
-  var clearArchivePlan = (tracker, tasks, marks) => {
+  var clearArchivePlan = (primary2, tasks, marks) => {
     const plan = { deletes: [], skipped: [], count: 0, sources: [] };
-    for (const kind of [tracker, ...["local", "github"].filter((k) => k !== tracker)]) {
-      const part = planFor(kind, tasks.filter((t) => sourceKind(t, tracker) === kind), marks);
+    for (const kind of /* @__PURE__ */ new Set([primary2, ...tasks.map((t) => t.source)])) {
+      const part = planFor(kind, tasks.filter((t) => t.source === kind), marks);
       plan.deletes.push(...part.deletes);
       plan.skipped.push(...part.skipped);
       plan.count += part.count;
@@ -2861,12 +2863,13 @@ ${GUEST_UI_LOOK_CSS}`;
     const ordered = [...archived2.filter((t) => !hasChildren(t.id)), ...archived2.filter((t) => hasChildren(t.id))];
     return { deletes: ordered.map((t) => ({ id: t.id, withChildren: false })), skipped: [], count: archived2.length };
   };
-  var clearConfirm = (tracker, plan) => {
+  var WHAT_GOES = {
+    local: "Their files in .scratch/ are deleted; a feature goes with its whole folder, including done sub-tasks older than 30 days the board no longer lists.",
+    github: "Their issues are deleted on GitHub (only repository admins can delete issues); sub-issues not archived stay as top-level issues."
+  };
+  var clearConfirm = (plan) => {
     if (plan.deletes.length === 0) return null;
-    const kinds = plan.sources.length > 0 ? plan.sources : [tracker];
-    const where = kinds.map(
-      (kind) => kind === "local" ? "Their files in .scratch/ are deleted; a feature goes with its whole folder, including done sub-tasks older than 30 days the board no longer lists." : "Their issues are deleted on GitHub (only repository admins can delete issues); sub-issues not archived stay as top-level issues."
-    ).join(" ");
+    const where = plan.sources.map((source2) => WHAT_GOES[source2]).join(" ");
     const k = plan.skipped.length;
     const kept = k > 0 ? ` ${plural(k, "archived feature")} with sub-tasks still on the board stay${k === 1 ? "s" : ""}.` : "";
     return { title: `Delete ${plural(plan.count, "archived task")} for good?`, body: `${where}${kept} This cannot be undone from the board.` };
@@ -2881,29 +2884,6 @@ ${GUEST_UI_LOOK_CSS}`;
       }
     }
     return out;
-  };
-
-  // src/panel/sourceBanner.ts
-  var sourceBanners = (errors2, sources) => errors2.map((e) => {
-    const label = sources.find((s) => s.id === e.source)?.label ?? e.source;
-    return e.availability === "needs-login" ? { source: e.source, tone: "warning", title: `${label} needs a login`, body: `Log in, then try again: ${e.message}`, action: "Try again" } : { source: e.source, tone: "warning", title: `${label} unavailable`, body: e.message, action: "Try again" };
-  });
-  var sourceOfId = (id) => {
-    if (id.startsWith(".scratch/")) return "local";
-    if (/^\s*#?\d+\s*$/.test(id)) return "github";
-    return null;
-  };
-  var listedBoard = (r) => {
-    const errors2 = r.errors ?? [];
-    const failed = new Set(errors2.map((e) => e.source));
-    return {
-      tasks: r.tasks,
-      errors: errors2,
-      unlisted: (id) => {
-        const source2 = sourceOfId(id);
-        return source2 !== null && failed.has(source2);
-      }
-    };
   };
 
   // src/panel/api.ts
@@ -2957,10 +2937,10 @@ ${GUEST_UI_LOOK_CSS}`;
       /** The github.com remote of the project (origin first), or null. */
       detect: () => call("POST", "/config/detect").then((r) => r.remote),
       /**
-       * The tasks of every source that listed, the errors of those that failed and which ids belong to
-       * a failed one (sourceBanner.ts's listedBoard). When every source fails the call fails.
+       * The tasks of every source that listed and the errors of those that failed (sourceBanner.ts's
+       * listedBoard tells which ids belong to a failed one). When every source fails the call fails.
        */
-      list: () => call("POST", "/tasks/list").then(listedBoard),
+      list: () => call("POST", "/tasks/list"),
       get: (id) => call("POST", "/tasks/get", { id }).then((r) => r.task),
       create: (input) => call("POST", "/tasks/create", { input }).then((r) => r.task),
       setState: (id, state2) => call("POST", "/tasks/state", { id, state: state2 }).then((r) => r.task),
@@ -3006,6 +2986,29 @@ ${GUEST_UI_LOOK_CSS}`;
       removeFromQueue: (taskId) => call("POST", "/queue/remove", { taskId }).then((r) => r.queue),
       /** Atomically removes and returns the entries that may start now. */
       takeFromQueue: (maxParallel, starting, running) => call("POST", "/queue/take", { maxParallel, starting, running })
+    };
+  };
+
+  // src/panel/sourceBanner.ts
+  var sourceBanners = (errors2, sources, warnings = []) => [
+    ...errors2.map((e) => {
+      const label = sources.find((s) => s.id === e.source)?.label ?? e.source;
+      return e.availability === "needs-login" ? { source: e.source, tone: "warning", title: `${label} needs a login`, body: `Log in, then try again: ${e.message}`, action: "Try again" } : { source: e.source, tone: "warning", title: `${label} unavailable`, body: e.message, action: "Try again" };
+    }),
+    ...warnings.map((w) => ({ source: "", tone: "warning", title: "A source in issue-tracker.md was skipped", body: w, action: "Try again" }))
+  ];
+  var listedBoard = (r, seen = () => void 0) => {
+    const errors2 = r.errors ?? [];
+    const failed = new Set(errors2.map((e) => e.source));
+    const listed2 = new Set(r.tasks.map((t) => t.id));
+    return {
+      tasks: r.tasks,
+      errors: errors2,
+      unlisted: (id) => {
+        if (failed.size === 0 || listed2.has(id)) return false;
+        const source2 = seen(id);
+        return source2 === void 0 || failed.has(source2);
+      }
     };
   };
 
@@ -3308,7 +3311,6 @@ ${GUEST_UI_LOOK_CSS}`;
       ...blockers.length > 0 ? { blockedBy: [...blockers] } : {}
     };
   };
-  var messageOf = (e) => e instanceof Error ? e.message : String(e);
   var createWithSubtasks = async (create, input, subtasks, link2) => {
     const task = await create(input);
     const failed = [];
@@ -3316,14 +3318,14 @@ ${GUEST_UI_LOOK_CSS}`;
       try {
         await create({ title, state: "needs-triage", parentId: task.id });
       } catch (e) {
-        failed.push({ title, message: messageOf(e), kind: "create" });
+        failed.push({ title, message: errorMessage(e), kind: "create" });
       }
     }
     for (const c of link2?.existing ?? []) {
       try {
         await link2.setParent(c.id, task.id);
       } catch (e) {
-        failed.push({ title: c.label, message: messageOf(e), kind: "link" });
+        failed.push({ title: c.label, message: errorMessage(e), kind: "link" });
       }
     }
     return { task, failed };
@@ -4839,6 +4841,9 @@ ${ref}`,
     return [...base2, ...[...used].sort()];
   };
 
+  // src/panel/sources.ts
+  var sourceOr = (source2, fallback) => isSourceId(source2) ? source2 : fallback;
+
   // src/panel/ui/closeButton.ts
   var mountCloseButton = (slot, onClick) => {
     const handle = mountButton(slot, { label: "\xD7", variant: "ghost", size: "sm", onClick });
@@ -5160,16 +5165,12 @@ ${ref}`,
   };
 
   // src/panel/sourceSettings.ts
-  var KNOWN = [
-    { id: "local", label: "Local" },
-    { id: "github", label: "GitHub" }
-  ];
   var sourcesView = (config2) => ({
     rows: config2.sources.map((s) => {
       const primary2 = s.id === config2.primary;
       return { id: s.id, label: s.label, primary: primary2, canRemove: !primary2, canMakePrimary: !primary2 };
     }),
-    addable: KNOWN.filter((k) => !config2.sources.some((s) => s.id === k.id))
+    addable: config2.known.filter((k) => !config2.sources.some((s) => s.id === k.id)).map((k) => ({ id: k.id, label: k.label }))
   });
   var changeSource = async (service, change, ask) => {
     const first = await service.changeSources(change, false);
@@ -6202,15 +6203,34 @@ ${ref}`,
     if (text3 !== void 0) node.textContent = text3;
     return node;
   };
+  var COPY = {
+    local: {
+      noParent: "None (new feature)",
+      noBlockersTopLevel: "A new feature has no blockers; pick a parent to choose tickets of that feature.",
+      noBlockers: "That feature has no open tickets.",
+      newSubtasks: "Created as tickets of the new feature, in this order.",
+      noExisting: "No open tickets or features without tickets to move.",
+      existingSubtasks: "Moved into the new feature as its tickets once it is created."
+    },
+    github: {
+      noParent: "None",
+      noBlockersTopLevel: "No open issues.",
+      noBlockers: "No open issues.",
+      newSubtasks: "Created as sub-issues of the new issue, in this order.",
+      noExisting: "No open issues.",
+      existingSubtasks: "Linked as sub-issues of the new issue once it is created."
+    }
+  };
   var openAddModal = (model, callbacks) => {
     const d = emptyDraft(model.suggest);
     if (!model.suggest) d.type = model.types.includes("enhancement") ? "enhancement" : NONE2;
     d.source = model.source.source;
     const ALL_CAPS = { create: true, subtasks: true, blockedBy: true, claim: true, delete: true };
     const caps = () => model.sources.find((s) => s.id === d.source)?.capabilities ?? ALL_CAPS;
-    const kind = () => kindOfSource(d.source, model.tracker);
+    const kind = () => sourceOr(d.source, model.primary);
     const tasks = () => sourceTasks(model.tasks, d.source);
-    const parentOptions = () => [{ id: NONE2, label: kind() === "local" ? "None (new feature)" : "None" }, ...parentChoices(tasks())];
+    const copy = () => COPY[kind()];
+    const parentOptions = () => [{ id: NONE2, label: copy().noParent }, ...parentChoices(tasks())];
     const types = model.types.filter((t) => t !== MODEL_PICK);
     const pick = model.suggest ? [{ id: MODEL_PICK, label: "Let the model pick", hint: "Small Model, after the task is created" }] : [];
     const initial = { ...d };
@@ -6362,7 +6382,7 @@ ${ref}`,
       if (blockersBox.hidden) return;
       blockersBox.append(el3("h3", "kb-settings-heading", "Blocked by"));
       if (offered.length === 0) {
-        const why = kind() === "local" ? d.parentId === NONE2 ? "A new feature has no blockers; pick a parent to choose tickets of that feature." : "That feature has no open tickets." : "No open issues.";
+        const why = d.parentId === NONE2 ? copy().noBlockersTopLevel : copy().noBlockers;
         blockersBox.append(el3("p", "kb-muted", why));
         return;
       }
@@ -6394,7 +6414,7 @@ ${ref}`,
         el3(
           "p",
           "kb-muted",
-          kind() === "local" ? "Created as tickets of the new feature, in this order." : "Created as sub-issues of the new issue, in this order."
+          copy().newSubtasks
         )
       );
       d.subtasks.forEach((value, i) => {
@@ -6464,14 +6484,14 @@ ${ref}`,
       if (existingBox.hidden) return;
       existingBox.append(el3("h3", "kb-settings-heading", "Existing sub-tasks"));
       if (offered.length === 0) {
-        existingBox.append(el3("p", "kb-muted", kind() === "local" ? "No open tickets or features without tickets to move." : "No open issues."));
+        existingBox.append(el3("p", "kb-muted", copy().noExisting));
         return;
       }
       existingBox.append(
         el3(
           "p",
           "kb-muted",
-          kind() === "local" ? "Moved into the new feature as its tickets once it is created." : "Linked as sub-issues of the new issue once it is created."
+          copy().existingSubtasks
         )
       );
       existingDisposers = mountCheckList(existingBox, {
@@ -13637,7 +13657,6 @@ ${ref}`,
   };
 
   // src/panel/edit.ts
-  var errorText2 = (e) => e instanceof Error ? e.message : String(e);
   var createEditor = (deps) => {
     const moving = /* @__PURE__ */ new Set();
     let detail = null;
@@ -13646,7 +13665,7 @@ ${ref}`,
     let card = null;
     let lookup = null;
     const find = (id) => deps.tasks().find((t) => t.id === id) ?? null;
-    const kindOf = (task) => sourceKind(task, deps.tracker());
+    const kindOf = (task) => task.source;
     const info2 = (message2) => void deps.host.toast({ kind: "info", message: message2 }).catch(() => {
     });
     const fail2 = (message2) => void deps.host.toast({ kind: "error", message: message2 }).catch(() => {
@@ -13741,7 +13760,7 @@ ${ref}`,
         mine.options = options;
         mine.version++;
         refreshDetail();
-      }).catch((e) => fail2(`Could not read the card's start options: ${errorText2(e)}`));
+      }).catch((e) => fail2(`Could not read the card's start options: ${errorMessage(e)}`));
     };
     let followed = null;
     const refreshDetail = () => {
@@ -13770,11 +13789,11 @@ ${ref}`,
     const run = async (id, action) => {
       const api = deps.api();
       if (api === null || moving.has(id)) return;
-      await busyWhile(id, () => action(api).then(() => void 0, (e) => fail2(errorText2(e))));
+      await busyWhile(id, () => action(api).then(() => void 0, (e) => fail2(errorMessage(e))));
     };
     const attempt = (action) => action().then(
       () => null,
-      (e) => errorText2(e)
+      (e) => errorMessage(e)
     );
     const following = (op) => followingMove(
       op,
@@ -13784,7 +13803,7 @@ ${ref}`,
         const ctx = deps.start.context();
         if (ctx !== null) await deps.start.move(ctx.projectId, from, to);
       },
-      (from, to, e) => fail2(`${from} is now ${to}, but its start options could not follow: ${errorText2(e)}`)
+      (from, to, e) => fail2(`${from} is now ${to}, but its start options could not follow: ${errorMessage(e)}`)
     );
     const setParentOf = (api) => following(api.setParent);
     const linkTask = (childId, parentId) => relink(childId, async (api) => {
@@ -13898,7 +13917,7 @@ ${ref}`,
       deps.order.forget(deleted);
       const ctx = deps.start.context();
       if (ctx !== null) {
-        for (const d of deleted) await deps.start.forget(ctx.projectId, d).catch((e) => fail2(`Could not drop the start options of ${d}: ${errorText2(e)}`));
+        for (const d of deleted) await deps.start.forget(ctx.projectId, d).catch((e) => fail2(`Could not drop the start options of ${d}: ${errorMessage(e)}`));
       }
     };
     const publishTask = async (id) => {
@@ -13932,7 +13951,7 @@ ${ref}`,
             const created = await api.create(input);
             info2(`Created ${created.id}`);
           } catch (e) {
-            return errorText2(e);
+            return errorMessage(e);
           }
           await deps.reload();
           refreshDetail();
@@ -13981,7 +14000,7 @@ ${ref}`,
           refreshDetail();
         },
         onType: (type) => void run(id, (api) => api.setType(id, type)),
-        onOpenUrl: (url) => void deps.host.openUrl(url).catch((e) => fail2(errorText2(e))),
+        onOpenUrl: (url) => void deps.host.openUrl(url).catch((e) => fail2(errorMessage(e))),
         onDismiss: () => {
           closeDetail();
           deps.onOpenTaskClosed?.(id, "dismissed");
@@ -13999,17 +14018,16 @@ ${ref}`,
       const api = deps.api();
       if (api === null) return { kind: "error", message: "No project is open." };
       const ctx = deps.start.context();
-      const source2 = draft.source === "" ? deps.tracker() : draft.source;
-      const tracker = kindOfSource(source2, deps.tracker());
-      const subtasks = subtasksToCreate(draft, tracker);
-      const existing = existingToLink(draft, tracker, sourceTasks(deps.tasks(), source2)).map((id) => ({ id, label: find(id)?.title ?? id }));
+      const source2 = sourceOr(draft.source, deps.primary());
+      const subtasks = subtasksToCreate(draft, source2);
+      const existing = existingToLink(draft, source2, sourceTasks(deps.tasks(), source2)).map((id) => ({ id, label: find(id)?.title ?? id }));
       const saveStart = (taskId) => {
         if (ctx === null || Object.keys(draft.start).length === 0) return;
         try {
           deps.start.save(ctx.projectId, taskId, draft.start);
           if (draft.start.summaryLanguage !== void 0) deps.summary.onLanguage(ctx.projectId, taskId, draft.start.summaryLanguage);
         } catch (e) {
-          fail2(`Could not save the start options of ${taskId}: ${errorText2(e)}`);
+          fail2(`Could not save the start options of ${taskId}: ${errorMessage(e)}`);
         }
       };
       let first = true;
@@ -14022,17 +14040,17 @@ ${ref}`,
               first = false;
               saveStart(task2.id);
               if (ctx !== null && draft.type === "") {
-                void deps.start.markNoType(ctx.projectId, task2.id).catch((e) => fail2(`Could not keep "No type" for ${task2.id}: ${errorText2(e)}`));
+                void deps.start.markNoType(ctx.projectId, task2.id).catch((e) => fail2(`Could not keep "No type" for ${task2.id}: ${errorMessage(e)}`));
               }
             }
             return task2;
           },
-          toNewTask(draft, tracker),
+          toNewTask(draft, source2),
           subtasks,
           { existing, setParent: setParentOf(api) }
         );
       } catch (e) {
-        return { kind: "error", message: errorText2(e) };
+        return { kind: "error", message: errorMessage(e) };
       }
       const { task, failed } = result;
       const asked = addOffer.suggest ? askedOf(draft, addOffer.types) : { type: false, state: false };
@@ -14072,10 +14090,10 @@ ${ref}`,
       const { view, sources } = deps.sources();
       addModal = openAddModal(
         {
-          tracker: deps.tracker(),
+          primary: deps.primary(),
           types,
           suggest: addOffer.suggest,
-          source: addSource(view, sources, deps.tracker()),
+          source: addSource(view, sources, deps.primary()),
           sources,
           tasks,
           labels: deps.labels(),
@@ -14169,7 +14187,7 @@ ${ref}`,
       const notice = initError === null ? loadNotice(read.error) : { ...loadNotice(initError), title: "Could not set up the board" };
       return { kind: "notice", notice };
     }
-    const tracker = read.config.tracker;
+    const tracker = read.config.primary;
     if (tracker !== choice2) {
       return {
         kind: "notice",
@@ -14244,19 +14262,19 @@ ${ref}`,
     return { launch, settle, reset, starting };
   };
 
-  // src/core/types.ts
-  var TASK_STATES = ["needs-triage", "needs-info", "ready-for-agent", "ready-for-human", "wontfix", "done"];
-
   // src/panel/prompt.ts
   var PROMPT_MAX2 = GUEST_ATTACH_TEXT_MAX;
   var STATES2 = TASK_STATES.join(", ");
   var shellWord = (s) => /^[A-Za-z0-9_./:@%+=,-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`;
-  var isGithub = (task) => task.url !== null || /^#\d+$/.test(task.id);
+  var SOURCE_LINE = {
+    github: "This task is a GitHub issue of this repository.",
+    local: "This task is a local issue file under .scratch/ in this repository."
+  };
   var rootOf = (projectDir) => projectDir.replace(/\/+$/, "") || "/";
   var under = (projectDir, rel) => `${rootOf(projectDir).replace(/\/$/, "")}/${rel}`;
   var noteHow = (task, projectDir) => {
     const n = /^#(\d+)$/.exec(task.id)?.[1] ?? /\/issues\/(\d+)/.exec(task.url ?? "")?.[1];
-    if (isGithub(task) && n !== void 0) return `post it with \`gh issue comment ${n} --body-file -\``;
+    if (task.source === "github" && n !== void 0) return `post it with \`gh issue comment ${n} --body-file -\``;
     return `append it to the issue file \`${shellWord(under(projectDir, task.id))}\``;
   };
   var fillPreset = (text3, task, cli, projectDir) => text3.replace(/\{(cli|root|tracker|id|note)\}/g, (_, key) => {
@@ -14278,7 +14296,7 @@ ${ref}`,
     const head = [`# Task: ${task.title}`, `Id: ${task.id}`, ...task.url !== null ? [`URL: ${task.url}`] : []].join("\n");
     const tracker = [
       "## Tracker",
-      isGithub(task) ? "This task is a GitHub issue of this repository." : "This task is a local issue file under .scratch/ in this repository.",
+      SOURCE_LINE[task.source] ?? `This task is in the ${task.source} source of this project.`,
       `Move it with the task-board CLI: ${cli} state ${id} <state>`,
       ...otherSourceLines(task, cli, primary2),
       "Always pass --dir exactly as shown (the project root), even in a worktree: without it the CLI misses the tracker or writes to a copy the board never reads.",
@@ -14404,7 +14422,6 @@ ${note}` : note;
   var PENDING_RELOADS_MS = [1e4, 3e4];
   var NO_ANSWER = /* @__PURE__ */ new Set(["HOST_TIMEOUT", "REQUEST_FAILED"]);
   var LIVE = /* @__PURE__ */ new Set(["running", "retrying", "waiting-permission", "waiting-question"]);
-  var errorText3 = (e) => e instanceof Error ? e.message : String(e);
   var createStarter = (deps) => {
     const { host: host2 } = deps;
     const fail2 = (message2) => void host2.toast({ kind: "error", message: message2 }).catch(() => {
@@ -14516,7 +14533,7 @@ ${note}` : note;
       hasLiveSession,
       start: startTask,
       prompt: buildFor,
-      onError: (task, e) => fail2(`Could not start \u201C${task.title}\u201D: ${errorText3(e)}`)
+      onError: (task, e) => fail2(`Could not start \u201C${task.title}\u201D: ${errorMessage(e)}`)
     });
     const report = (task, result) => {
       if (result === "already") info2(`\u201C${task.title}\u201D already has an agent working on it`);
@@ -14593,7 +14610,7 @@ ${note}` : note;
       try {
         prompt = await buildFor(task, opts);
       } catch (e) {
-        fail2(`Could not queue \u201C${task.title}\u201D: ${errorText3(e)}`);
+        fail2(`Could not queue \u201C${task.title}\u201D: ${errorMessage(e)}`);
         return;
       }
       const entry = {
@@ -14612,7 +14629,7 @@ ${note}` : note;
         queue = fresh;
         shown = p.id;
       } catch (e) {
-        fail2(`Could not queue \u201C${task.title}\u201D: ${errorText3(e)}`);
+        fail2(`Could not queue \u201C${task.title}\u201D: ${errorMessage(e)}`);
         return;
       }
       deps.draw();
@@ -14643,7 +14660,7 @@ ${note}` : note;
       try {
         card = await deps.loadCard(ctx.projectId, task.id);
       } catch (e) {
-        fail2(`Could not read the card's start options: ${errorText3(e)}`);
+        fail2(`Could not read the card's start options: ${errorMessage(e)}`);
         return;
       }
       const subtasks = (deps.tasks() ?? []).some((t) => t.parentId === task.id);
@@ -14678,7 +14695,7 @@ ${note}` : note;
         deps.draw();
         return true;
       } catch (e) {
-        fail2(`Could not take the card out of the queue: ${errorText3(e)}`);
+        fail2(`Could not take the card out of the queue: ${errorMessage(e)}`);
         return false;
       }
     };
@@ -14763,22 +14780,22 @@ ${note}` : note;
     },
     source: { holds: (t, _c, w) => valueMatches(t.source, w), offers: ({ sources }) => [...sources] }
   };
-  var matchesParsed = (task, q, tracker, column) => {
+  var matchesParsed = (task, q, column) => {
     for (const [key, wanted] of q.filters) if (!wanted.some((w) => FILTERS[key].holds(task, column, w))) return false;
     if (q.words.length === 0) return true;
-    const { title, body } = editableText(sourceKind(task, tracker), task);
+    const { title, body } = editableText(task.source, task);
     const text3 = foldText(`${title}
 ${body}`);
     return q.words.every((w) => text3.includes(w));
   };
-  var filterBoard = (board2, tasks, query, tracker) => {
+  var filterBoard = (board2, tasks, query) => {
     const q = parseQuery(query);
     if (isBlank(q)) return board2;
     const drawnIn = /* @__PURE__ */ new Map();
     for (const { id } of COLUMNS) for (const card of board2[id]) drawnIn.set(card.task.id, id);
     const keep = /* @__PURE__ */ new Set();
     for (const t of tasks) {
-      if (!matchesParsed(t, q, tracker, drawnIn.get(t.id) ?? null)) continue;
+      if (!matchesParsed(t, q, drawnIn.get(t.id) ?? null)) continue;
       keep.add(t.id);
       if (t.parentId !== null) keep.add(t.parentId);
     }
@@ -15837,6 +15854,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     tasks: null,
     sourceErrors: [],
     unlisted: () => false,
+    seenSources: /* @__PURE__ */ new Map(),
     hideSubtasks: false,
     lastLoad: 0,
     view: "none",
@@ -15891,7 +15909,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
   var pendingMarks = createPendingMarks();
   var saver = createLatestSaver(
     (_key, run) => run(),
-    (e) => fail(`Could not save settings: ${e instanceof Error ? e.message : String(e)}`)
+    (e) => fail(`Could not save settings: ${errorMessage(e)}`)
   );
   var settingsSheet = null;
   var globalLoaded = false;
@@ -15905,7 +15923,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
       applySettings();
       summariseShown();
     } catch (e) {
-      fail(`Could not read the settings: ${e instanceof Error ? e.message : String(e)}`);
+      fail(`Could not read the settings: ${errorMessage(e)}`);
     }
   };
   var badge = null;
@@ -15977,7 +15995,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
       state.projectSettings = {};
       state.skills = found;
       state.settingsFor = id;
-      fail(`Could not read the project settings: ${e instanceof Error ? e.message : String(e)}`);
+      fail(`Could not read the project settings: ${errorMessage(e)}`);
     }
     applySettings();
     summariseShown();
@@ -16040,7 +16058,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
             if (next !== null && project()?.id === p.id) void load();
             return next;
           } catch (e) {
-            fail(`Could not change the sources: ${e instanceof Error ? e.message : String(e)}`);
+            fail(`Could not change the sources: ${errorMessage(e)}`);
             return null;
           }
         },
@@ -16068,7 +16086,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     }
     const { sources } = state.config;
     board.setSources(sourceSwitcher(sources), view);
-    board.setSourceBanners(sourceBanners(state.sourceErrors, sources), () => void load());
+    board.setSourceBanners(sourceBanners(state.sourceErrors, sources, state.config.warnings ?? []), () => void load());
     const marks = archivedTasks();
     const archivedCount = archivedShown(tasks, marks);
     if (archivedCount === 0) state.showArchived = false;
@@ -16085,8 +16103,8 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     );
     for (const [column, cards] of Object.entries(model)) for (const c of cards) state.columns.set(c.task.id, column);
     setBadge(model.review.length || null);
-    const tracker = state.config.tracker;
-    const shown = filterBoard(model, tasks, state.query, tracker);
+    const primary2 = state.config.primary;
+    const shown = filterBoard(model, tasks, state.query);
     selection2.beforeRender();
     board.render(
       shown,
@@ -16098,7 +16116,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     selection2.rendered(layoutOf(shown));
     auditLinks();
     focusSession();
-    const emptyKind = view === "all" ? tracker : view;
+    const emptyKind = view === "all" ? primary2 : view;
     if (tasks.length > 0 && state.query.trim() !== "" && Object.values(shown).every((cards) => cards.length === 0)) {
       board.setStatus({ kind: "empty", title: "No tasks match", body: `No task on the board matches "${state.query.trim()}".` });
     } else if (tasks.length === 0) {
@@ -16113,7 +16131,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
   };
   var failureOf = (e) => ({
     code: e instanceof ApiError ? e.code : "FAILED",
-    message: e instanceof Error ? e.message : String(e)
+    message: errorMessage(e)
   });
   var showNotice = (notice) => {
     editor.reset();
@@ -16211,7 +16229,8 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
         state.sourceView = pickedSource;
         state.sourceViewFor = p.id;
       }
-      const { tasks, errors: errors2, unlisted } = listed2;
+      const { tasks, errors: errors2, unlisted } = listedBoard(listed2, (id) => state.seenSources.get(id));
+      for (const t of tasks) state.seenSources.set(t.id, t.source);
       state.unlisted = unlisted;
       if (marks !== null) {
         const merged = new Map(detached());
@@ -16282,6 +16301,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     state.tasks = null;
     state.sourceErrors = [];
     state.unlisted = () => false;
+    state.seenSources = /* @__PURE__ */ new Map();
     board.setProjects(projectOptions(), id);
     unsubscribeSessions?.();
     unsubscribeSessions = null;
@@ -16391,7 +16411,6 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
       summariseShown(false);
     }, SUMMARY_SETTLE_MS);
   };
-  var errorText4 = (e) => e instanceof Error ? e.message : String(e);
   var startContext = () => {
     const id = state.projectId;
     return id === null || !globalLoaded || state.settingsFor !== id ? null : { projectId: id, settings: settings(), presets: presets() };
@@ -16507,16 +16526,16 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     const id = state.projectId;
     const p = project();
     if (id === null || p === null || state.view !== "board" || state.config === null || state.tasks === null) return;
-    const tracker = state.config.tracker;
-    const plan = clearArchivePlan(tracker, viewTasks() ?? [], archivedTasks());
-    const ask = clearConfirm(tracker, plan);
+    const primary2 = state.config.primary;
+    const plan = clearArchivePlan(primary2, viewTasks() ?? [], archivedTasks());
+    const ask = clearConfirm(plan);
     if (ask === null) {
       info("The archived features still have sub-tasks on the board; nothing to delete.");
       return;
     }
     const answer = await askChoice(ask.title, ask.body, [{ id: "clear", label: "Delete all", variant: "destructive" }]);
     if (answer === null || state.projectId !== id || state.tasks === null) return;
-    const fresh = clearArchivePlan(tracker, viewTasks() ?? [], archivedTasks());
+    const fresh = clearArchivePlan(primary2, viewTasks() ?? [], archivedTasks());
     if (JSON.stringify(fresh) !== JSON.stringify(plan)) {
       info("The archive changed while you were asked; nothing was deleted. Try again.");
       return;
@@ -16527,9 +16546,9 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
       if (result.deleted.length > 0) {
         info(`Deleted ${result.deleted.length} archived task${result.deleted.length === 1 ? "" : "s"}`);
         if (state.projectId === id) forgetOrdered(result.deleted);
-        for (const d of result.deleted) await forgetStartOptions(id, d).catch((e) => fail(`Could not drop the start options of ${d}: ${errorText4(e)}`));
+        for (const d of result.deleted) await forgetStartOptions(id, d).catch((e) => fail(`Could not drop the start options of ${d}: ${errorMessage(e)}`));
       }
-      for (const f of result.failed) fail(`Could not delete ${f.id}: ${errorText4(f.error)}`);
+      for (const f of result.failed) fail(`Could not delete ${f.id}: ${errorMessage(f.error)}`);
     } finally {
       await load();
     }
@@ -16778,7 +16797,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
         return p === null || state.view !== "board" ? null : createApi(host, p.directory);
       },
       tasks: () => state.tasks ?? [],
-      tracker: () => state.config?.tracker ?? "local",
+      primary: () => state.config?.primary ?? "local",
       sources: () => ({ view: sourceView(), sources: state.config?.sources ?? [] }),
       labels: () => state.config?.labels ?? {},
       columnOf: (id) => state.columns.get(id) ?? null,
@@ -16791,7 +16810,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
       session: {
         target: (task) => sessionTarget(task.id, state.sessions, starter.links(), detached().get(task.id)),
         check: checkSession,
-        open: (id) => void host.openSession(id).catch((e) => fail(`Could not open the session: ${errorText4(e)}`))
+        open: (id) => void host.openSession(id).catch((e) => fail(`Could not open the session: ${errorMessage(e)}`))
       },
       sections: { get: () => sections, save: saveSections },
       // The Open task is the Selected card while it is drawn (a hidden sub-task is not), so a redraw
@@ -16853,7 +16872,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
         kind: "banner",
         tone: "error",
         title: "Projects are not available",
-        body: `${e instanceof Error ? e.message : String(e)}. Allow the \u201Csessions\u201D capability for Kanban Board in Settings \u2192 Extensions.`
+        body: `${errorMessage(e)}. Allow the \u201Csessions\u201D capability for Kanban Board in Settings \u2192 Extensions.`
       });
     });
     setInterval(() => {

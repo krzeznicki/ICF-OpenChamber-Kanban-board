@@ -17,18 +17,21 @@ var TEMPLATES = {
 };
 
 // src/core/types.ts
+var SOURCE_IDS = ["local", "github"];
+var isSourceId = (id) => SOURCE_IDS.includes(id);
+var unknownSource = (id, known = SOURCE_IDS) => new TrackerError("INVALID", `Unknown source "${id}": use ${known.join(" or ")}`);
+var errorMessage = (e) => e instanceof Error ? e.message : String(e);
 var TrackerError = class extends Error {
   // Declared explicitly: Node's type stripping does not support constructor parameter properties.
   code;
-  constructor(code, message2) {
-    super(message2);
+  constructor(code, message) {
+    super(message);
     this.name = "TrackerError";
     this.code = code;
   }
 };
 
 // src/core/config.ts
-var SOURCE_IDS = ["local", "github"];
 var DIR = "docs/agents";
 var ISSUE_TRACKER = `${DIR}/issue-tracker.md`;
 var TRIAGE_LABELS = `${DIR}/triage-labels.md`;
@@ -53,7 +56,11 @@ var firstHeading = (text) => {
 var ADDITIONAL = "Additional sources";
 var ADDITIONAL_HEADING = /^ {0,3}##\s+additional sources\s*#*\s*$/i;
 var SECTION_END = /^ {0,3}#{1,2}\s/;
-var SOURCE_ITEM = /^\s*[-*+]\s+`?([A-Za-z][\w.-]*)`?/;
+var SOURCE_ITEM = /^\s*[-*+]\s+(?:`([A-Za-z][\w.-]*)`(?=[\s:.,;]|$)|([A-Za-z][\w.-]*)\s*$)/;
+var sourceItem = (line2) => {
+  const m = SOURCE_ITEM.exec(line2);
+  return m === null ? null : (m[1] ?? m[2]).toLowerCase();
+};
 var additionalRange = (lines) => {
   const start = lines.findIndex((l) => ADDITIONAL_HEADING.test(l));
   if (start === -1) return null;
@@ -61,24 +68,20 @@ var additionalRange = (lines) => {
   while (end < lines.length && !SECTION_END.test(lines[end])) end++;
   return { start, end };
 };
+var unknownSourceWarning = (id) => `Unknown source "${id}" under ## ${ADDITIONAL} in ${ISSUE_TRACKER} is skipped: ICF-kanban supports ${SOURCE_IDS.join(" and ")}`;
 var additionalSources = (text) => {
   const lines = text.split(/\r?\n/);
   const range = additionalRange(lines);
-  if (range === null) return [];
-  const out = [];
+  const ids = [];
+  const warnings = [];
+  if (range === null) return { ids, warnings };
   for (const line2 of lines.slice(range.start + 1, range.end)) {
-    const m = SOURCE_ITEM.exec(line2);
-    if (m === null) continue;
-    const id = m[1].toLowerCase();
-    if (!SOURCE_IDS.includes(id)) {
-      throw new TrackerError(
-        "UNSUPPORTED",
-        `Unsupported source "${m[1]}" under ## ${ADDITIONAL} in ${ISSUE_TRACKER}: ICF-kanban supports ${SOURCE_IDS.join(" and ")}`
-      );
-    }
-    if (!out.includes(id)) out.push(id);
+    const id = sourceItem(line2);
+    if (id === null) continue;
+    if (!isSourceId(id)) warnings.push(unknownSourceWarning(id));
+    else if (!ids.includes(id)) ids.push(id);
   }
-  return out;
+  return { ids, warnings };
 };
 var SOURCE_TEXT = {
   local: "markdown files under `.scratch/` in this repository (private: they stay with the repository checkout; ids look like `.scratch/<feature>/spec.md`)",
@@ -95,19 +98,43 @@ var additionalSourcesSection = (ids) => [
   "Every other command (`show`, `state`, `claim`, `parent`, `close`) works on an id from any source. `list` and `next` read every source and name each task's source; `--source <id>` reads only that one.",
   ""
 ].join("\n");
-var withAdditionalSources = (text, ids) => {
+var GENERATED = new Set(
+  additionalSourcesSection(SOURCE_IDS).split("\n").filter((l) => l.trim() !== "" && sourceItem(l) === null)
+);
+var splitAdditional = (text) => {
   const lines = text.split("\n");
   const range = additionalRange(lines);
-  const before = range === null ? text : lines.slice(0, range.start).join("\n");
-  const after = range === null ? "" : lines.slice(range.end).join("\n").replace(/\s+$/, "");
-  let out = `${before.replace(/\s+$/, "")}
+  if (range === null) return { before: text, after: "", notes: "" };
+  const kept = lines.slice(range.start + 1, range.end).filter((l) => {
+    const id = sourceItem(l);
+    return !GENERATED.has(l) && (id === null || !isSourceId(id));
+  });
+  return {
+    before: lines.slice(0, range.start).join("\n"),
+    after: lines.slice(range.end).join("\n"),
+    notes: kept.join("\n").replace(/\n{3,}/g, "\n\n").trim()
+  };
+};
+var assemble = (head, after, ids, notes) => {
+  let out = `${head.replace(/\s+$/, "")}
 `;
-  if (after !== "") out += `
-${after}
+  const rest = after.replace(/\s+$/, "");
+  if (rest.trim() !== "") out += `
+${rest.replace(/^\n+/, "")}
 `;
   if (ids.length > 0) out += `
 ${additionalSourcesSection(ids)}`;
+  else if (notes !== "") out += `
+## ${ADDITIONAL}
+`;
+  if (notes !== "") out += `
+${notes}
+`;
   return out;
+};
+var withAdditionalSources = (text, ids) => {
+  const { before, after, notes } = splitAdditional(text);
+  return assemble(before, after, ids, notes);
 };
 var detect = (text) => {
   const heading = firstHeading(text);
@@ -143,8 +170,9 @@ var readConfig = async (root) => {
     throw new TrackerError("NOT_CONFIGURED", `No ${ISSUE_TRACKER}: choose a tracker (Local Markdown or GitHub) first`);
   }
   const primary = detect(tracker);
-  const sources = [primary, ...additionalSources(tracker).filter((id) => id !== primary)];
-  return { tracker: primary, primary, sources, labels: await readLabels(root) };
+  const additional = additionalSources(tracker);
+  const sources = [primary, ...additional.ids.filter((id) => id !== primary)];
+  return { primary, sources, labels: await readLabels(root), warnings: additional.warnings };
 };
 var writeNew = async (path, text) => {
   try {
@@ -166,7 +194,7 @@ var EditedTemplateError = class extends TrackerError {
   constructor(primary) {
     super(
       "INVALID",
-      `The ${primary} part of ${ISSUE_TRACKER} was edited by hand; changing the primary source replaces it with the new template and the edits are lost. Run it again with force (--force) to go ahead.`
+      `The ${primary} template in ${ISSUE_TRACKER} was edited by hand; changing the primary source replaces that template (its own sections) with the new one, and the edits in it are lost. The sections added after it are kept, and so is ## ${ADDITIONAL}. Run it again with force (--force) to go ahead.`
     );
     this.name = "EditedTemplateError";
     this.primary = primary;
@@ -185,17 +213,27 @@ var changedText = (text, config, change, force) => {
   const primary = change.primary;
   if (primary === config.primary) return text;
   const rest = [config.primary, ...others].filter((id) => id !== primary);
-  const base = withAdditionalSources(text, []);
+  const { before, after, notes } = splitAdditional(text);
+  const base = assemble(before, after, [], "");
   const old = TEMPLATES[config.primary];
   if (!base.startsWith(old) && !force) throw new EditedTemplateError(config.primary);
-  const kept = base.startsWith(old) ? base.slice(old.length) : "";
-  return withAdditionalSources(`${TEMPLATES[primary]}${kept}`, rest);
+  const kept = base.startsWith(old) ? base.slice(old.length) : `
+${base.slice(templateEnd(base, old))}`;
+  return assemble(`${TEMPLATES[primary]}${kept}`, "", rest, notes);
+};
+var sectionTitles = (text) => new Set(text.split("\n").flatMap((l) => SECTION_END.test(l) ? [HEADING.exec(l)?.[1] ?? l] : []));
+var templateEnd = (text, template) => {
+  const own = sectionTitles(template);
+  let at = 0;
+  for (const line2 of text.split("\n")) {
+    if (at > 0 && SECTION_END.test(line2) && !own.has(HEADING.exec(line2)?.[1] ?? line2)) return at;
+    at += line2.length + 1;
+  }
+  return text.length;
 };
 var changeSources = async (root, change, opts = {}) => {
   const id = sourceOf(change);
-  if (!SOURCE_IDS.includes(id)) {
-    throw new TrackerError("INVALID", `Unknown source "${String(id)}": use ${SOURCE_IDS.join(" or ")}`);
-  }
+  if (!isSourceId(id)) throw unknownSource(String(id));
   const config = await readConfig(root);
   const path = join(root, ISSUE_TRACKER);
   const text = await readFile(path, "utf8");
@@ -495,7 +533,13 @@ var createGithubTracker = (root, exec, labels) => {
       const m = /\/issues\/(\d+)\s*$/.exec(r.stdout.trim());
       if (m === null) throw new TrackerError("FAILED", `gh issue create printed no issue URL: ${r.stdout.trim()}`);
       const n = Number(m[1]);
-      if (input.state === "done") await run(["issue", "close", String(n)]);
+      if (input.state === "done") {
+        try {
+          await run(["issue", "close", String(n)]);
+        } catch (e) {
+          throw new TrackerError("FAILED", `${idOf(n)} was created (${r.stdout.trim()}), but it could not be closed: ${errorMessage(e)}`);
+        }
+      }
       return get(idOf(n));
     },
     setState,
@@ -1268,15 +1312,18 @@ var SOURCES = {
 };
 var sourceInfo = (id) => ({ id, ...SOURCES[id] });
 var availabilityOf = (e) => {
-  const message2 = e instanceof Error ? e.message : String(e);
-  return { status: e instanceof TrackerError && e.code === "GH_AUTH" ? "needs-login" : "unavailable", message: message2 };
+  return { status: e instanceof TrackerError && e.code === "GH_AUTH" ? "needs-login" : "unavailable", message: errorMessage(e) };
 };
-var sourceError = (source, e) => ({
-  source,
-  code: e instanceof TrackerError ? e.code : "FAILED",
-  message: e instanceof Error ? e.message : String(e),
-  availability: availabilityOf(e).status
-});
+var sourceError = async (source, e) => {
+  const fromError = availabilityOf(e).status;
+  const asked = fromError === "needs-login" ? null : await source.availability().catch(() => null);
+  return {
+    source: source.id,
+    code: e instanceof TrackerError ? e.code : "FAILED",
+    message: errorMessage(e),
+    availability: asked?.status === "needs-login" ? "needs-login" : fromError
+  };
+};
 var createLocalSource = (root) => ({
   ...createLocalTracker(root),
   ...sourceInfo("local"),
@@ -1308,10 +1355,11 @@ var createCombinedTracker = (primary, sources) => {
     throw new TrackerError("NOT_FOUND", `No source of this project has a task "${id}" (sources: ${known()})`);
   };
   const primarySource = sources.find((s) => s.id === primary) ?? sources[0];
-  const known = () => sources.map((s) => s.id).join(", ");
+  const ids = () => sources.map((s) => s.id);
+  const known = () => ids().join(", ");
   const named2 = (id) => {
     const source = sources.find((s) => s.id === id);
-    if (source === void 0) throw new TrackerError("INVALID", `Unknown source "${id}": this project has ${known()}`);
+    if (source === void 0) throw unknownSource(id, ids());
     return source;
   };
   const NO_LINKS = "tasks of different sources are never linked";
@@ -1349,17 +1397,17 @@ var createCombinedTracker = (primary, sources) => {
   const listAll = async (opts = {}) => {
     const asked = opts.source === void 0 ? sources : sources.filter((s) => s.id === opts.source);
     if (asked.length === 0) {
-      throw new TrackerError("INVALID", `Unknown source "${opts.source}": this project has ${known()}`);
+      throw unknownSource(String(opts.source), ids());
     }
     const results = await Promise.allSettled(asked.map((s) => s.list()));
     const failed = results.flatMap((r) => r.status === "rejected" ? [r.reason] : []);
     if (failed.length === asked.length) throw failed[0];
     const tasks = [];
     const errors = [];
-    results.forEach((r, i) => {
+    for (const [i, r] of results.entries()) {
       if (r.status === "fulfilled") tasks.push(...r.value);
-      else errors.push(sourceError(asked[i].id, r.reason));
-    });
+      else errors.push(await sourceError(asked[i], r.reason));
+    }
     return { tasks, errors };
   };
   return {
@@ -1391,11 +1439,11 @@ var openTracker = async (root, exec) => {
 };
 
 // src/core/publish.ts
+import { existsSync } from "node:fs";
 import { readFile as readFile3, writeFile as writeFile3 } from "node:fs/promises";
 import { join as join3 } from "node:path";
 var publishedComment = (url) => `Published to GitHub: ${url}`;
 var named = (t) => `${t.id} (${t.title})`;
-var message = (e) => e instanceof Error ? e.message : String(e);
 var blockersFirst = (tickets) => {
   const ids = new Set(tickets.map((t) => t.id));
   const done = /* @__PURE__ */ new Set();
@@ -1422,6 +1470,7 @@ var publishTask = async (root, tracker, id) => {
   ) : [];
   const created = [];
   const issueOf = /* @__PURE__ */ new Map();
+  const localOf = /* @__PURE__ */ new Map();
   const publishOne = async (t, parentId) => {
     const blockedBy = t.blockedBy.flatMap((b) => {
       const to = issueOf.get(b);
@@ -1430,7 +1479,7 @@ var publishTask = async (root, tracker, id) => {
     const made = await tracker.create({
       title: t.title,
       body: issueDescription(t.body),
-      state: t.state,
+      ...t.state !== "done" ? { state: t.state } : {},
       ...t.type !== null ? { type: t.type } : {},
       ...parentId !== void 0 ? { parentId } : {},
       ...blockedBy.length > 0 ? { blockedBy } : {},
@@ -1438,7 +1487,8 @@ var publishTask = async (root, tracker, id) => {
     });
     created.push(made);
     issueOf.set(t.id, made);
-    return made;
+    localOf.set(t.id, t);
+    return t.state === "done" ? tracker.setState(made.id, "done") : made;
   };
   let issue;
   const subIssues = [];
@@ -1453,22 +1503,44 @@ var publishTask = async (root, tracker, id) => {
     if (created.length === 0) throw e;
     throw new TrackerError(
       "FAILED",
-      `Publishing stopped at ${named(at)}: ${message(e)}. Created on GitHub: ${created.map(named).join(", ")}. The local task was left open; delete those issues or finish the rest by hand before publishing again`
+      `Publishing stopped at ${named(at)}: ${errorMessage(e)}. Created on GitHub: ${created.map(named).join(", ")}. The local task was left open; delete those issues or finish the rest by hand before publishing again`
     );
   }
-  try {
-    const closed = await tracker.close(task.id, { withChildren: task.kind === "parent" });
-    for (const [from, to] of issueOf) {
-      const path = join3(root, ...from.split("/"));
-      await writeFile3(path, withComment(await readFile3(path, "utf8"), publishedComment(to.url ?? to.id)));
+  const closed = [];
+  const published = `Published to GitHub as ${created.map(named).join(", ")}`;
+  for (const [from, to] of issueOf) {
+    const path = join3(root, ...from.split("/"));
+    const comment = async () => {
+      try {
+        await writeFile3(path, withComment(await readFile3(path, "utf8"), publishedComment(to.url ?? to.id)));
+      } catch (e) {
+        throw new TrackerError("FAILED", `${published}, but the link comment could not be written to ${from}: ${errorMessage(e)}. ${progress(closed, issueOf, from)}`);
+      }
+    };
+    const close = async () => {
+      const local = localOf.get(from);
+      if (local.state === "done") return;
+      try {
+        closed.push(await tracker.setState(from, "done"));
+      } catch (e) {
+        throw new TrackerError("FAILED", `${published}, but ${from} could not be closed: ${errorMessage(e)}. ${progress(closed, issueOf, from)}`);
+      }
+    };
+    if (existsSync(path)) {
+      await comment();
+      await close();
+    } else {
+      await close();
+      await comment();
     }
-    return { from: task.id, issue, subIssues, closed };
-  } catch (e) {
-    throw new TrackerError(
-      "FAILED",
-      `Published to GitHub as ${created.map(named).join(", ")}, but the local task could not be closed: ${message(e)}`
-    );
   }
+  return { from: task.id, issue, subIssues, closed };
+};
+var progress = (closed, issueOf, at) => {
+  const ids = [...issueOf.keys()];
+  const left = ids.slice(ids.indexOf(at));
+  const done = closed.length === 0 ? "No local file was closed" : `Closed with their link: ${closed.map((t) => t.id).join(", ")}`;
+  return `${done}; still open: ${left.join(", ")}. Close them by hand with a comment linking their issue`;
 };
 
 // src/cli/main.ts
@@ -1493,6 +1565,10 @@ Commands:
                                         which changes in a local tracker: the file moves)
   next [--source <id>]                  first ready-for-agent ticket with no open blocker
   close <id> [--with-children]          close a task (and a feature's tickets)
+  delete <id> [--with-children]         delete a task for good (prints the deleted ids); a local
+                                        feature with tickets needs --with-children (its whole
+                                        folder goes); GitHub: repository admins only, without
+                                        --with-children sub-issues stay as top-level issues
   publish <id> [--to github]            publish a local task to GitHub: an issue (a feature's
                                         tickets become sub-issues), then the local files are closed
                                         with a link; if GitHub fails half way nothing local closes
@@ -1547,14 +1623,15 @@ var COMMANDS = {
   parent: { positionals: 2, options: [] },
   next: { positionals: 0, options: ["source"] },
   close: { positionals: 1, options: ["with-children"] },
+  delete: { positionals: 1, options: ["with-children"] },
   publish: { positionals: 1, options: ["to"] },
   init: { positionals: 1, options: ["add", "remove", "primary", "force"] }
 };
 var GLOBAL = ["dir", "json", "help"];
 var UsageError = class extends Error {
 };
-var usage = (message2) => {
-  throw new UsageError(message2);
+var usage = (message) => {
+  throw new UsageError(message);
 };
 var toState2 = (value, what) => STATES.includes(value) ? value : usage(`Unknown ${what} "${value}"`);
 var byId = (a, b) => a.id.localeCompare(b.id, "en", { numeric: true });
@@ -1566,7 +1643,7 @@ var readyTickets = (tasks) => {
 var line = (t, withSource = false) => `${t.id}  ${withSource ? `${t.source}  ` : ""}[${t.state}${t.claimed ? ", claimed" : ""}]  ${t.title}
 `;
 var sourcesLine = (config) => config.sources.map((id) => id === config.primary ? `${id} (primary)` : id).join(", ");
-var sourcesAnswer = (config) => ({ tracker: config.tracker, primary: config.primary, sources: config.sources });
+var sourcesAnswer = (config) => ({ primary: config.primary, sources: config.sources });
 var readStdin = async (stdin) => {
   if (stdin === void 0) return "";
   if (typeof stdin === "function") return stdin();
@@ -1596,7 +1673,7 @@ var parse = (argv) => {
     if (changes.length > 1) usage("init takes one of --add, --remove and --primary");
     if (values.force && values.primary === void 0) usage("--force applies to init --primary");
     for (const k of changes) {
-      if (!SOURCE_IDS.includes(values[k])) usage(`Unknown source "${values[k]}": use ${SOURCE_IDS.join(" or ")}`);
+      if (!isSourceId(values[k])) usage(unknownSource(values[k]).message);
     }
     if (changes.length === 1 && args.length !== 0) usage("init takes a tracker or a source option, not both");
     if (changes.length === 1) return { command, args, values };
@@ -1677,6 +1754,7 @@ ${task.body.replace(/\s*$/, "\n")}`);
           ...values.parent === void 0 ? {} : { parentId: values.parent },
           ...blockedBy.length === 0 ? {} : { blockedBy },
           ...state === void 0 ? {} : { state },
+          // An id the project does not have is INVALID in the combined tracker, with the project's sources named.
           ...values.source === void 0 ? {} : { source: values.source }
         });
         print(task, line(task, tracker.sources.length > 1));
@@ -1724,6 +1802,12 @@ ${task.body.replace(/\s*$/, "\n")}`);
         print(closed, closed.map((t) => line(t)).join(""));
         return 0;
       }
+      case "delete": {
+        const deleted = await (await openTracker(root, exec)).remove(args[0], { withChildren: values["with-children"] === true });
+        print(deleted, deleted.map((id) => `${id}
+`).join(""));
+        return 0;
+      }
       case "publish": {
         if (values.to !== void 0 && values.to !== "github") usage(`Cannot publish to "${values.to}": use --to github`);
         const result = await publishTask(root, await openTracker(root, exec), args[0]);
@@ -1744,13 +1828,13 @@ ${task.body.replace(/\s*$/, "\n")}`);
         if (kind !== "local" && kind !== "github") return usage(`Unknown tracker "${kind}": use local or github`);
         await writeConfig(root, kind);
         const config = await readConfig(root);
-        if (config.tracker !== kind) {
+        if (config.primary !== kind) {
           throw new TrackerError(
             "INVALID",
-            `docs/agents/issue-tracker.md already configures the ${config.tracker} tracker; it was left unchanged`
+            `docs/agents/issue-tracker.md already configures the ${config.primary} tracker; it was left unchanged`
           );
         }
-        print({ tracker: config.tracker }, `Tracker: ${config.tracker} (docs/agents/issue-tracker.md)
+        print({ tracker: config.primary }, `Tracker: ${config.primary} (docs/agents/issue-tracker.md)
 `);
         return 0;
       }
