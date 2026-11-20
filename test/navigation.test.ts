@@ -67,6 +67,7 @@ test('hidden sub-tasks and the search filter: only drawn cards are stepped throu
     url: null,
     updatedAt: 0,
     claimed: false,
+    source: id.startsWith('#') ? 'github' : 'local',
   });
   const tasks = [t('p', 'needs-triage'), t('k', 'needs-triage', 'p'), t('n', 'needs-triage'), t('apple', 'ready-for-agent')];
   const shown = layoutOf(groupTasks(tasks, [], new Set(), false));
@@ -95,6 +96,7 @@ test('firstSelected (↓ from the search field): the first card in Navigation or
     url: null,
     updatedAt: 0,
     claimed: false,
+    source: id.startsWith('#') ? 'github' : 'local',
   });
   const tasks = [t('b1', 'Banana', 'needs-triage'), t('r1', 'Red apple', 'ready-for-agent'), t('r2', 'Green apple', 'ready-for-agent')];
   const searched = layoutOf(filterBoard(groupTasks(tasks, [], new Set(), false), tasks, 'apple', 'local'));

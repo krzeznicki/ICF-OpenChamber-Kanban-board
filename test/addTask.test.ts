@@ -37,6 +37,7 @@ const task = (over: Partial<Task> = {}): Task => ({
   url: null,
   updatedAt: 0,
   claimed: false,
+  source: over.id?.startsWith('#') ? 'github' : 'local',
   ...over,
 });
 

@@ -233,6 +233,7 @@ export const createGithubTracker = (root: string, exec: Exec, labels: ProjectCon
     url: issue.url,
     updatedAt: Date.parse(issue.updatedAt) || 0,
     claimed: issue.assignees.length > 0,
+    source: 'github',
   });
 
   const load = async (n: number): Promise<{ task: Task; issue: Issue; rel: Relations }> => {

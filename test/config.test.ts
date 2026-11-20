@@ -5,7 +5,7 @@ import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readConfig, writeConfig } from '../src/core/config.ts';
+import { readConfig, withAdditionalSources, writeConfig } from '../src/core/config.ts';
 import { openTracker } from '../src/core/openTracker.ts';
 import { TEMPLATES } from '../src/core/templates/index.ts';
 import type { Exec } from '../src/core/types.ts';
@@ -67,12 +67,12 @@ test('local fixture is detected as local with default labels', async (t) => {
     'issue-tracker.md': await fixture('issue-tracker-local.md'),
     'triage-labels.md': await fixture('triage-labels.md'),
   });
-  assert.deepEqual(await readConfig(root), { tracker: 'local', labels: DEFAULT_LABELS });
+  assert.deepEqual(await readConfig(root), { tracker: 'local', primary: 'local', sources: ['local'], labels: DEFAULT_LABELS });
 });
 
 test('github fixture is detected as github', async (t) => {
   const root = await repo(t, { 'issue-tracker.md': await fixture('issue-tracker-github.md') });
-  assert.deepEqual(await readConfig(root), { tracker: 'github', labels: DEFAULT_LABELS });
+  assert.deepEqual(await readConfig(root), { tracker: 'github', primary: 'github', sources: ['github'], labels: DEFAULT_LABELS });
 });
 
 test('gitlab fixture is UNSUPPORTED and names the heading', async (t) => {
@@ -134,7 +134,7 @@ test('writeConfig writes Matt\'s templates for a fresh repo', async (t) => {
   await writeConfig(root, 'local');
   assert.equal(await readFile(join(root, 'docs/agents/issue-tracker.md'), 'utf8'), await fixture('issue-tracker-local.md'));
   assert.equal(existsSync(join(root, 'docs/agents/triage-labels.md')), false, 'triage-labels.md must not be created');
-  assert.deepEqual(await readConfig(root), { tracker: 'local', labels: DEFAULT_LABELS });
+  assert.deepEqual(await readConfig(root), { tracker: 'local', primary: 'local', sources: ['local'], labels: DEFAULT_LABELS });
 
   const gh = await repo(t);
   await writeConfig(gh, 'github');
@@ -184,4 +184,44 @@ test('openTracker for github returns the GitHub tracker, using the triage labels
 test('openTracker for gitlab is UNSUPPORTED', async (t) => {
   const root = await repo(t, { 'issue-tracker.md': await fixture('issue-tracker-gitlab.md') });
   await rejectsWith(openTracker(root, noExec), 'UNSUPPORTED');
+});
+
+test('an Additional sources section adds sources after the primary one', async (t) => {
+  const text = `${TEMPLATES.local}\n## Additional sources\n\n- \`github\`: GitHub Issues of this repository.\n`;
+  const root = await repo(t, { 'issue-tracker.md': text });
+  const config = await readConfig(root);
+  assert.equal(config.primary, 'local');
+  assert.equal(config.tracker, 'local');
+  assert.deepEqual(config.sources, ['local', 'github']);
+});
+
+test('the primary source listed again under Additional sources counts once', async (t) => {
+  const text = `${TEMPLATES.github}\n## Additional sources\n\n- \`github\`\n- \`local\`\n`;
+  const root = await repo(t, { 'issue-tracker.md': text });
+  assert.deepEqual((await readConfig(root)).sources, ['github', 'local']);
+});
+
+test('an unknown additional source is UNSUPPORTED and named', async (t) => {
+  const text = `${TEMPLATES.local}\n## Additional sources\n\n- \`jira\`: Jira.\n`;
+  const root = await repo(t, { 'issue-tracker.md': text });
+  await rejectsWith(readConfig(root), 'UNSUPPORTED', /jira/);
+});
+
+test('withAdditionalSources writes a section readConfig reads back, and [] removes it', async (t) => {
+  const text = withAdditionalSources(TEMPLATES.local, ['github']);
+  assert.ok(text.startsWith(TEMPLATES.local), 'the primary template stays as it is');
+  assert.match(text, /^## Additional sources$/m);
+  assert.match(text, /task-board create --source github/);
+  const root = await repo(t, { 'issue-tracker.md': text });
+  assert.deepEqual((await readConfig(root)).sources, ['local', 'github']);
+  // Rewriting replaces the section instead of adding a second one.
+  assert.equal(withAdditionalSources(text, ['github']), text);
+  assert.equal(withAdditionalSources(text, []), TEMPLATES.local);
+});
+
+test('withAdditionalSources keeps sections written after it by hand', () => {
+  const text = `${withAdditionalSources(TEMPLATES.github, ['local'])}\n## Notes\n\nMine.\n`;
+  const again = withAdditionalSources(text, []);
+  assert.match(again, /## Notes\n\nMine\.\n$/);
+  assert.doesNotMatch(again, /Additional sources/);
 });

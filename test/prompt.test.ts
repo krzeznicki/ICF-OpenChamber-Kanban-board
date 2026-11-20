@@ -16,6 +16,7 @@ const task = (extra: Partial<Task> = {}): Task => ({
   url: null,
   updatedAt: 0,
   claimed: false,
+  source: extra.id?.startsWith('#') ? 'github' : 'local',
   ...extra,
 });
 const implement = BUILTIN_PRESETS.find((p) => p.id === 'implement')!;

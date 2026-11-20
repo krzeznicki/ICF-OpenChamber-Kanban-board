@@ -34,6 +34,8 @@ export type Task = {
    * Only counts while the task is ready-for-agent and its parent's orchestrator session runs.
    */
   claimed: boolean;
+  /** The Source the task lives in (`local`, `github`); every id belongs to exactly one source. */
+  source: string;
 };
 
 export type NewTask = {

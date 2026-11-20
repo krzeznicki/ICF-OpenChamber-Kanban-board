@@ -16,6 +16,7 @@ const task: Task = {
   url: 'https://github.com/o/r/issues/7',
   updatedAt: 0,
   claimed: false,
+  source: 'github',
 };
 const opts: StartOptions = { presetId: 'implement', model: null, agent: null, variant: null, location: 'worktree' };
 

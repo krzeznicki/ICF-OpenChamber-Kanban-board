@@ -105,6 +105,7 @@ export const createLocalTracker = (root: string): Tracker => {
         url: null,
         updatedAt: s.mtimeMs,
         claimed: false,
+        source: 'local',
       };
     }
     const p = parseSpec(file.text, feature);
@@ -120,6 +121,7 @@ export const createLocalTracker = (root: string): Tracker => {
       url: null,
       updatedAt: file.mtime,
       claimed: false,
+      source: 'local',
     };
   };
 
@@ -154,6 +156,7 @@ export const createLocalTracker = (root: string): Tracker => {
       url: null,
       updatedAt: data.mtime,
       claimed: p.claimed,
+      source: 'local',
     };
   };
 
