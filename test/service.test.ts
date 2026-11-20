@@ -506,3 +506,32 @@ test('/tasks/create takes an optional source; without it the task goes to the pr
   assert.equal(bad.status, 400);
   assert.equal((bad.json as Err).error.code, 'INVALID');
 });
+
+test('POST /tasks/publish publishes a local task to GitHub and closes it; a partial failure is 422 naming what was created', async (t) => {
+  const { fakeGh } = await import('./fakeGh.ts');
+  const directory = await local(t);
+  const path = join(directory, 'docs/agents/issue-tracker.md');
+  await writeFile(path, withAdditionalSources(await readFile(path, 'utf8'), ['github']));
+  const gh = fakeGh([], { failCreate: (title) => title === 'Broken' });
+  const d = { exec: gh.exec };
+  const create = async (input: Record<string, unknown>) =>
+    ((await handle('POST', '/tasks/create', { directory, input }, d)).json as { task: Task }).task;
+
+  const spec = await create({ title: 'Feature', body: 'Spec.' });
+  await create({ title: 'Ticket', parentId: spec.id });
+  const r = await handle('POST', '/tasks/publish', { directory, id: spec.id, to: 'github' }, d);
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  const out = r.json as { issue: Task; subIssues: { from: string; task: Task }[]; closed: Task[] };
+  assert.equal(out.issue.id, '#1');
+  assert.deepEqual(out.subIssues.map((s) => s.task.id), ['#2']);
+  assert.ok(out.closed.every((x) => x.state === 'done'));
+
+  const broken = await create({ title: 'Other' });
+  await create({ title: 'Broken', parentId: broken.id });
+  const partial = await handle('POST', '/tasks/publish', { directory, id: broken.id }, d);
+  assert.equal(partial.status, 422);
+  assert.equal((partial.json as Err).error.code, 'FAILED');
+  assert.match((partial.json as Err).error.message, /#3 \(Other\)/);
+
+  assert.equal((await handle('POST', '/tasks/publish', { directory, id: broken.id, to: 'jira' }, d)).status, 400);
+});

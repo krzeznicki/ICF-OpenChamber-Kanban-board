@@ -8,6 +8,7 @@ import { readSessionEventRequest, SESSION_EVENTS_PATH, type GuestSessionEventReq
 import { readConfig, readLabels, writeConfig, type ProjectConfig } from '../core/config.ts';
 import { createGithubTracker } from '../core/githubTracker.ts';
 import { openTracker } from '../core/openTracker.ts';
+import { publishTask } from '../core/publish.ts';
 import { type CombinedTracker, sourceInfo } from '../core/sources.ts';
 import type { Exec, NewTask, Task, TaskEdit, TaskState } from '../core/types.ts';
 import { TrackerError } from '../core/types.ts';
@@ -461,6 +462,15 @@ const POST: Record<string, Route> = {
     const task = await (await tracker(dir, deps)).removeParent(id);
     await followMove(id, task, dir, deps);
     return { task };
+  },
+  /**
+   * Publishes a local task to GitHub (`to`, optional, is "github"): an issue, its tickets as sub-issues,
+   * then the local files closed with a link. Half done on GitHub: 422 FAILED naming the created issues.
+   */
+  '/tasks/publish': async (body, dir, deps) => {
+    const id = str(body, 'id');
+    if (body.to !== undefined && body.to !== 'github') return invalid('"to" must be "github"');
+    return await publishTask(dir, await tracker(dir, deps), id);
   },
   '/tasks/close': async (body, dir, deps) => {
     const id = str(body, 'id');

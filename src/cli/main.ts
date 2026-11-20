@@ -6,6 +6,7 @@ import { parseArgs } from 'node:util';
 import { readConfig, writeConfig } from '../core/config.ts';
 import { realExec } from '../core/exec.ts';
 import { openTracker } from '../core/openTracker.ts';
+import { publishTask } from '../core/publish.ts';
 import type { CombinedTracker } from '../core/sources.ts';
 import type { Exec, Task, TaskState } from '../core/types.ts';
 import { TrackerError } from '../core/types.ts';
@@ -41,6 +42,9 @@ Commands:
                                         which changes in a local tracker: the file moves)
   next [--source <id>]                  first ready-for-agent ticket with no open blocker
   close <id> [--with-children]          close a task (and a feature's tickets)
+  publish <id> [--to github]            publish a local task to GitHub: an issue (a feature's
+                                        tickets become sub-issues), then the local files are closed
+                                        with a link; if GitHub fails half way nothing local closes
   init <local|github>                   write docs/agents/issue-tracker.md
 
 Sources: list and next read every source in docs/agents/issue-tracker.md (the primary one and
@@ -73,6 +77,7 @@ const OPTIONS = {
   'blocked-by': { type: 'string', multiple: true },
   'with-children': { type: 'boolean' },
   source: { type: 'string' },
+  to: { type: 'string' },
 } as const;
 
 type Option = keyof typeof OPTIONS;
@@ -95,6 +100,7 @@ const COMMANDS: Record<string, { positionals: number; options: Option[] }> = {
   parent: { positionals: 2, options: [] },
   next: { positionals: 0, options: ['source'] },
   close: { positionals: 1, options: ['with-children'] },
+  publish: { positionals: 1, options: ['to'] },
   init: { positionals: 1, options: [] },
 };
 const GLOBAL: Option[] = ['dir', 'json', 'help'];
@@ -270,6 +276,13 @@ export const main = async (argv: string[], io: CliIO): Promise<number> => {
       case 'close': {
         const closed = await (await openTracker(root, exec)).close(args[0]!, { withChildren: values['with-children'] === true });
         print(closed, closed.map((t) => line(t)).join(''));
+        return 0;
+      }
+      case 'publish': {
+        if (values.to !== undefined && values.to !== 'github') usage(`Cannot publish to "${values.to}": use --to github`);
+        const result = await publishTask(root, await openTracker(root, exec), args[0]!);
+        const pairs = [{ from: result.from, task: result.issue }, ...result.subIssues];
+        print(result, pairs.map((p) => `${p.from}  ->  ${p.task.id}${p.task.url ? `  ${p.task.url}` : ''}\n`).join(''));
         return 0;
       }
       case 'init': {

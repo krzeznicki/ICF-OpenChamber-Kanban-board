@@ -445,3 +445,25 @@ test('create goes to the primary source, --source picks another, and a sub-task 
   assert.match(unknown.err, /INVALID: Unknown source "jira"/);
   assert.match((await cli(['--help'])).out, /create .*--source <id>/s);
 });
+
+test('publish <id> --to github turns a local feature into an issue with sub-issues and closes it', async (t) => {
+  const { run: cli, spec, ids } = await twoSources(t);
+  const r = await cli(['publish', spec, '--to', 'github']);
+  assert.equal(r.code, 0, r.err);
+  assert.equal(
+    r.out,
+    [
+      `${spec}  ->  #7  https://github.com/o/r/issues/7`,
+      `${ids[0]}  ->  #8  https://github.com/o/r/issues/8`,
+      `${ids[1]}  ->  #9  https://github.com/o/r/issues/9`,
+      `${ids[2]}  ->  #10  https://github.com/o/r/issues/10`,
+      '',
+    ].join('\n'),
+  );
+  assert.equal(JSON.parse((await cli(['show', spec, '--json'])).out).state, 'done');
+
+  const again = await cli(['publish', '#7', '--json']);
+  assert.equal(again.code, 4);
+  assert.equal(JSON.parse(again.out).error.code, 'INVALID');
+  assert.equal((await cli(['publish', spec, '--to', 'jira'])).code, 2);
+});
