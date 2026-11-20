@@ -116,6 +116,9 @@ export type TrackerErrorCode =
   | 'INVALID'
   | 'FAILED';
 
+/** The message of anything thrown: an Error's message, else the value as text. */
+export const errorMessage = (e: unknown): string => (e instanceof Error ? e.message : String(e));
+
 export class TrackerError extends Error {
   // Declared explicitly: Node's type stripping does not support constructor parameter properties.
   public code: TrackerErrorCode;

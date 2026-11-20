@@ -7,7 +7,7 @@ import type { ProjectConfig, SourceId } from './config.ts';
 import { createGithubTracker } from './githubTracker.ts';
 import { createLocalTracker } from './localTracker.ts';
 import type { Exec, NewTask, Task, Tracker, TrackerErrorCode } from './types.ts';
-import { TrackerError } from './types.ts';
+import { TrackerError, errorMessage } from './types.ts';
 
 /** What a source can do; the panel and the CLI ask these instead of checking the source's kind. */
 export type SourceCapabilities = {
@@ -66,16 +66,23 @@ export const SOURCES: Record<SourceId, Omit<SourceInfo, 'id'>> = {
 export const sourceInfo = (id: SourceId): SourceInfo => ({ id, ...SOURCES[id] });
 
 const availabilityOf = (e: unknown): Exclude<SourceAvailability, { status: 'ok' }> => {
-  const message = e instanceof Error ? e.message : String(e);
-  return { status: e instanceof TrackerError && e.code === 'GH_AUTH' ? 'needs-login' : 'unavailable', message };
+  return { status: e instanceof TrackerError && e.code === 'GH_AUTH' ? 'needs-login' : 'unavailable', message: errorMessage(e) };
 };
 
-const sourceError = (source: SourceId, e: unknown): SourceError => ({
-  source,
-  code: e instanceof TrackerError ? e.code : 'FAILED',
-  message: e instanceof Error ? e.message : String(e),
-  availability: availabilityOf(e).status,
-});
+/**
+ * The error of a source whose list failed with `e`. Its availability comes from the error's code,
+ * else from asking the source (a gh login that expired after the preflight fails as a plain gh error).
+ */
+const sourceError = async (source: SourceAdapter, e: unknown): Promise<SourceError> => {
+  const fromError = availabilityOf(e).status;
+  const asked = fromError === 'needs-login' ? null : await source.availability().catch(() => null);
+  return {
+    source: source.id,
+    code: e instanceof TrackerError ? e.code : 'FAILED',
+    message: errorMessage(e),
+    availability: asked?.status === 'needs-login' ? 'needs-login' : fromError,
+  };
+};
 
 export const createLocalSource = (root: string): SourceAdapter => ({
   ...createLocalTracker(root),
@@ -164,10 +171,10 @@ export const createCombinedTracker = (primary: SourceId, sources: readonly Sourc
     if (failed.length === asked.length) throw failed[0];
     const tasks: Task[] = [];
     const errors: SourceError[] = [];
-    results.forEach((r, i) => {
+    for (const [i, r] of results.entries()) {
       if (r.status === 'fulfilled') tasks.push(...r.value);
-      else errors.push(sourceError(asked[i]!.id, r.reason));
-    });
+      else errors.push(await sourceError(asked[i]!, r.reason));
+    }
     return { tasks, errors };
   };
 

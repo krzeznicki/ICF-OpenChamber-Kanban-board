@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { withAdditionalSources } from '../src/core/config.ts';
 import { createLocalTracker } from '../src/core/localTracker.ts';
 import { openTracker } from '../src/core/openTracker.ts';
+import { createCombinedTracker, createGithubSource, createLocalSource, type SourceAdapter } from '../src/core/sources.ts';
 import { TEMPLATES } from '../src/core/templates/index.ts';
 import type { Exec } from '../src/core/types.ts';
 import { TrackerError } from '../src/core/types.ts';
@@ -116,6 +117,34 @@ test('a failing source does not hide the others: listAll returns its error besid
   assert.equal(error!.availability, 'needs-login');
   assert.match(error!.message, /gh auth login/);
   assert.deepEqual((await tracker.list()).map((x) => x.id).sort(), [spec.id, ticket.id].sort());
+});
+
+test('a source that fails to list is asked for its availability: a lost login shows as needs-login', async (t) => {
+  const root = await project(t, 'local', []);
+  const local = createLocalSource(root);
+  let asked = 0;
+  const expired: SourceAdapter = {
+    ...createGithubSource(root, noExec, { 'needs-triage': 'needs-triage', 'needs-info': 'needs-info', 'ready-for-agent': 'ready-for-agent', 'ready-for-human': 'ready-for-human', wontfix: 'wontfix' }),
+    list: async () => {
+      throw new TrackerError('FAILED', 'gh issue list failed: HTTP 401: Bad credentials');
+    },
+    availability: async () => {
+      asked++;
+      return { status: 'needs-login', message: 'gh is not logged in to GitHub: run `gh auth login`' };
+    },
+  };
+  const result = await createCombinedTracker('local', [local, expired]).listAll();
+  assert.equal(asked, 1);
+  assert.equal(result.errors[0]!.availability, 'needs-login');
+  assert.equal(result.errors[0]!.code, 'FAILED');
+  assert.match(result.errors[0]!.message, /Bad credentials/);
+});
+
+test('a source that fails while still available stays unavailable', async (t) => {
+  const root = await project(t, 'local', []);
+  const offline: SourceAdapter = { ...createLocalSource(root), id: 'github', owns: () => false, list: async () => { throw new Error('could not resolve host'); } };
+  const result = await createCombinedTracker('local', [createLocalSource(root), offline]).listAll();
+  assert.equal(result.errors[0]!.availability, 'unavailable');
 });
 
 test('when every source fails, list throws as a single tracker did', async (t) => {
