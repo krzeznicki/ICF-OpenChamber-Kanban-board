@@ -1,31 +1,22 @@
 // Publish a local task to GitHub (spec: "Opublikuj w GitHub"). One direction only: local -> GitHub.
 // The task becomes an issue (title, description, state and type labels through the GitHub source's
 // label map); a feature's tickets become its sub-issues, and blockers between them point at the new
-// issues. Once every issue exists, the local files are closed (done) with a comment linking their
-// issue. When GitHub fails half way the error names what was created and the local files stay open.
+// issues. Once every issue exists, each local file gets a comment linking its issue and is closed
+// (done). When GitHub fails half way the error names what was created and the local files stay open.
+import { existsSync } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { issueDescription, withComment } from './localFormat.ts';
 import type { CombinedTracker } from './sources.ts';
-import type { Task } from './types.ts';
-import { TrackerError } from './types.ts';
+import type { Published, Task } from './types.ts';
+import { TrackerError, errorMessage } from './types.ts';
 
-export type Published = {
-  /** The local task's id. */
-  from: string;
-  /** The issue the task became. */
-  issue: Task;
-  /** A feature's tickets and the sub-issues they became, in the order they were created. */
-  subIssues: { from: string; task: Task }[];
-  /** The local tasks closed after publishing. */
-  closed: Task[];
-};
+export type { Published };
 
 /** The comment left on a published local file. */
 export const publishedComment = (url: string): string => `Published to GitHub: ${url}`;
 
 const named = (t: Task): string => `${t.id} (${t.title})`;
-const message = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
 /** Tickets ordered so a blocker inside the feature is created before the tickets it blocks. */
 const blockersFirst = (tickets: Task[]): Task[] => {
@@ -62,15 +53,17 @@ export const publishTask = async (root: string, tracker: CombinedTracker, id: st
 
   const created: Task[] = [];
   const issueOf = new Map<string, Task>();
+  const localOf = new Map<string, Task>();
   const publishOne = async (t: Task, parentId?: string): Promise<Task> => {
     const blockedBy = t.blockedBy.flatMap((b) => {
       const to = issueOf.get(b);
       return to === undefined ? [] : [to.id];
     });
+    // A done task is created open and closed after, so an issue whose close fails still counts as created.
     const made = await tracker.create({
       title: t.title,
       body: issueDescription(t.body),
-      state: t.state,
+      ...(t.state !== 'done' ? { state: t.state } : {}),
       ...(t.type !== null ? { type: t.type } : {}),
       ...(parentId !== undefined ? { parentId } : {}),
       ...(blockedBy.length > 0 ? { blockedBy } : {}),
@@ -78,7 +71,8 @@ export const publishTask = async (root: string, tracker: CombinedTracker, id: st
     });
     created.push(made);
     issueOf.set(t.id, made);
-    return made;
+    localOf.set(t.id, t);
+    return t.state === 'done' ? tracker.setState(made.id, 'done') : made;
   };
 
   let issue: Task;
@@ -95,22 +89,49 @@ export const publishTask = async (root: string, tracker: CombinedTracker, id: st
     if (created.length === 0) throw e;
     throw new TrackerError(
       'FAILED',
-      `Publishing stopped at ${named(at)}: ${message(e)}. Created on GitHub: ${created.map(named).join(', ')}. ` +
+      `Publishing stopped at ${named(at)}: ${errorMessage(e)}. Created on GitHub: ${created.map(named).join(', ')}. ` +
         'The local task was left open; delete those issues or finish the rest by hand before publishing again',
     );
   }
 
-  try {
-    const closed = await tracker.close(task.id, { withChildren: task.kind === 'parent' });
-    for (const [from, to] of issueOf) {
-      const path = join(root, ...from.split('/'));
-      await writeFile(path, withComment(await readFile(path, 'utf8'), publishedComment(to.url ?? to.id)));
+  // Each local file gets its link comment first and is closed right after, so no file is closed
+  // without its link. A file missing on disk (a feature folder without spec.md) is closed first,
+  // which writes it, and then gets the comment.
+  const closed: Task[] = [];
+  const published = `Published to GitHub as ${created.map(named).join(', ')}`;
+  for (const [from, to] of issueOf) {
+    const path = join(root, ...from.split('/'));
+    const comment = async (): Promise<void> => {
+      try {
+        await writeFile(path, withComment(await readFile(path, 'utf8'), publishedComment(to.url ?? to.id)));
+      } catch (e) {
+        throw new TrackerError('FAILED', `${published}, but the link comment could not be written to ${from}: ${errorMessage(e)}. ${progress(closed, issueOf, from)}`);
+      }
+    };
+    const close = async (): Promise<void> => {
+      const local = localOf.get(from)!;
+      if (local.state === 'done') return;
+      try {
+        closed.push(await tracker.setState(from, 'done'));
+      } catch (e) {
+        throw new TrackerError('FAILED', `${published}, but ${from} could not be closed: ${errorMessage(e)}. ${progress(closed, issueOf, from)}`);
+      }
+    };
+    if (existsSync(path)) {
+      await comment();
+      await close();
+    } else {
+      await close();
+      await comment();
     }
-    return { from: task.id, issue, subIssues, closed };
-  } catch (e) {
-    throw new TrackerError(
-      'FAILED',
-      `Published to GitHub as ${created.map(named).join(', ')}, but the local task could not be closed: ${message(e)}`,
-    );
   }
+  return { from: task.id, issue, subIssues, closed };
+};
+
+/** What is done and what is left of the local side when a link comment or a close fails at `at`. */
+const progress = (closed: readonly Task[], issueOf: ReadonlyMap<string, Task>, at: string): string => {
+  const ids = [...issueOf.keys()];
+  const left = ids.slice(ids.indexOf(at));
+  const done = closed.length === 0 ? 'No local file was closed' : `Closed with their link: ${closed.map((t) => t.id).join(', ')}`;
+  return `${done}; still open: ${left.join(', ')}. Close them by hand with a comment linking their issue`;
 };

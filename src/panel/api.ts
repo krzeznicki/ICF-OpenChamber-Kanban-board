@@ -2,7 +2,7 @@
 // through host.serviceRequest, and every POST body carries the project's absolute `directory`.
 import type { HostClient } from '@openchamber/sdk';
 import type { LinkStatus, QueueEntry } from '../core/queue.ts';
-import type { NewTask, Task, TaskEdit, TaskState } from '../core/types.ts';
+import type { NewTask, Published, Task, TaskEdit, TaskState } from '../core/types.ts';
 import type { AgentsAnswer, ModelsAnswer } from './models.ts';
 import type { SourceChange, SourcesAnswer } from './sourceSettings.ts';
 import { listedBoard } from './sourceBanner.ts';
@@ -120,7 +120,7 @@ export const createApi = (host: HostClient, directory: string) => {
      * sub-issues; the local files are then closed. A half-done publish fails with what was created.
      */
     publish: (id: string) =>
-      call<{ from: string; issue: Task; subIssues: { from: string; task: Task }[]; closed: Task[] }>('POST', '/tasks/publish', { id, to: 'github' }),
+      call<Published>('POST', '/tasks/publish', { id, to: 'github' }),
     close: (id: string, withChildren = false) =>
       call<{ tasks: Task[] }>('POST', '/tasks/close', { id, withChildren }).then((r) => r.tasks),
     /**

@@ -1,6 +1,6 @@
 // "Publish to GitHub" in the task modal (core/publish.ts does the work in the service): when it is
 // offered, the confirm's wording and the toast after. Pure, so it runs under node:test.
-import type { Task } from '../core/types.ts';
+import type { Published, Task } from '../core/types.ts';
 
 /** An open local task, in a project that has a GitHub source. */
 export const canPublish = (task: Task, sources: readonly string[]): boolean =>
@@ -21,7 +21,7 @@ export const publishConfirm = (task: Task, tasks: readonly Task[]): { title: str
   };
 };
 
-export const publishedMessage = (result: { issue: Pick<Task, 'id'>; subIssues: readonly unknown[] }): string => {
+export const publishedMessage = (result: Pick<Published, 'issue' | 'subIssues'>): string => {
   const n = result.subIssues.length;
   return n === 0 ? `Published as ${result.issue.id}` : `Published as ${result.issue.id} with ${plural(n, 'sub-issue')}`;
 };

@@ -3,7 +3,7 @@
 // `enhancement` label or a `type:<x>` label. Parents are issues with sub-issues.
 import type { LabelRole, ProjectConfig } from './config.ts';
 import type { Exec, NewTask, Task, TaskEdit, TaskState, Tracker } from './types.ts';
-import { TrackerError } from './types.ts';
+import { TrackerError, errorMessage } from './types.ts';
 
 /**
  * gh 2.94.0 (released 2026-06-10) added `gh issue create --parent` and `--blocked-by`, which create() uses (checked against its release notes and `gh issue create --help` of 2.103),
@@ -372,7 +372,13 @@ export const createGithubTracker = (root: string, exec: Exec, labels: ProjectCon
       const m = /\/issues\/(\d+)\s*$/.exec(r.stdout.trim());
       if (m === null) throw new TrackerError('FAILED', `gh issue create printed no issue URL: ${r.stdout.trim()}`);
       const n = Number(m[1]);
-      if (input.state === 'done') await run(['issue', 'close', String(n)]);
+      if (input.state === 'done') {
+        try {
+          await run(['issue', 'close', String(n)]);
+        } catch (e) {
+          throw new TrackerError('FAILED', `${idOf(n)} was created (${r.stdout.trim()}), but it could not be closed: ${errorMessage(e)}`);
+        }
+      }
       return get(idOf(n));
     },
 

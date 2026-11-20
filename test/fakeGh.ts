@@ -29,6 +29,8 @@ export type FakeGhOptions = {
   notAdmin?: boolean;
   /** `gh issue create` fails for the titles this returns true for (a publish that stops half way). */
   failCreate?: (title: string) => boolean;
+  /** `gh issue close` fails for the issue numbers this returns true for. */
+  failClose?: (n: number) => boolean;
 };
 
 const URL = 'https://github.com/o/r/issues/';
@@ -170,6 +172,7 @@ export const fakeGh = (seed: FakeIssue[], options: FakeGhOptions = {}) => {
       return ok(`${URL}${issue!.number}\n`);
     }
     if (a === 'issue' && b === 'close') {
+      if (options.failClose?.(issue!.number)) return fail('HTTP 502: Bad Gateway\n');
       issue!.state = 'CLOSED';
       issue!.closedAt = NOW;
       touch(issue!);

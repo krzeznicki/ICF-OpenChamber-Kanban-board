@@ -1,7 +1,7 @@
 // Publish a local task to GitHub (ticket 07): a real local source in a temp dir plus GitHub on the fake gh.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { withAdditionalSources } from '../src/core/config.ts';
@@ -123,6 +123,37 @@ test('a logged-out gh fails before anything is created and leaves the local task
   await rejectsWith(publishTask(root, tracker, spec.id), 'GH_AUTH');
   assert.equal(gh.issues.length, 1);
   assert.notEqual((await tracker.get(spec.id)).state, 'done');
+});
+
+test('a done task whose new issue cannot be closed still reports the issue as created', async (t) => {
+  const { root, gh, second, tracker } = await setup(t, { failClose: (n) => n === 2 });
+  await tracker.setState(second.id, 'done');
+  await assert.rejects(publishTask(root, tracker, second.id), (e: unknown) => {
+    assert.ok(e instanceof TrackerError, String(e));
+    assert.equal(e.code, 'FAILED');
+    assert.match(e.message, /Created on GitHub: #2 \(Errors\)/);
+    return true;
+  });
+  assert.equal(gh.issues.find((i) => i.number === 2)?.title, 'Errors');
+  assert.doesNotMatch(await readFile(join(root, second.id), 'utf8'), /Published to GitHub/);
+});
+
+test('a link comment that cannot be written leaves that file open and says so; the files before it are closed with their link', async (t) => {
+  const { root, spec, first, second, tracker } = await setup(t);
+  await chmod(join(root, second.id), 0o444);
+  await assert.rejects(publishTask(root, tracker, spec.id), (e: unknown) => {
+    assert.ok(e instanceof TrackerError, String(e));
+    assert.equal(e.code, 'FAILED');
+    assert.match(e.message, /Published to GitHub as #2 \(Login page\), #3 \(Form\), #4 \(Errors\)/);
+    assert.match(e.message, new RegExp(`link comment could not be written to ${second.id.replace(/\./g, '\\.')}`));
+    assert.doesNotMatch(e.message, /could not be closed/);
+    return true;
+  });
+  for (const id of [spec.id, first.id]) {
+    assert.equal((await tracker.get(id)).state, 'done', id);
+    assert.match(await readFile(join(root, id), 'utf8'), /Published to GitHub/, id);
+  }
+  assert.notEqual((await tracker.get(second.id)).state, 'done', 'not closed without its link');
 });
 
 test('a partial failure says what was created and leaves every local file open', async (t) => {

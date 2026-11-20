@@ -46,6 +46,6 @@ test('the confirm says it goes public, counts the sub-issues and that the local 
 test('the toast names the new issue and how many sub-issues it got', () => {
   const issue = task('#7');
   assert.equal(publishedMessage({ issue, subIssues: [] }), 'Published as #7');
-  assert.equal(publishedMessage({ issue, subIssues: [{ task: task('#8') }] }), 'Published as #7 with 1 sub-issue');
-  assert.equal(publishedMessage({ issue, subIssues: [{ task: task('#8') }, { task: task('#9') }] }), 'Published as #7 with 2 sub-issues');
+  assert.equal(publishedMessage({ issue, subIssues: [{ from: '.scratch/a/issues/01-a.md', task: task('#8') }] }), 'Published as #7 with 1 sub-issue');
+  assert.equal(publishedMessage({ issue, subIssues: [{ from: '.scratch/a/issues/01-a.md', task: task('#8') }, { from: '.scratch/a/issues/02-b.md', task: task('#9') }] }), 'Published as #7 with 2 sub-issues');
 });

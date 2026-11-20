@@ -353,3 +353,9 @@ test('removeParent refuses an issue without a parent; a missing issue is NOT_FOU
   await rejectsWith(tracker.removeParent('#99'), 'NOT_FOUND');
   assert.deepEqual(gh.commands(), []);
 });
+
+test('create done: when the close after creating fails, the error names the created issue', async () => {
+  const { tracker, gh } = setup([], { failClose: () => true });
+  await rejectsWith(tracker.create({ title: 'Finished', state: 'done' }), 'FAILED', /#1 was created.*could not be closed.*Bad Gateway/s);
+  assert.equal(gh.issues[0]?.title, 'Finished');
+});

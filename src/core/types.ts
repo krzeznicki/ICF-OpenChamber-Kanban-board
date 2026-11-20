@@ -52,6 +52,18 @@ export type NewTask = {
   source?: string;
 };
 
+/** What publishing a local task to GitHub did (core/publish.ts; the service's /tasks/publish answer). */
+export type Published = {
+  /** The local task's id. */
+  from: string;
+  /** The issue the task became. */
+  issue: Task;
+  /** A feature's tickets and the sub-issues they became, in the order they were created. */
+  subIssues: { from: string; task: Task }[];
+  /** The local tasks closed after publishing. */
+  closed: Task[];
+};
+
 /** What `Tracker.edit` changes; an omitted field stays as it is. */
 export type TaskEdit = {
   title?: string;
