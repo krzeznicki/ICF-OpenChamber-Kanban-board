@@ -2,7 +2,7 @@
 // the task's session: "Open session" or why not; "Unarchive" for an archived task), a compact row
 // (State, Type, Parent with "No parent", Move to), then collapsible sections whose open state is
 // remembered: Summary, Task (the body as markdown, or the Edit form, ui/editForm.ts), Sub-tasks
-// (rows with Unlink; "Add sub-task" opens New task / Existing tasks) and Settings (Open on GitHub,
+// (rows with Unlink; "Add sub-task" opens New task / Existing tasks) and Settings (Open on GitHub or Publish to GitHub,
 // start options, ui/startOptions.ts). It sits on the modal shell (ui/modal.ts), draws what it is
 // given and reports choices; the editor (edit.ts) runs them and asks to confirm.
 import { mountBadge, mountBanner, mountButton, mountList, mountSelect, mountSpinner, mountTabs, mountTextField } from '@openchamber/sdk/ui';
@@ -48,6 +48,8 @@ export type DetailModel = {
   summary: SummaryModel | null;
   /** What the header offers for the task's session (columns.ts sessionTarget, after any lookup). */
   session: SessionView;
+  /** Settings offers "Publish to GitHub" (taskPublish.ts canPublish: an open local task, a GitHub source). */
+  publish: boolean;
   /** A parent's listed sub-tasks, in board order; empty hides the section. */
   children: { id: string; title: string; state: TaskState }[];
   /** The Sub-tasks section offers "Add sub-task" (addTask.ts canAddSubtask); it then shows even without children. */
@@ -119,6 +121,8 @@ export type DetailCallbacks = {
   onEdit: (from: EditText, draft: EditText) => Promise<string | null>;
   /** The header's "Delete" (the editor confirms first). */
   onDelete: () => void;
+  /** Settings' "Publish to GitHub" (the editor confirms first). */
+  onPublish: () => void;
   /** "No parent" in the Parent picker: resolves to null on success, or the message to show under it. */
   onRemoveParent: () => Promise<string | null>;
   /** "Unlink" on a sub-task row (the caller confirms): resolves to null on success or cancel, or the message to show. */
@@ -569,12 +573,19 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
     const { task } = m;
     // Left with nothing (a local task without start options, e.g. done), the section hides.
     // `start` is null for a done task or while no project settings are loaded (edit.ts detailModel).
-    settingsSec.box.hidden = task.url === null && m.start === null;
+    settingsSec.box.hidden = task.url === null && m.start === null && !m.publish;
     const url = task.url;
     if (url !== null) {
       const actions = el('div', 'kb-actions kb-actions-start');
       disposers.push(
         mountButton(actions, { label: 'Open on GitHub', variant: 'ghost', size: 'sm', onClick: () => callbacks.onOpenUrl(url) }).dispose,
+      );
+      settingsTop.append(actions);
+    }
+    if (m.publish) {
+      const actions = el('div', 'kb-actions kb-actions-start');
+      disposers.push(
+        mountButton(actions, { label: 'Publish to GitHub', variant: 'outline', size: 'sm', disabled: m.busy, onClick: callbacks.onPublish }).dispose,
       );
       settingsTop.append(actions);
     }

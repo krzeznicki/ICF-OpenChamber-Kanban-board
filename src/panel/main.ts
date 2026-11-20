@@ -1256,6 +1256,7 @@ const start = (ctx: HostReadyContext): void => {
     tasks: () => state.tasks ?? [],
     tracker: () => state.config?.tracker ?? 'local',
     labels: () => state.config?.labels ?? {},
+    sources: () => state.config?.sources.map((s) => s.id) ?? [],
     columnOf: (id) => state.columns.get(id) ?? null,
     reload: load,
     redraw: draw,

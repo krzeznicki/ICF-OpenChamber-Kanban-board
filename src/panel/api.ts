@@ -107,6 +107,12 @@ export const createApi = (host: HostClient, directory: string) => {
       call<{ deleted: string[] }>('POST', '/tasks/delete', { id, withChildren }).then((r) => r.deleted),
     /** Unlinks a sub-task from its parent; like setParent the returned task can have a new id (local: it became a feature). */
     removeParent: (id: string) => call<{ task: Task }>('POST', '/tasks/unparent', { id }).then((r) => r.task),
+    /**
+     * Publishes a local task to GitHub (core/publish.ts): its issue and a feature's tickets as
+     * sub-issues; the local files are then closed. A half-done publish fails with what was created.
+     */
+    publish: (id: string) =>
+      call<{ from: string; issue: Task; subIssues: { from: string; task: Task }[]; closed: Task[] }>('POST', '/tasks/publish', { id, to: 'github' }),
     close: (id: string, withChildren = false) =>
       call<{ tasks: Task[] }>('POST', '/tasks/close', { id, withChildren }).then((r) => r.tasks),
     /**

@@ -19,6 +19,7 @@ import { attachDrag } from './ui/dnd.ts';
 import { canLinkUnder, followingMove, linkChoices, linkConfirm, unlinkConfirm } from './link.ts';
 import { sourceKind } from './sources.ts';
 import { deleteConfirm } from './taskDelete.ts';
+import { canPublish, publishConfirm, publishedMessage } from './taskPublish.ts';
 import { editChanges, editConflict, editableText, type EditText } from './taskEdit.ts';
 
 export type EditorDeps = {
@@ -30,6 +31,8 @@ export type EditorDeps = {
   /** The primary source's kind: new tasks (Add task) go there. A listed task goes by its own source (kindOf). */
   tracker: () => TrackerKind;
   labels: () => Record<string, string>;
+  /** The project's source ids (config.sources): "Publish to GitHub" needs a GitHub one. */
+  sources: () => readonly string[];
   /** Where a listed task is drawn now; null when hidden (e.g. "Hide sub-tasks"). */
   columnOf: (id: string) => Column | null;
   /** Reload the tasks and redraw; resolves when done. */
@@ -207,6 +210,7 @@ export const createEditor = (deps: EditorDeps) => {
             },
       summary: deps.summary.model(task),
       session: sessionView(task),
+      publish: canPublish(task, deps.sources()),
       children: tasks.filter((t) => t.parentId === task.id).map((t) => ({ id: t.id, title: t.title, state: t.state })),
       addSubtask: canAddSubtask(task, kindOf(task)),
       archived: deps.archive.has(task),
@@ -449,6 +453,15 @@ export const createEditor = (deps: EditorDeps) => {
     }
   };
 
+  /** The modal's "Publish to GitHub": confirm, publish; a half-done publish shows what was created (run's error toast). */
+  const publishTask = async (id: string): Promise<void> => {
+    const task = find(id);
+    if (task === null || deps.api() === null || moving.has(id)) return;
+    const { title, body, label } = publishConfirm(task, deps.tasks());
+    if ((await askChoice(title, body, [{ id: 'publish', label }])) !== 'publish') return;
+    await run(id, async (a) => info(publishedMessage(await a.publish(id))));
+  };
+
   const closeDetail = (): void => {
     const d = detail;
     detail = null;
@@ -483,6 +496,7 @@ export const createEditor = (deps: EditorDeps) => {
       onSetParent: (parentId) => linkTask(id, parentId),
       onEdit: (from, draft) => editTask(id, from, draft),
       onDelete: () => void deleteTask(id),
+      onPublish: () => void publishTask(id),
       onLinkChild: (childId) => linkTask(childId, id),
       onRemoveParent: () => unlinkTask(id),
       onUnlinkChild: async (childId) => {
