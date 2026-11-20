@@ -14059,7 +14059,12 @@ ${ref}`,
     if (key === "id") return shellWord(task.id);
     return noteHow(task, projectDir);
   });
-  var buildPrompt2 = (task, preset, cliPath, projectDir, children) => {
+  var otherSourceLines = (task, cli, primary2) => primary2 === void 0 || task.source === primary2 ? [] : [
+    `This project's primary source is ${primary2}, and docs/agents/issue-tracker.md describes that one; this task is in ${task.source} (see its ## Additional sources section).`,
+    `Create new tasks for this work in ${task.source}: ${cli} create --source ${task.source} --title <title>`,
+    "A sub-task (--parent) goes to its parent's source by itself. Tasks of different sources are never linked: a parent or blocker in another source is refused."
+  ];
+  var buildPrompt2 = (task, preset, cliPath, projectDir, children, primary2) => {
     const cli = `node ${shellWord(cliPath)} --dir ${shellWord(projectDir)}`;
     const id = shellWord(task.id);
     const leads = children.length > 0 || task.kind === "parent";
@@ -14068,6 +14073,7 @@ ${ref}`,
       "## Tracker",
       isGithub(task) ? "This task is a GitHub issue of this repository." : "This task is a local issue file under .scratch/ in this repository.",
       `Move it with the task-board CLI: ${cli} state ${id} <state>`,
+      ...otherSourceLines(task, cli, primary2),
       "Always pass --dir exactly as shown (the project root), even in a worktree: without it the CLI misses the tracker or writes to a copy the board never reads.",
       `States: ${STATES2}. Set "done" only when the work is finished.`,
       ...leads ? [] : ["This task was started from the board; you don't need to claim it."]
@@ -14295,7 +14301,7 @@ ${note}` : note;
       if (ctx === null) throw new Error("Settings are loading, try again in a moment");
       const preset = pickPreset(ctx.presets, opts.presetId);
       const children = (deps.tasks() ?? []).filter((t) => t.parentId === task.id);
-      return buildPrompt2(task, preset, await cliPath(p.directory), p.directory, children);
+      return buildPrompt2(task, preset, await cliPath(p.directory), p.directory, children, deps.primary() ?? void 0);
     };
     const isStarting = /* @__PURE__ */ new Set();
     const launcher = createLauncher({
@@ -16055,6 +16061,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     host,
     project,
     tasks: () => state.tasks,
+    primary: () => state.config?.primary ?? null,
     sessions: () => state.sessions,
     context: startContext,
     loadCard: (projectId, taskId) => store.loadCard(projectId, taskId),

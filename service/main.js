@@ -304,7 +304,7 @@ var instructionsText = (cliPath, variant = VARIANT) => {
   const test = variant === "test";
   const intro = test ? "Kanban TEST development build (a local test copy of the ICF-kanban board, separate from the production Kanban Board): use it only when the user asks for the TEST board. " : "";
   const skills = test ? "kanban-test-create/status/next/start" : "icf-kanban-create/status/next/start";
-  return intro + `Task board (ICF-kanban${test ? " TEST" : ""}): in projects with docs/agents/issue-tracker.md, tasks are managed with \`${tb}\`; always pass --dir <the project root, i.e. the main checkout, not a worktree>. \`list --ready\` or \`next\` for ready tickets, \`show <id>\`, \`claim <id>\` (claim applies to sub-tasks you take from \`list --ready\`/\`next\`; skip lines marked claimed), \`state <id> <state>\` (done closes), \`create --title <t> [--type bug|enhancement] [--parent <id>]\`; --json for data. Skills ${skills} describe the steps. The ICF-kanban ${test ? "TEST board" : "board"} in OpenChamber shows the same tasks.`;
+  return intro + `Task board (ICF-kanban${test ? " TEST" : ""}): in projects with docs/agents/issue-tracker.md, tasks are managed with \`${tb}\`; always pass --dir <the project root, i.e. the main checkout, not a worktree>. \`list --ready\` or \`next\` for ready tickets, \`show <id>\`, \`claim <id>\` (claim applies to sub-tasks you take from \`list --ready\`/\`next\`; skip lines marked claimed), \`state <id> <state>\` (done closes), \`create --title <t> [--type bug|enhancement] [--parent <id>] [--source <id>]\`; --json for data. Skills ${skills} describe the steps. The ICF-kanban ${test ? "TEST board" : "board"} in OpenChamber shows the same tasks.`;
 };
 var publishInstructions = async (host2, cliPath, log = console.error) => {
   log("icf-kanban: setting agent instructions");
@@ -1497,13 +1497,51 @@ var createCombinedTracker = (primary, sources) => {
     const owner = sources.find((s) => s.owns(id));
     if (owner !== void 0) return owner;
     if (sources.length === 1) return sources[0];
-    throw new TrackerError("NOT_FOUND", `No source of this project has a task "${id}" (sources: ${sources.map((s) => s.id).join(", ")})`);
+    throw new TrackerError("NOT_FOUND", `No source of this project has a task "${id}" (sources: ${known()})`);
   };
   const primarySource = sources.find((s) => s.id === primary) ?? sources[0];
+  const known = () => sources.map((s) => s.id).join(", ");
+  const named = (id) => {
+    const source = sources.find((s) => s.id === id);
+    if (source === void 0) throw new TrackerError("INVALID", `Unknown source "${id}": this project has ${known()}`);
+    return source;
+  };
+  const NO_LINKS = "tasks of different sources are never linked";
+  const targetOf = (input) => {
+    const asked = input.source === void 0 ? void 0 : named(input.source);
+    if (input.parentId === void 0) return asked ?? primarySource;
+    const parent = sourceOf(input.parentId);
+    if (asked !== void 0 && asked !== parent) {
+      throw new TrackerError(
+        "INVALID",
+        `A sub-task goes to its parent's source: ${input.parentId} is in ${parent.id}, not ${asked.id}; drop --source or pick a parent in ${asked.id}`
+      );
+    }
+    return parent;
+  };
+  const create = async (input) => {
+    const target = targetOf(input);
+    for (const b of input.blockedBy ?? []) {
+      const owner = sources.find((s) => s.owns(b));
+      if (owner !== void 0 && owner !== target) {
+        throw new TrackerError("INVALID", `Blocker ${b} is in ${owner.id}, but the new task goes to ${target.id}: ${NO_LINKS}`);
+      }
+    }
+    const { source: _source, ...rest } = input;
+    return target.create(rest);
+  };
+  const setParent = async (id, parentId) => {
+    const child = sourceOf(id);
+    const parent = sourceOf(parentId);
+    if (child !== parent) {
+      throw new TrackerError("INVALID", `${id} (${child.id}) and ${parentId} (${parent.id}) are in different sources: ${NO_LINKS}`);
+    }
+    return child.setParent(id, parentId);
+  };
   const listAll = async (opts = {}) => {
     const asked = opts.source === void 0 ? sources : sources.filter((s) => s.id === opts.source);
     if (asked.length === 0) {
-      throw new TrackerError("INVALID", `Unknown source "${opts.source}": this project has ${sources.map((s) => s.id).join(", ")}`);
+      throw new TrackerError("INVALID", `Unknown source "${opts.source}": this project has ${known()}`);
     }
     const results = await Promise.allSettled(asked.map((s) => s.list()));
     const failed = results.flatMap((r) => r.status === "rejected" ? [r.reason] : []);
@@ -1523,12 +1561,12 @@ var createCombinedTracker = (primary, sources) => {
     listAll,
     list: async () => (await listAll()).tasks,
     get: async (id) => sourceOf(id).get(id),
-    create: async (input) => primarySource.create(input),
+    create,
     setState: async (id, state2) => sourceOf(id).setState(id, state2),
     setType: async (id, type) => sourceOf(id).setType(id, type),
     edit: async (id, changes) => sourceOf(id).edit(id, changes),
     claim: async (id) => sourceOf(id).claim(id),
-    setParent: async (id, parentId) => sourceOf(id).setParent(id, parentId),
+    setParent,
     removeParent: async (id) => sourceOf(id).removeParent(id),
     close: async (id, opts) => sourceOf(id).close(id, opts),
     remove: async (id, opts) => sourceOf(id).remove(id, opts)
@@ -2148,6 +2186,7 @@ var newTask = (v) => {
   if (v.type !== void 0) task.type = str(v, "type");
   if (v.state !== void 0) task.state = state(v.state, "input.state");
   if (v.parentId !== void 0) task.parentId = str(v, "parentId");
+  if (v.source !== void 0) task.source = str(v, "source");
   if (v.blockedBy !== void 0) {
     const b = v.blockedBy;
     task.blockedBy = Array.isArray(b) && b.every((id) => typeof id === "string" && id.trim() !== "") ? b : invalid('"input.blockedBy" must be an array of task ids');

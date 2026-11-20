@@ -22,8 +22,9 @@ If `docs/agents/issue-tracker.md` is missing, ask the user which tracker they wa
    - `--parent <id>` makes it a ticket of that feature. Only tickets are picked up by `next`/`claim`; in a local tracker a task without `--parent` becomes a feature (`spec.md`). Find the feature id with `task-board list`, or create the feature first.
    - `--state ready-for-agent` only when it is fully specified; the default is `needs-triage`.
    - `--blocked-by <id>[,<id>...]` for tickets that must finish first (local: same feature).
+   - `--source <id>` (`local` or `github`) when the project has several sources (`## Additional sources` in `docs/agents/issue-tracker.md`). Without it the task goes to the primary source; with `--parent` it always goes to the parent's source. Tasks of different sources are never linked: a parent or blocker in another source is refused (exit code 4).
    - To put an **existing** task under a feature instead of creating a new one: `task-board parent <id> <parentId>`. In a local tracker the id changes (the file moves into the feature); use the id it prints from then on.
-3. The command prints `<id>  [state]  title`. Tell the user the id; the card appears on the ICF-kanban board.
+3. The command prints `<id>  [state]  title` (with several sources: `<id>  <source>  [state]  title`). Tell the user the id; the card appears on the ICF-kanban board.
 
 Add `--json` when you need the result as data. Exit codes: 0 ok, 2 usage, 4 tracker error (message on stderr).
 

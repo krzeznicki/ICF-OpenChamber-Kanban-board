@@ -225,3 +225,14 @@ test('withAdditionalSources keeps sections written after it by hand', () => {
   assert.match(again, /## Notes\n\nMine\.\n$/);
   assert.doesNotMatch(again, /Additional sources/);
 });
+
+test('the Additional sources section tells agents how to publish in each source and the linking rules', () => {
+  const text = withAdditionalSources(TEMPLATES.github, ['local']);
+  const section = text.slice(text.indexOf('## Additional sources'));
+  assert.match(section, /a new task goes there unless you name another source/);
+  assert.match(section, /^- `local`: .*`task-board create --source local --title <title>/m);
+  assert.match(section, /`\.scratch\/`/);
+  assert.match(section, /--parent.*parent's source/);
+  assert.match(section, /never linked/);
+  assert.match(section, /list.*next.*--source/);
+});

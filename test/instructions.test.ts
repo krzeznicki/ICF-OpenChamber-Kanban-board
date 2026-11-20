@@ -120,3 +120,16 @@ test('the service sets instructions once at start, with the CLI path, and keeps 
   assert.match(set[0]!.input.text, /node ".*task-board\.mjs"/);
   assert.match(stderr, /setting agent instructions/);
 });
+
+test('instructions and skills know --source: create picks a source, a sub-task follows its parent, list/next can narrow', () => {
+  assert.ok(instructionsText(CLI).includes('[--source <id>]'));
+  const create = readFileSync(`${root}skills/icf-kanban-create/SKILL.md`, 'utf8');
+  assert.match(create, /--source <id>/);
+  assert.match(create, /primary source/);
+  assert.match(create, /parent's source/);
+  assert.match(create, /never linked/);
+  for (const name of ['icf-kanban-next', 'icf-kanban-status']) {
+    const text = readFileSync(`${root}skills/${name}/SKILL.md`, 'utf8');
+    assert.match(text, /--source/, name);
+  }
+});
