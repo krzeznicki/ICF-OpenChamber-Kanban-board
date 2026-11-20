@@ -6,14 +6,19 @@ import type { SourceError, SourceInfo } from './api.ts';
 /** One failed source's banner above the columns; `action` retries the load. */
 export type SourceBanner = { source: string; tone: 'warning'; title: string; body: string; action: string };
 
-/** The banner of each failed source, in the order the service reported them. */
-export const sourceBanners = (errors: readonly SourceError[], sources: readonly SourceInfo[]): SourceBanner[] =>
-  errors.map((e) => {
+/**
+ * The banner of each failed source, in the order the service reported them, then one per config
+ * warning (/config/read's `warnings`: an unknown source under Additional sources, skipped).
+ */
+export const sourceBanners = (errors: readonly SourceError[], sources: readonly SourceInfo[], warnings: readonly string[] = []): SourceBanner[] => [
+  ...errors.map((e): SourceBanner => {
     const label = sources.find((s) => s.id === e.source)?.label ?? e.source;
     return e.availability === 'needs-login'
       ? { source: e.source, tone: 'warning', title: `${label} needs a login`, body: `Log in, then try again: ${e.message}`, action: 'Try again' }
       : { source: e.source, tone: 'warning', title: `${label} unavailable`, body: e.message, action: 'Try again' };
-  });
+  }),
+  ...warnings.map((w): SourceBanner => ({ source: '', tone: 'warning', title: 'A source in issue-tracker.md was skipped', body: w, action: 'Try again' })),
+];
 
 /** The source an id belongs to, as core/sources.ts's adapters `owns` it; null for an id of no known source. */
 const sourceOfId = (id: string): string | null => {

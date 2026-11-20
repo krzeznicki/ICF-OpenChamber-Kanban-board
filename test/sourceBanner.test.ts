@@ -44,6 +44,14 @@ test('sourceBanners: a source the panel does not know is named by its id', () =>
   assert.equal(b?.title, 'jira unavailable');
 });
 
+test('sourceBanners: a config warning (an unknown source skipped) gets its own banner after the failed sources', () => {
+  const warning = 'Unknown source "jira" under ## Additional sources in docs/agents/issue-tracker.md is skipped';
+  const banners = sourceBanners([down], SOURCES, [warning]);
+  assert.equal(banners.length, 2);
+  assert.equal(banners[1]?.title, 'A source in issue-tracker.md was skipped');
+  assert.equal(banners[1]?.body, warning);
+});
+
 test('listedBoard: the tasks of the sources that listed, and nothing unlisted when all answered', () => {
   const tasks = [task('.scratch/a/spec.md', 'local'), task('#1', 'github')];
   const r = listedBoard({ tasks, errors: [] });

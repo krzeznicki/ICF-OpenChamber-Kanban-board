@@ -412,7 +412,7 @@ const draw = (): void => {
   }
   const { sources } = state.config;
   board.setSources(sourceSwitcher(sources), view);
-  board.setSourceBanners(sourceBanners(state.sourceErrors, sources), () => void load());
+  board.setSourceBanners(sourceBanners(state.sourceErrors, sources, state.config.warnings ?? []), () => void load());
   const marks = archivedTasks();
   const archivedCount = archivedShown(tasks, marks);
   if (archivedCount === 0) state.showArchived = false;

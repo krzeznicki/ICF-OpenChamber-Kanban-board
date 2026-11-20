@@ -27,6 +27,8 @@ export type ProjectConfig = {
   primary: 'local' | 'github';
   sources: SourceInfo[];
   labels: Record<string, string>;
+  /** Problems that do not stop the board (an unknown source under Additional sources, skipped). */
+  warnings?: string[];
 };
 
 /** Mirrors core/sources.ts's SourceError: a source that failed while listing; the others still listed. */
