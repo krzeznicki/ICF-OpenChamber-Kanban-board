@@ -272,6 +272,9 @@ Commands:
                                         which changes in a local tracker: the file moves)
   next                                  first ready-for-agent ticket with no open blocker
   close <id> [--with-children]          close a task (and a feature's tickets)
+  publish <id> [--to github]            publish a local task to GitHub: an issue (a feature's
+                                        tickets become sub-issues), then the local files are closed
+                                        with a link; if GitHub fails half way nothing local closes
   init <local|github>                   write docs/agents/issue-tracker.md
 
 Options for every command:
@@ -285,6 +288,8 @@ Exit codes: 0 ok, 2 usage, 3 nothing found, 4 tracker error
 ```
 
 Ids are paths locally (`.scratch/login/issues/01-empty-password.md`, `.scratch/login/spec.md`) and `#<number>` on GitHub. Locally, a task created without `--parent` becomes a feature (`spec.md`). Only a `ready-for-agent` ticket can be claimed.
+
+`publish <id> --to github` (projects with a GitHub source) turns a local task into a GitHub issue with its title, description, type and state label; a feature's tickets become sub-issues, and blockers between them point at the new issues. Then the local files are set to done with a `## Comments` line linking their issue. If GitHub fails half way, the error names the issues already created and nothing local is closed. The task modal's Settings section offers the same as "Publish to GitHub" on an open local task.
 
 `parent <id> <parentId>` links an existing task under an existing parent. On GitHub it sets the native parent (`gh issue edit --parent`, replacing an old one) and the number stays. Locally the file moves: a ticket of another feature becomes the parent feature's next ticket (renumbered; its `Blocked by` numbers are dropped, and its old feature's tickets that listed it lose that blocker), and a feature with no tickets becomes a ticket and its folder is removed. A feature with tickets or with other files in its folder, a ticket as the parent, the task itself, its current parent or (GitHub) one of its own descendants are refused (exit 4). The new id is printed; the board's session links and queued start follow it.
 
