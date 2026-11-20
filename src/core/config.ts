@@ -21,6 +21,8 @@ export type ProjectConfig = {
   /** Every source of the project, the primary first; one entry when there is no Additional sources section. */
   sources: SourceId[];
   labels: Record<LabelRole, string>;
+  /** Problems that do not stop the board, such as an unknown source under Additional sources (skipped). */
+  warnings: string[];
 };
 
 const DIR = 'docs/agents';
@@ -53,7 +55,19 @@ const ADDITIONAL = 'Additional sources';
 const ADDITIONAL_HEADING = /^ {0,3}##\s+additional sources\s*#*\s*$/i;
 /** A heading that ends the section: level 1 or 2. */
 const SECTION_END = /^ {0,3}#{1,2}\s/;
-const SOURCE_ITEM = /^\s*[-*+]\s+`?([A-Za-z][\w.-]*)`?/;
+/**
+ * A source line: a list item that starts with a backticked id (`` - `github`: ... ``) or is only an
+ * id (`- github`). Any other item (`- Ask Ola before closing`) is a hand-written note.
+ */
+const SOURCE_ITEM = /^\s*[-*+]\s+(?:`([A-Za-z][\w.-]*)`(?=[\s:.,;]|$)|([A-Za-z][\w.-]*)\s*$)/;
+
+const isSourceId = (id: string): id is SourceId => (SOURCE_IDS as readonly string[]).includes(id);
+
+/** The id a source line names (lower case), or null for any other line. */
+const sourceItem = (line: string): string | null => {
+  const m = SOURCE_ITEM.exec(line);
+  return m === null ? null : (m[1] ?? m[2]!).toLowerCase();
+};
 
 /** The Additional sources section's line range in `lines` (end exclusive), or null. */
 const additionalRange = (lines: string[]): { start: number; end: number } | null => {
@@ -64,25 +78,27 @@ const additionalRange = (lines: string[]): { start: number; end: number } | null
   return { start, end };
 };
 
-/** The ids listed (one `- \`<id>\`` item each) in the Additional sources section; an unknown id is UNSUPPORTED. */
-const additionalSources = (text: string): SourceId[] => {
+/** The message for a source line naming a source ICF-kanban does not know; that line is skipped. */
+const unknownSourceWarning = (id: string): string =>
+  `Unknown source "${id}" under ## ${ADDITIONAL} in ${ISSUE_TRACKER} is skipped: ICF-kanban supports ${SOURCE_IDS.join(' and ')}`;
+
+/**
+ * The ids listed (one source line each) in the Additional sources section, and a warning per
+ * source line naming an unknown source. Other lines are notes and are ignored.
+ */
+const additionalSources = (text: string): { ids: SourceId[]; warnings: string[] } => {
   const lines = text.split(/\r?\n/);
   const range = additionalRange(lines);
-  if (range === null) return [];
-  const out: SourceId[] = [];
+  const ids: SourceId[] = [];
+  const warnings: string[] = [];
+  if (range === null) return { ids, warnings };
   for (const line of lines.slice(range.start + 1, range.end)) {
-    const m = SOURCE_ITEM.exec(line);
-    if (m === null) continue;
-    const id = m[1]!.toLowerCase();
-    if (!(SOURCE_IDS as readonly string[]).includes(id)) {
-      throw new TrackerError(
-        'UNSUPPORTED',
-        `Unsupported source "${m[1]}" under ## ${ADDITIONAL} in ${ISSUE_TRACKER}: ICF-kanban supports ${SOURCE_IDS.join(' and ')}`,
-      );
-    }
-    if (!out.includes(id as SourceId)) out.push(id as SourceId);
+    const id = sourceItem(line);
+    if (id === null) continue;
+    if (!isSourceId(id)) warnings.push(unknownSourceWarning(id));
+    else if (!ids.includes(id)) ids.push(id);
   }
-  return out;
+  return { ids, warnings };
 };
 
 /** What each source is, for agents; its line in the Additional sources section. */
@@ -109,19 +125,53 @@ export const additionalSourcesSection = (ids: readonly SourceId[]): string =>
     '',
   ].join('\n');
 
+/** Every line additionalSourcesSection writes besides the source lines (to tell them from hand-written ones). */
+const GENERATED = new Set(
+  additionalSourcesSection(SOURCE_IDS)
+    .split('\n')
+    .filter((l) => l.trim() !== '' && sourceItem(l) === null),
+);
+
 /**
- * `text` (issue-tracker.md) with its Additional sources section replaced by one for `ids`, at the
- * end of the file; `[]` removes the section. Other sections, also ones after it, are kept.
+ * issue-tracker.md split around its Additional sources section: the text before and after it, and
+ * the section's hand-written lines (notes, unknown sources): everything but the lines
+ * additionalSourcesSection writes and the known sources' lines.
  */
-export const withAdditionalSources = (text: string, ids: readonly SourceId[]): string => {
+const splitAdditional = (text: string): { before: string; after: string; notes: string } => {
   const lines = text.split('\n');
   const range = additionalRange(lines);
-  const before = range === null ? text : lines.slice(0, range.start).join('\n');
-  const after = range === null ? '' : lines.slice(range.end).join('\n').replace(/\s+$/, '');
-  let out = `${before.replace(/\s+$/, '')}\n`;
-  if (after !== '') out += `\n${after}\n`;
+  if (range === null) return { before: text, after: '', notes: '' };
+  const kept = lines.slice(range.start + 1, range.end).filter((l) => {
+    const id = sourceItem(l);
+    return !GENERATED.has(l) && (id === null || !isSourceId(id));
+  });
+  return {
+    before: lines.slice(0, range.start).join('\n'),
+    after: lines.slice(range.end).join('\n'),
+    notes: kept.join('\n').replace(/\n{3,}/g, '\n\n').trim(),
+  };
+};
+
+/** `head`, `after` and an Additional sources section for `ids` plus the hand-written `notes`, at the end. */
+const assemble = (head: string, after: string, ids: readonly SourceId[], notes: string): string => {
+  let out = `${head.replace(/\s+$/, '')}\n`;
+  const rest = after.replace(/\s+$/, '');
+  if (rest.trim() !== '') out += `\n${rest.replace(/^\n+/, '')}\n`;
   if (ids.length > 0) out += `\n${additionalSourcesSection(ids)}`;
+  else if (notes !== '') out += `\n## ${ADDITIONAL}\n`;
+  if (notes !== '') out += `\n${notes}\n`;
   return out;
+};
+
+/**
+ * `text` (issue-tracker.md) with its Additional sources section replaced by one for `ids`, at the
+ * end of the file; `[]` removes the section. Other sections, also ones after it, are kept, and so
+ * are hand-written lines inside the section (notes, a source ICF-kanban does not know): with `[]`
+ * the section then stays with only those.
+ */
+export const withAdditionalSources = (text: string, ids: readonly SourceId[]): string => {
+  const { before, after, notes } = splitAdditional(text);
+  return assemble(before, after, ids, notes);
 };
 
 const detect = (text: string): TrackerKind => {
@@ -165,8 +215,9 @@ export const readConfig = async (root: string): Promise<ProjectConfig> => {
     throw new TrackerError('NOT_CONFIGURED', `No ${ISSUE_TRACKER}: choose a tracker (Local Markdown or GitHub) first`);
   }
   const primary = detect(tracker);
-  const sources = [primary, ...additionalSources(tracker).filter((id) => id !== primary)];
-  return { tracker: primary, primary, sources, labels: await readLabels(root) };
+  const additional = additionalSources(tracker);
+  const sources = [primary, ...additional.ids.filter((id) => id !== primary)];
+  return { tracker: primary, primary, sources, labels: await readLabels(root), warnings: additional.warnings };
 };
 
 /** Writes `path` only when it does not exist yet. */
@@ -202,7 +253,7 @@ export class EditedTemplateError extends TrackerError {
   constructor(primary: SourceId) {
     super(
       'INVALID',
-      `The ${primary} part of ${ISSUE_TRACKER} was edited by hand; changing the primary source replaces it with the new template and the edits are lost. Run it again with force (--force) to go ahead.`,
+      `The ${primary} template in ${ISSUE_TRACKER} was edited by hand; changing the primary source replaces that template (its own sections) with the new one, and the edits in it are lost. The sections added after it are kept, and so is ## ${ADDITIONAL}. Run it again with force (--force) to go ahead.`,
     );
     this.name = 'EditedTemplateError';
     this.primary = primary;
@@ -228,11 +279,30 @@ const changedText = (text: string, config: ProjectConfig, change: SourceChange, 
   const primary = change.primary;
   if (primary === config.primary) return text;
   const rest = [config.primary, ...others].filter((id) => id !== primary);
-  const base = withAdditionalSources(text, []);
+  const { before, after, notes } = splitAdditional(text);
+  const base = assemble(before, after, [], '');
   const old = TEMPLATES[config.primary];
   if (!base.startsWith(old) && !force) throw new EditedTemplateError(config.primary);
-  const kept = base.startsWith(old) ? base.slice(old.length) : '';
-  return withAdditionalSources(`${TEMPLATES[primary]}${kept}`, rest);
+  const kept = base.startsWith(old) ? base.slice(old.length) : `\n${base.slice(templateEnd(base, old))}`;
+  return assemble(`${TEMPLATES[primary]}${kept}`, '', rest, notes);
+};
+
+/** Level 1-2 heading lines of a markdown text, as their titles. */
+const sectionTitles = (text: string): Set<string> =>
+  new Set(text.split('\n').flatMap((l) => (SECTION_END.test(l) ? [HEADING.exec(l)?.[1] ?? l] : [])));
+
+/**
+ * Where a hand-edited copy of `template` ends in `text`: at the first level 1-2 heading the template
+ * does not have (a section added after it), else at the end.
+ */
+const templateEnd = (text: string, template: string): number => {
+  const own = sectionTitles(template);
+  let at = 0;
+  for (const line of text.split('\n')) {
+    if (at > 0 && SECTION_END.test(line) && !own.has(HEADING.exec(line)?.[1] ?? line)) return at;
+    at += line.length + 1;
+  }
+  return text.length;
 };
 
 /**

@@ -67,12 +67,12 @@ test('local fixture is detected as local with default labels', async (t) => {
     'issue-tracker.md': await fixture('issue-tracker-local.md'),
     'triage-labels.md': await fixture('triage-labels.md'),
   });
-  assert.deepEqual(await readConfig(root), { tracker: 'local', primary: 'local', sources: ['local'], labels: DEFAULT_LABELS });
+  assert.deepEqual(await readConfig(root), { tracker: 'local', primary: 'local', sources: ['local'], labels: DEFAULT_LABELS, warnings: [] });
 });
 
 test('github fixture is detected as github', async (t) => {
   const root = await repo(t, { 'issue-tracker.md': await fixture('issue-tracker-github.md') });
-  assert.deepEqual(await readConfig(root), { tracker: 'github', primary: 'github', sources: ['github'], labels: DEFAULT_LABELS });
+  assert.deepEqual(await readConfig(root), { tracker: 'github', primary: 'github', sources: ['github'], labels: DEFAULT_LABELS, warnings: [] });
 });
 
 test('gitlab fixture is UNSUPPORTED and names the heading', async (t) => {
@@ -134,7 +134,7 @@ test('writeConfig writes Matt\'s templates for a fresh repo', async (t) => {
   await writeConfig(root, 'local');
   assert.equal(await readFile(join(root, 'docs/agents/issue-tracker.md'), 'utf8'), await fixture('issue-tracker-local.md'));
   assert.equal(existsSync(join(root, 'docs/agents/triage-labels.md')), false, 'triage-labels.md must not be created');
-  assert.deepEqual(await readConfig(root), { tracker: 'local', primary: 'local', sources: ['local'], labels: DEFAULT_LABELS });
+  assert.deepEqual(await readConfig(root), { tracker: 'local', primary: 'local', sources: ['local'], labels: DEFAULT_LABELS, warnings: [] });
 
   const gh = await repo(t);
   await writeConfig(gh, 'github');
@@ -201,10 +201,38 @@ test('the primary source listed again under Additional sources counts once', asy
   assert.deepEqual((await readConfig(root)).sources, ['github', 'local']);
 });
 
-test('an unknown additional source is UNSUPPORTED and named', async (t) => {
-  const text = `${TEMPLATES.local}\n## Additional sources\n\n- \`jira\`: Jira.\n`;
+test('an unknown additional source is skipped and named in the warnings; the known ones still count', async (t) => {
+  const text = `${TEMPLATES.local}\n## Additional sources\n\n- \`jira\`: Jira.\n- \`github\`\n`;
   const root = await repo(t, { 'issue-tracker.md': text });
-  await rejectsWith(readConfig(root), 'UNSUPPORTED', /jira/);
+  const config = await readConfig(root);
+  assert.deepEqual(config.sources, ['local', 'github']);
+  assert.equal(config.warnings.length, 1);
+  assert.match(config.warnings[0]!, /jira/);
+});
+
+test('hand-written notes under Additional sources are not sources and give no warning', async (t) => {
+  const text = `${TEMPLATES.local}\n## Additional sources\n\n- \`github\`\n- Ask Ola before closing GitHub issues.\n* note: the bot labels issues\n`;
+  const root = await repo(t, { 'issue-tracker.md': text });
+  const config = await readConfig(root);
+  assert.deepEqual(config.sources, ['local', 'github']);
+  assert.deepEqual(config.warnings, []);
+});
+
+test('a project without unknown sources has no warnings', async (t) => {
+  const root = await repo(t, { 'issue-tracker.md': withAdditionalSources(TEMPLATES.local, ['github']) });
+  assert.deepEqual((await readConfig(root)).warnings, []);
+});
+
+test('rewriting the Additional sources keeps hand-written lines in it, also an unknown source', () => {
+  const text = `${withAdditionalSources(TEMPLATES.local, ['github'])}\nOur GitHub board is triaged on Mondays.\n- \`jira\`: later\n`;
+  const again = withAdditionalSources(text, ['github']);
+  assert.match(again, /Our GitHub board is triaged on Mondays\./);
+  assert.match(again, /- `jira`: later/);
+  assert.equal(withAdditionalSources(again, ['github']), again, 'stable on a second rewrite');
+  const removed = withAdditionalSources(text, []);
+  assert.match(removed, /## Additional sources/, 'the section stays while it holds hand-written text');
+  assert.match(removed, /triaged on Mondays/);
+  assert.doesNotMatch(removed, /--source github/);
 });
 
 test('withAdditionalSources writes a section readConfig reads back, and [] removes it', async (t) => {
@@ -303,6 +331,20 @@ test('a primary template edited by hand is not replaced without force; with forc
   const config = await changeSources(root, { primary: 'github' }, { force: true });
   assert.equal(config.primary, 'github');
   assert.equal(await trackerFile(root), withAdditionalSources(TEMPLATES.github, ['local']));
+});
+
+test('with force an edited template is replaced, but sections added after it are kept, and the warning says so', async (t) => {
+  const edited = TEMPLATES.local.replace('one file per ticket', 'one file per ticket (we number from 10)');
+  const text = `${edited}\n## Our notes\n\nKeep PRs small.\n\n## Additional sources\n\n- \`github\`\nTriaged on Mondays.\n`;
+  const root = await repo(t, { 'issue-tracker.md': text });
+  await rejectsWith(changeSources(root, { primary: 'github' }), 'INVALID', /local template.*sections added after it are kept/s);
+  await changeSources(root, { primary: 'github' }, { force: true });
+  const out = await trackerFile(root);
+  assert.ok(out.startsWith(TEMPLATES.github), out);
+  assert.doesNotMatch(out, /we number from 10/);
+  assert.match(out, /## Our notes\n\nKeep PRs small\./);
+  assert.match(out, /Triaged on Mondays\./);
+  assert.deepEqual((await readConfig(root)).sources, ['github', 'local']);
 });
 
 test('changing the sources of an unconfigured project is NOT_CONFIGURED', async (t) => {
