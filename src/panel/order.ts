@@ -39,10 +39,13 @@ export const parseOrder = (raw: unknown): string[] =>
 export const renameInOrder = (order: readonly string[], from: string, to: string): string[] =>
   order.includes(from) ? order.filter((id) => id !== to).map((id) => (id === from ? to : id)) : [...order];
 
-/** Before a write: ids of tasks the tracker no longer lists (deleted, long-closed issues) are dropped. */
-export const pruneOrder = (order: readonly string[], tasks: readonly Task[]): string[] => {
+/**
+ * Before a write: ids of tasks the tracker no longer lists (deleted, long-closed issues) are dropped.
+ * `unlisted(id)` keeps the ids of a source that failed to list (sourceBanner.ts's listedBoard).
+ */
+export const pruneOrder = (order: readonly string[], tasks: readonly Task[], unlisted: (id: string) => boolean = () => false): string[] => {
   const listed = new Set(tasks.map((t) => t.id));
-  return order.filter((id) => listed.has(id));
+  return order.filter((id) => listed.has(id) || unlisted(id));
 };
 
 /** Deleted tasks lose their places (their ids could otherwise linger until the next reorder). */
