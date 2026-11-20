@@ -42,6 +42,9 @@ export const publishTask = async (root: string, tracker: CombinedTracker, id: st
   if (task.source !== 'local') {
     throw new TrackerError('INVALID', `Only a local task can be published to GitHub; ${task.id} is in ${task.source}`);
   }
+  if (task.state === 'done') {
+    throw new TrackerError('INVALID', `${task.id} is done (already published?); reopen it to publish it`);
+  }
   const tickets =
     task.kind === 'parent'
       ? blockersFirst(

@@ -95,7 +95,7 @@ var additionalSourcesSection = (ids) => [
   ...ids.map((id) => `- \`${id}\`: ${SOURCE_TEXT[id]}. Publish there with \`task-board create --source ${id} --title <title> ...\`.`),
   "",
   "A sub-task (`task-board create --parent <id>`) always goes to its parent's source; naming another source is refused. Tasks of different sources are never linked: no parent or blocker across sources.",
-  "Every other command (`show`, `state`, `claim`, `parent`, `close`) works on an id from any source. `list` and `next` read every source and name each task's source; `--source <id>` reads only that one.",
+  "Every other command (`show`, `state`, `edit`, `claim`, `parent`, `close`, `delete`) works on an id from any source. `list` and `next` read every source and name each task's source; `--source <id>` reads only that one.",
   ""
 ].join("\n");
 var GENERATED = new Set(
@@ -1464,6 +1464,9 @@ var publishTask = async (root, tracker, id) => {
   const task = await tracker.get(id);
   if (task.source !== "local") {
     throw new TrackerError("INVALID", `Only a local task can be published to GitHub; ${task.id} is in ${task.source}`);
+  }
+  if (task.state === "done") {
+    throw new TrackerError("INVALID", `${task.id} is done (already published?); reopen it to publish it`);
   }
   const tickets = task.kind === "parent" ? blockersFirst(
     (await tracker.listAll({ source: "local" })).tasks.filter((t) => t.parentId === task.id).sort((a, b) => a.id.localeCompare(b.id, void 0, { numeric: true }))

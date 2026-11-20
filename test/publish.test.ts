@@ -126,15 +126,16 @@ test('a logged-out gh fails before anything is created and leaves the local task
 });
 
 test('a done task whose new issue cannot be closed still reports the issue as created', async (t) => {
-  const { root, gh, second, tracker } = await setup(t, { failClose: (n) => n === 2 });
+  // The feature becomes #2, its tickets #3 (Form) and #4 (Errors, done: created open, then closed).
+  const { root, gh, spec, second, tracker } = await setup(t, { failClose: (n) => n === 4 });
   await tracker.setState(second.id, 'done');
-  await assert.rejects(publishTask(root, tracker, second.id), (e: unknown) => {
+  await assert.rejects(publishTask(root, tracker, spec.id), (e: unknown) => {
     assert.ok(e instanceof TrackerError, String(e));
     assert.equal(e.code, 'FAILED');
-    assert.match(e.message, /Created on GitHub: #2 \(Errors\)/);
+    assert.match(e.message, /#4 \(Errors\)/);
     return true;
   });
-  assert.equal(gh.issues.find((i) => i.number === 2)?.title, 'Errors');
+  assert.equal(gh.issues.find((i) => i.number === 4)?.title, 'Errors');
   assert.doesNotMatch(await readFile(join(root, second.id), 'utf8'), /Published to GitHub/);
 });
 
@@ -172,4 +173,12 @@ test('a partial failure says what was created and leaves every local file open',
     assert.notEqual((await tracker.get(id)).state, 'done', id);
     assert.doesNotMatch(await readFile(join(root, id), 'utf8'), /Published to GitHub/, id);
   }
+});
+
+test('a done local task (for example one already published) is not published again', async (t) => {
+  const { root, gh, spec, tracker } = await setup(t);
+  await publishTask(root, tracker, spec.id);
+  const issues = gh.issues.length;
+  await rejectsWith(publishTask(root, tracker, spec.id), 'INVALID', /done/i);
+  assert.equal(gh.issues.length, issues, 'no duplicate issues');
 });

@@ -113,7 +113,7 @@ export const additionalSourcesSection = (ids: readonly SourceId[]): string =>
     ...ids.map((id) => `- \`${id}\`: ${SOURCE_TEXT[id]}. Publish there with \`task-board create --source ${id} --title <title> ...\`.`),
     '',
     "A sub-task (`task-board create --parent <id>`) always goes to its parent's source; naming another source is refused. Tasks of different sources are never linked: no parent or blocker across sources.",
-    'Every other command (`show`, `state`, `claim`, `parent`, `close`) works on an id from any source. `list` and `next` read every source and name each task\'s source; `--source <id>` reads only that one.',
+    'Every other command (`show`, `state`, `edit`, `claim`, `parent`, `close`, `delete`) works on an id from any source. `list` and `next` read every source and name each task\'s source; `--source <id>` reads only that one.',
     '',
   ].join('\n');
 
