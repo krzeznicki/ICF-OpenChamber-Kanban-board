@@ -343,6 +343,30 @@ export const withDescription = (text: string, description: string): string => {
   return text.includes('\r\n') ? out.replace(/\n/g, '\r\n') : out;
 };
 
+/**
+ * Appends `comment` as a paragraph at the end of the `## Comments` section (issue-tracker-local.md:
+ * comments go at the bottom under that heading), adding the section at the end of the file when it
+ * has none. CRLF files stay CRLF.
+ */
+export const withComment = (text: string, comment: string): string => {
+  const crlf = text.includes('\r\n');
+  const lines = splitLines(text.replace(/\r\n/g, '\n'));
+  const plain = plainLines(lines, false);
+  const at = plain.find(([, c]) => /^## Comments\s*$/i.test(c))?.[0];
+  const body = comment.replace(/\r\n/g, '\n').trim();
+  let out: string;
+  if (at === undefined) {
+    out = `${text.replace(/\r\n/g, '\n').replace(/\s+$/, '')}\n\n## Comments\n\n${body}\n`;
+  } else {
+    // The section ends at the next `## ` heading (an `## Answer` after it, say).
+    const end = plain.find(([i, c]) => i > at && SECTION.test(c))?.[0] ?? lines.length;
+    const before = lines.slice(0, end).join('\n').replace(/\s+$/, '');
+    const after = lines.slice(end).join('\n').replace(/\s+$/, '');
+    out = `${before}\n\n${body}\n${after === '' ? '' : `\n${after}\n`}`;
+  }
+  return crlf ? out.replace(/\n/g, '\r\n') : out;
+};
+
 /** The file's field lines sit on consecutive lines (createParent writes them so). */
 const fieldsTight = (text: string): boolean => {
   const f = headerFields(splitLines(text));

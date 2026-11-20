@@ -8,6 +8,7 @@ import {
   parseSpec,
   patchLine,
   renderIssue,
+  withComment,
 } from '../src/core/localFormat.ts';
 
 const fixture = (rel: string): string =>
@@ -258,4 +259,13 @@ test('issueDescription drops the heading, the header field lines and ## Comments
   const text = '# 03: Third\r\n\r\nLead.\r\n\r\n**Blocked by:** 02\r\n\r\nStatus: claimed\r\n\r\n- [ ] a\r\n\r\n## Notes\r\n\r\nkeep\r\n\r\n## Answer\r\n\r\nx\r\n';
   assert.equal(issueDescription(text), 'Lead.\n\n- [ ] a\n\n## Notes\n\nkeep');
   assert.equal(issueDescription('# Title only\n'), '');
+});
+
+test('withComment appends to the end of ## Comments, before a later section, or adds the section', () => {
+  assert.equal(withComment('# 01: X\n\n**Status:** ready-for-agent\n', 'Hi'), '# 01: X\n\n**Status:** ready-for-agent\n\n## Comments\n\nHi\n');
+  assert.equal(
+    withComment('# 01: X\n\n## Comments\n\nFirst\n\n## Answer\n\nYes\n', 'Second'),
+    '# 01: X\n\n## Comments\n\nFirst\n\nSecond\n\n## Answer\n\nYes\n',
+  );
+  assert.equal(withComment('# X\r\n\r\nBody\r\n', 'Hi'), '# X\r\n\r\nBody\r\n\r\n## Comments\r\n\r\nHi\r\n');
 });
