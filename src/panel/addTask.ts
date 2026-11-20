@@ -5,6 +5,7 @@
 // local tracker rejects any other). GitHub: any open issue may be a blocker, and any open issue can
 // take sub-tasks (it becomes a parent).
 import type { NewTask, Task, TaskState } from '../core/types.ts';
+import type { SourceInfo } from './api.ts';
 import { newChildCandidates } from './link.ts';
 import type { CardOptions } from './settings.ts';
 
@@ -33,6 +34,8 @@ export type AddDraft = {
   existing: string[];
   /** The card's start options, saved under card:<projectId>:<taskId> once the task exists. */
   start: CardOptions;
+  /** The source the task is created in (addSource); '' = the primary. A parent's source wins. */
+  source: string;
 };
 
 /** `suggest`: Type and State start on "Let the model pick" (the setting is on and a model may answer). */
@@ -46,6 +49,7 @@ export const emptyDraft = (suggest = false): AddDraft => ({
   subtasks: [],
   existing: [],
   start: {},
+  source: '',
 });
 
 /**
@@ -57,11 +61,49 @@ export const isDirty = (draft: AddDraft, initial: AddDraft = emptyDraft()): bool
   draft.body.trim() !== '' ||
   draft.subtasks.some((row) => row.trim() !== '') ||
   draft.type !== initial.type ||
+  draft.source !== initial.source ||
   draft.parentId !== initial.parentId ||
   draft.state !== initial.state ||
   draft.blockedBy.length > 0 ||
   draft.existing.length > 0 ||
   Object.values(draft.start).some((v) => v !== undefined);
+
+/**
+ * Where Add task creates (ADR 0001): the source picked in the switcher (`view`), with no picker. In
+ * All the form shows a picker of the sources that can create, starting on the primary (or the first
+ * one that can). One such source left: no picker. Null `view` (no config yet): the primary.
+ */
+export const addSource = (
+  view: string | null,
+  sources: readonly SourceInfo[],
+  primary: string,
+): { source: string; picker: Choice[] | null } => {
+  if (view !== null && view !== 'all') return { source: view, picker: null };
+  const creatable = sources.filter((s) => s.capabilities.create);
+  const source = creatable.some((s) => s.id === primary) ? primary : (creatable[0]?.id ?? primary);
+  return { source, picker: creatable.length > 1 ? creatable.map((s) => ({ id: s.id, label: s.label })) : null };
+};
+
+/** The tasks of `source`: Add task offers parents, blockers and existing sub-tasks only from it. */
+export const sourceTasks = (tasks: readonly Task[], source: string): Task[] => tasks.filter((t) => t.source === source);
+
+/**
+ * The draft once `source` is chosen: a parent, blockers and existing sub-tasks of another source go
+ * (tasks of different sources are never linked), and so does what `capabilities` say the source
+ * cannot do (a parent and sub-tasks without `subtasks`, blockers without `blockedBy`).
+ */
+export const withSource = (d: AddDraft, source: string, tasks: readonly Task[], capabilities: SourceInfo['capabilities']): AddDraft => {
+  const own = new Set(sourceTasks(tasks, source).map((t) => t.id));
+  const subtasks = capabilities.subtasks;
+  return {
+    ...d,
+    source,
+    parentId: subtasks && own.has(d.parentId) ? d.parentId : '',
+    blockedBy: capabilities.blockedBy ? d.blockedBy.filter((id) => own.has(id)) : [],
+    existing: subtasks ? d.existing.filter((id) => own.has(id)) : [],
+    subtasks: subtasks ? d.subtasks : [],
+  };
+};
 
 /** States a new task may start in: the open ones (done and wontfix are reached by moving it). */
 export const CREATE_STATES: readonly TaskState[] = ['needs-triage', 'needs-info', 'ready-for-agent', 'ready-for-human'];
@@ -142,7 +184,7 @@ export const toNewTask = (d: AddDraft, tracker: TrackerKind): NewTask => {
     state: d.state === MODEL_PICK ? 'needs-triage' : d.state,
     ...(type !== null ? { type } : {}),
     ...(body !== '' ? { body } : {}),
-    ...(d.parentId !== '' ? { parentId: d.parentId } : {}),
+    ...(d.parentId !== '' ? { parentId: d.parentId } : d.source !== '' ? { source: d.source } : {}),
     ...(blockers.length > 0 ? { blockedBy: [...blockers] } : {}),
   };
 };

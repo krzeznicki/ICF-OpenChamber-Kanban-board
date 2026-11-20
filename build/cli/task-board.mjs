@@ -80,6 +80,35 @@ var additionalSources = (text) => {
   }
   return out;
 };
+var SOURCE_TEXT = {
+  local: "markdown files under `.scratch/` in this repository (private: they stay with the repository checkout; ids look like `.scratch/<feature>/spec.md`)",
+  github: "this repository's GitHub Issues (shared with the team; ids look like `#42`)"
+};
+var additionalSourcesSection = (ids) => [
+  `## ${ADDITIONAL}`,
+  "",
+  "The Kanban board also shows tasks from the sources below. Everything above describes the primary source: a new task goes there unless you name another source.",
+  "",
+  ...ids.map((id) => `- \`${id}\`: ${SOURCE_TEXT[id]}. Publish there with \`task-board create --source ${id} --title <title> ...\`.`),
+  "",
+  "A sub-task (`task-board create --parent <id>`) always goes to its parent's source; naming another source is refused. Tasks of different sources are never linked: no parent or blocker across sources.",
+  "Every other command (`show`, `state`, `claim`, `parent`, `close`) works on an id from any source. `list` and `next` read every source and name each task's source; `--source <id>` reads only that one.",
+  ""
+].join("\n");
+var withAdditionalSources = (text, ids) => {
+  const lines = text.split("\n");
+  const range = additionalRange(lines);
+  const before = range === null ? text : lines.slice(0, range.start).join("\n");
+  const after = range === null ? "" : lines.slice(range.end).join("\n").replace(/\s+$/, "");
+  let out = `${before.replace(/\s+$/, "")}
+`;
+  if (after !== "") out += `
+${after}
+`;
+  if (ids.length > 0) out += `
+${additionalSourcesSection(ids)}`;
+  return out;
+};
 var detect = (text) => {
   const heading = firstHeading(text);
   if (heading === null) {
@@ -130,6 +159,49 @@ var writeConfig = async (root, tracker) => {
   }
   await mkdir(join(root, DIR), { recursive: true });
   await writeNew(join(root, ISSUE_TRACKER), tracker === "local" ? TEMPLATES.local : TEMPLATES.github);
+};
+var EditedTemplateError = class extends TrackerError {
+  /** The primary source whose edited template would be replaced. */
+  primary;
+  constructor(primary) {
+    super(
+      "INVALID",
+      `The ${primary} part of ${ISSUE_TRACKER} was edited by hand; changing the primary source replaces it with the new template and the edits are lost. Run it again with force (--force) to go ahead.`
+    );
+    this.name = "EditedTemplateError";
+    this.primary = primary;
+  }
+};
+var sourceOf = (change) => "add" in change ? change.add : "remove" in change ? change.remove : change.primary;
+var changedText = (text, config, change, force) => {
+  const others = config.sources.filter((id) => id !== config.primary);
+  if ("add" in change) return withAdditionalSources(text, others.includes(change.add) || change.add === config.primary ? others : [...others, change.add]);
+  if ("remove" in change) {
+    if (change.remove === config.primary) {
+      throw new TrackerError("INVALID", `${change.remove} is the primary source; make another source primary before removing it`);
+    }
+    return withAdditionalSources(text, others.filter((id) => id !== change.remove));
+  }
+  const primary = change.primary;
+  if (primary === config.primary) return text;
+  const rest = [config.primary, ...others].filter((id) => id !== primary);
+  const base = withAdditionalSources(text, []);
+  const old = TEMPLATES[config.primary];
+  if (!base.startsWith(old) && !force) throw new EditedTemplateError(config.primary);
+  const kept = base.startsWith(old) ? base.slice(old.length) : "";
+  return withAdditionalSources(`${TEMPLATES[primary]}${kept}`, rest);
+};
+var changeSources = async (root, change, opts = {}) => {
+  const id = sourceOf(change);
+  if (!SOURCE_IDS.includes(id)) {
+    throw new TrackerError("INVALID", `Unknown source "${String(id)}": use ${SOURCE_IDS.join(" or ")}`);
+  }
+  const config = await readConfig(root);
+  const path = join(root, ISSUE_TRACKER);
+  const text = await readFile(path, "utf8");
+  const next = changedText(text, config, change, opts.force === true);
+  if (next !== text) await writeFile(path, next);
+  return readConfig(root);
 };
 
 // src/core/exec.ts
@@ -1229,7 +1301,7 @@ var createGithubSource = (root, exec, labels) => {
   };
 };
 var createCombinedTracker = (primary, sources) => {
-  const sourceOf = (id) => {
+  const sourceOf2 = (id) => {
     const owner = sources.find((s) => s.owns(id));
     if (owner !== void 0) return owner;
     if (sources.length === 1) return sources[0];
@@ -1246,7 +1318,7 @@ var createCombinedTracker = (primary, sources) => {
   const targetOf = (input) => {
     const asked = input.source === void 0 ? void 0 : named2(input.source);
     if (input.parentId === void 0) return asked ?? primarySource;
-    const parent = sourceOf(input.parentId);
+    const parent = sourceOf2(input.parentId);
     if (asked !== void 0 && asked !== parent) {
       throw new TrackerError(
         "INVALID",
@@ -1267,8 +1339,8 @@ var createCombinedTracker = (primary, sources) => {
     return target.create(rest);
   };
   const setParent = async (id, parentId) => {
-    const child = sourceOf(id);
-    const parent = sourceOf(parentId);
+    const child = sourceOf2(id);
+    const parent = sourceOf2(parentId);
     if (child !== parent) {
       throw new TrackerError("INVALID", `${id} (${child.id}) and ${parentId} (${parent.id}) are in different sources: ${NO_LINKS}`);
     }
@@ -1293,19 +1365,19 @@ var createCombinedTracker = (primary, sources) => {
   return {
     primary: primarySource.id,
     sources,
-    sourceOf,
+    sourceOf: sourceOf2,
     listAll,
     list: async () => (await listAll()).tasks,
-    get: async (id) => sourceOf(id).get(id),
+    get: async (id) => sourceOf2(id).get(id),
     create,
-    setState: async (id, state) => sourceOf(id).setState(id, state),
-    setType: async (id, type) => sourceOf(id).setType(id, type),
-    edit: async (id, changes) => sourceOf(id).edit(id, changes),
-    claim: async (id) => sourceOf(id).claim(id),
+    setState: async (id, state) => sourceOf2(id).setState(id, state),
+    setType: async (id, type) => sourceOf2(id).setType(id, type),
+    edit: async (id, changes) => sourceOf2(id).edit(id, changes),
+    claim: async (id) => sourceOf2(id).claim(id),
     setParent,
-    removeParent: async (id) => sourceOf(id).removeParent(id),
-    close: async (id, opts) => sourceOf(id).close(id, opts),
-    remove: async (id, opts) => sourceOf(id).remove(id, opts)
+    removeParent: async (id) => sourceOf2(id).removeParent(id),
+    close: async (id, opts) => sourceOf2(id).close(id, opts),
+    remove: async (id, opts) => sourceOf2(id).remove(id, opts)
   };
 };
 
@@ -1424,7 +1496,12 @@ Commands:
   publish <id> [--to github]            publish a local task to GitHub: an issue (a feature's
                                         tickets become sub-issues), then the local files are closed
                                         with a link; if GitHub fails half way nothing local closes
-  init <local|github>                   write docs/agents/issue-tracker.md
+  init <local|github>                   write docs/agents/issue-tracker.md (the primary source)
+  init --add <id> | --remove <id> | --primary <id> [--force]
+                                        add or remove a source, or make one primary; this
+                                        rewrites docs/agents/issue-tracker.md as Settings does.
+                                        Removing deletes nothing (its files or issues stay).
+                                        --force: replace a primary template edited by hand
 
 Sources: list and next read every source in docs/agents/issue-tracker.md (the primary one and
 any under ## Additional sources); --source local|github reads only that one. Commands on an id
@@ -1454,7 +1531,11 @@ var OPTIONS = {
   "blocked-by": { type: "string", multiple: true },
   "with-children": { type: "boolean" },
   source: { type: "string" },
-  to: { type: "string" }
+  to: { type: "string" },
+  add: { type: "string" },
+  remove: { type: "string" },
+  primary: { type: "string" },
+  force: { type: "boolean" }
 };
 var COMMANDS = {
   list: { positionals: 0, options: ["state", "ready", "source"] },
@@ -1467,7 +1548,7 @@ var COMMANDS = {
   next: { positionals: 0, options: ["source"] },
   close: { positionals: 1, options: ["with-children"] },
   publish: { positionals: 1, options: ["to"] },
-  init: { positionals: 1, options: [] }
+  init: { positionals: 1, options: ["add", "remove", "primary", "force"] }
 };
 var GLOBAL = ["dir", "json", "help"];
 var UsageError = class extends Error {
@@ -1484,6 +1565,8 @@ var readyTickets = (tasks) => {
 };
 var line = (t, withSource = false) => `${t.id}  ${withSource ? `${t.source}  ` : ""}[${t.state}${t.claimed ? ", claimed" : ""}]  ${t.title}
 `;
+var sourcesLine = (config) => config.sources.map((id) => id === config.primary ? `${id} (primary)` : id).join(", ");
+var sourcesAnswer = (config) => ({ tracker: config.tracker, primary: config.primary, sources: config.sources });
 var readStdin = async (stdin) => {
   if (stdin === void 0) return "";
   if (typeof stdin === "function") return stdin();
@@ -1507,6 +1590,16 @@ var parse = (argv) => {
   if (spec === void 0) return usage(`Unknown command "${command}"`);
   for (const key of Object.keys(values)) {
     if (!GLOBAL.includes(key) && !spec.options.includes(key)) usage(`Option --${key} does not apply to ${command}`);
+  }
+  if (command === "init") {
+    const changes = ["add", "remove", "primary"].filter((k) => values[k] !== void 0);
+    if (changes.length > 1) usage("init takes one of --add, --remove and --primary");
+    if (values.force && values.primary === void 0) usage("--force applies to init --primary");
+    for (const k of changes) {
+      if (!SOURCE_IDS.includes(values[k])) usage(`Unknown source "${values[k]}": use ${SOURCE_IDS.join(" or ")}`);
+    }
+    if (changes.length === 1 && args.length !== 0) usage("init takes a tracker or a source option, not both");
+    if (changes.length === 1) return { command, args, values };
   }
   if (args.length !== spec.positionals) {
     usage(`${command} takes ${spec.positionals} argument${spec.positionals === 1 ? "" : "s"}, got ${args.length}`);
@@ -1640,6 +1733,13 @@ ${task.body.replace(/\s*$/, "\n")}`);
         return 0;
       }
       case "init": {
+        const change = values.add !== void 0 ? { add: values.add } : values.remove !== void 0 ? { remove: values.remove } : values.primary !== void 0 ? { primary: values.primary } : null;
+        if (change !== null) {
+          const config2 = await changeSources(root, change, { force: values.force === true });
+          print(sourcesAnswer(config2), `Sources: ${sourcesLine(config2)} (docs/agents/issue-tracker.md)
+`);
+          return 0;
+        }
         const kind = args[0];
         if (kind !== "local" && kind !== "github") return usage(`Unknown tracker "${kind}": use local or github`);
         await writeConfig(root, kind);

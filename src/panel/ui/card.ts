@@ -1,4 +1,4 @@
-// One task card: title, id, badges (archived, session, led by orchestrator, type, ready-for-human, wontfix, blocked) and, for a parent,
+// One task card: title, id, badges (source in the All view, archived, session, led by orchestrator, type, ready-for-human, wontfix, blocked) and, for a parent,
 // its done/total sub-tasks with a progress bar. Focusable: a click or Enter opens the task modal
 // (ui/detail.ts), and a press starts a drag (ui/dnd.ts). A card whose move is in flight is drawn busy. Under the title,
 // the task's personal summary (summaries.ts) when there is one for its current body, cut to three lines.
@@ -32,6 +32,8 @@ export const renderCard = (
   model: CardModel,
   busy = false,
   summary: string | null = null,
+  /** The source's label (sourceView.ts sourceBadge), drawn as the first badge; null: none. */
+  source: string | null = null,
 ): CardHandle => {
   const { task } = model;
   const disposers: Array<() => void> = [];
@@ -75,6 +77,7 @@ export const renderCard = (
   } else if (model.starting) {
     badge('starting agent…', 'info');
   }
+  if (source !== null) badge(source, 'info');
   if (model.archived) badge('archived', 'neutral');
   if (model.ledByOrchestrator) badge('led by orchestrator', 'primary');
   if (task.kind === 'parent') badge('parent', 'primary');

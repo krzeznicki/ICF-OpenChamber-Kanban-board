@@ -2826,7 +2826,8 @@ ${GUEST_UI_LOOK_CSS}`;
   };
 
   // src/panel/sources.ts
-  var sourceKind = (task, fallback) => task.source === "local" || task.source === "github" ? task.source : fallback;
+  var kindOfSource = (source2, fallback) => source2 === "local" || source2 === "github" ? source2 : fallback;
+  var sourceKind = (task, fallback) => kindOfSource(task.source, fallback);
 
   // src/panel/clearArchive.ts
   var plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
@@ -2948,6 +2949,11 @@ ${GUEST_UI_LOOK_CSS}`;
       directory,
       readConfig: () => call("POST", "/config/read"),
       initConfig: (tracker) => call("POST", "/config/init", { tracker }).then((r) => r.config),
+      /**
+       * Settings → Sources: adds or removes a source or makes one primary (rewrites issue-tracker.md).
+       * `{confirm}`: the change would replace a template edited by hand; send it again with `force`.
+       */
+      changeSources: (change, force) => call("POST", "/config/sources", { change, force }),
       /** The github.com remote of the project (origin first), or null. */
       detect: () => call("POST", "/config/detect").then((r) => r.remote),
       /**
@@ -3241,9 +3247,29 @@ ${GUEST_UI_LOOK_CSS}`;
     body: "",
     subtasks: [],
     existing: [],
-    start: {}
+    start: {},
+    source: ""
   });
-  var isDirty = (draft, initial = emptyDraft()) => draft.title.trim() !== "" || draft.body.trim() !== "" || draft.subtasks.some((row) => row.trim() !== "") || draft.type !== initial.type || draft.parentId !== initial.parentId || draft.state !== initial.state || draft.blockedBy.length > 0 || draft.existing.length > 0 || Object.values(draft.start).some((v2) => v2 !== void 0);
+  var isDirty = (draft, initial = emptyDraft()) => draft.title.trim() !== "" || draft.body.trim() !== "" || draft.subtasks.some((row) => row.trim() !== "") || draft.type !== initial.type || draft.source !== initial.source || draft.parentId !== initial.parentId || draft.state !== initial.state || draft.blockedBy.length > 0 || draft.existing.length > 0 || Object.values(draft.start).some((v2) => v2 !== void 0);
+  var addSource = (view, sources, primary2) => {
+    if (view !== null && view !== "all") return { source: view, picker: null };
+    const creatable = sources.filter((s) => s.capabilities.create);
+    const source2 = creatable.some((s) => s.id === primary2) ? primary2 : creatable[0]?.id ?? primary2;
+    return { source: source2, picker: creatable.length > 1 ? creatable.map((s) => ({ id: s.id, label: s.label })) : null };
+  };
+  var sourceTasks = (tasks, source2) => tasks.filter((t) => t.source === source2);
+  var withSource = (d, source2, tasks, capabilities) => {
+    const own2 = new Set(sourceTasks(tasks, source2).map((t) => t.id));
+    const subtasks = capabilities.subtasks;
+    return {
+      ...d,
+      source: source2,
+      parentId: subtasks && own2.has(d.parentId) ? d.parentId : "",
+      blockedBy: capabilities.blockedBy ? d.blockedBy.filter((id) => own2.has(id)) : [],
+      existing: subtasks ? d.existing.filter((id) => own2.has(id)) : [],
+      subtasks: subtasks ? d.subtasks : []
+    };
+  };
   var CREATE_STATES = ["needs-triage", "needs-info", "ready-for-agent", "ready-for-human"];
   var choice = (t) => ({ id: t.id, label: t.title, hint: t.id });
   var parentChoices = (tasks) => tasks.filter((t) => t.kind === "parent" && t.state !== "done").map(choice);
@@ -3278,7 +3304,7 @@ ${GUEST_UI_LOOK_CSS}`;
       state: d.state === MODEL_PICK ? "needs-triage" : d.state,
       ...type !== null ? { type } : {},
       ...body !== "" ? { body } : {},
-      ...d.parentId !== "" ? { parentId: d.parentId } : {},
+      ...d.parentId !== "" ? { parentId: d.parentId } : d.source !== "" ? { source: d.source } : {},
       ...blockers.length > 0 ? { blockedBy: [...blockers] } : {}
     };
   };
@@ -4439,6 +4465,8 @@ ${ref}`,
     archivedTasks: (projectId) => fit(`archivedTasks:${projectId}`),
     /** Per project: the manual card order, task ids (order.ts). */
     taskOrder: (projectId) => fit(`taskOrder:${projectId}`),
+    /** Per project: the source switcher's choice, `all` or a source id (sourceView.ts currentSourceView checks it). */
+    sourceView: (projectId) => fit(`sourceView:${projectId}`),
     /** Which sections of the task modal are open (one entry for every task and project). */
     detailSections: "detail-sections",
     /** The project the board last showed by the host's directory or the user's pick (projectFollow.ts): a fresh board that cannot place its directory opens it. */
@@ -4537,6 +4565,12 @@ ${ref}`,
       saveArchivedTasks: (projectId, marks) => put(STORAGE_KEYS.archivedTasks(projectId), serializeArchived(marks), marks.size === 0),
       loadOrder: async (projectId) => parseOrder(await storage.get(STORAGE_KEYS.taskOrder(projectId))),
       saveOrder: (projectId, order2) => put(STORAGE_KEYS.taskOrder(projectId), order2.slice(0, ORDER_MAX), order2.length === 0),
+      /** The stored source switcher choice as text, or null; whether the project still has it is sourceView.ts's call. */
+      loadSourceView: async (projectId) => {
+        const v2 = await storage.get(STORAGE_KEYS.sourceView(projectId));
+        return typeof v2 === "string" && v2 !== "" ? v2 : null;
+      },
+      saveSourceView: (projectId, view) => storage.set(STORAGE_KEYS.sourceView(projectId), view),
       loadLastProject: async () => {
         const v2 = await storage.get(STORAGE_KEYS.lastProject);
         return typeof v2 === "string" && v2 !== "" ? v2 : null;
@@ -5123,6 +5157,26 @@ ${ref}`,
         layers.length = 0;
       }
     };
+  };
+
+  // src/panel/sourceSettings.ts
+  var KNOWN = [
+    { id: "local", label: "Local" },
+    { id: "github", label: "GitHub" }
+  ];
+  var sourcesView = (config2) => ({
+    rows: config2.sources.map((s) => {
+      const primary2 = s.id === config2.primary;
+      return { id: s.id, label: s.label, primary: primary2, canRemove: !primary2, canMakePrimary: !primary2 };
+    }),
+    addable: KNOWN.filter((k) => !config2.sources.some((s) => s.id === k.id))
+  });
+  var changeSource = async (service, change, ask) => {
+    const first = await service.changeSources(change, false);
+    if ("config" in first) return first.config;
+    if (!await ask(first.confirm)) return null;
+    const forced = await service.changeSources(change, true);
+    return "config" in forced ? forced.config : null;
   };
 
   // src/panel/ui/startTarget.ts
@@ -5853,6 +5907,43 @@ ${ref}`,
       }).dispose
     );
   };
+  var drawSources = (body, disposers, config2, apply) => {
+    const view = sourcesView(config2);
+    const list2 = el2("section", "kb-settings-section");
+    list2.append(el2("h3", "kb-settings-heading", "Sources"));
+    list2.append(
+      el2(
+        "p",
+        "kb-settings-hint",
+        "Where the board reads tasks from. New tasks go to the primary source unless you pick another. Changes rewrite docs/agents/issue-tracker.md; removing a source only hides its tasks, its files or issues stay."
+      )
+    );
+    for (const r of view.rows) {
+      const row = el2("div", "kb-keys-row");
+      row.append(el2("span", "kb-keys-action", r.label));
+      row.append(el2("span", "kb-keys-key kb-muted", r.primary ? "Primary" : ""));
+      const actions = el2("span", "kb-keys-buttons");
+      row.append(actions);
+      if (r.canMakePrimary) {
+        disposers.push(mountButton(actions, { label: "Make primary", variant: "ghost", size: "xs", onClick: () => apply({ primary: r.id }) }).dispose);
+      }
+      if (r.canRemove) {
+        disposers.push(mountButton(actions, { label: "Remove", variant: "ghost", size: "xs", onClick: () => apply({ remove: r.id }) }).dispose);
+      }
+      list2.append(row);
+    }
+    body.append(list2);
+    if (view.addable.length === 0) return;
+    const add2 = el2("section", "kb-settings-section");
+    add2.append(el2("h3", "kb-settings-heading", "Add a source"));
+    const buttons = el2("div", "kb-keys-buttons");
+    buttons.style.justifyContent = "flex-start";
+    for (const a of view.addable) {
+      disposers.push(mountButton(buttons, { label: `Add ${a.label}`, variant: "outline", size: "xs", onClick: () => apply({ add: a.id }) }).dispose);
+    }
+    add2.append(buttons);
+    body.append(add2);
+  };
   var openSettings = (initial, callbacks) => {
     const backdrop = el2("div", "kb-backdrop");
     const sheet = el2("aside", "kb-sheet kb-settings");
@@ -5935,6 +6026,26 @@ ${ref}`,
             }
           });
         }
+      } else if (m.tab === "sources") {
+        const config2 = m.sources ?? null;
+        const onSources = callbacks.onSources;
+        if (config2 === null || onSources === void 0) {
+          disposers.push(mountEmpty(body, { title: "No project", body: "Open a project with a board to change its sources." }).dispose);
+        } else {
+          let busy = false;
+          drawSources(body, disposers, config2, (change) => {
+            if (busy) return;
+            busy = true;
+            body.setAttribute("aria-busy", "true");
+            void onSources(change).then((next) => {
+              busy = false;
+              body.removeAttribute("aria-busy");
+              if (next === null || m.tab !== "sources") return;
+              m.sources = next;
+              draw2();
+            });
+          });
+        }
       } else {
         const shown = m.editSet !== void 0 && m.editSet !== null && sets.some((x) => x.id === m.editSet) ? m.editSet : projectSet;
         drawPresets(
@@ -5954,7 +6065,8 @@ ${ref}`,
       items: [
         { id: "global", label: "Global" },
         { id: "project", label: "This project" },
-        { id: "presets", label: "Presets" }
+        { id: "presets", label: "Presets" },
+        { id: "sources", label: "Sources" }
       ],
       activeId: m.tab,
       onChange: (id) => {
@@ -6093,6 +6205,12 @@ ${ref}`,
   var openAddModal = (model, callbacks) => {
     const d = emptyDraft(model.suggest);
     if (!model.suggest) d.type = model.types.includes("enhancement") ? "enhancement" : NONE2;
+    d.source = model.source.source;
+    const ALL_CAPS = { create: true, subtasks: true, blockedBy: true, claim: true, delete: true };
+    const caps = () => model.sources.find((s) => s.id === d.source)?.capabilities ?? ALL_CAPS;
+    const kind = () => kindOfSource(d.source, model.tracker);
+    const tasks = () => sourceTasks(model.tasks, d.source);
+    const parentOptions = () => [{ id: NONE2, label: kind() === "local" ? "None (new feature)" : "None" }, ...parentChoices(tasks())];
     const types = model.types.filter((t) => t !== MODEL_PICK);
     const pick = model.suggest ? [{ id: MODEL_PICK, label: "Let the model pick", hint: "Small Model, after the task is created" }] : [];
     const initial = { ...d };
@@ -6140,7 +6258,9 @@ ${ref}`,
     const stateSlot = el3("div", "kb-field");
     row1.append(typeSlot, stateSlot);
     const parentSlot = part("kb-fields");
+    const sourceCell = el3("div", "kb-field");
     const parentCell = el3("div", "kb-field");
+    if (model.source.picker !== null) parentSlot.append(sourceCell);
     parentSlot.append(parentCell);
     const blockersBox = part("kb-sheet-part kb-add-group");
     const bodySlot = part("kb-add-body");
@@ -6184,11 +6304,25 @@ ${ref}`,
         stateSelect.update({ value: id });
       }
     });
+    const sourceSelect = model.source.picker === null ? null : mountSelect(sourceCell, {
+      label: "Source",
+      value: d.source,
+      options: model.source.picker,
+      onChange: (id) => {
+        Object.assign(d, withSource(d, id, model.tasks, model.sources.find((s) => s.id === id)?.capabilities ?? ALL_CAPS));
+        sourceSelect?.update({ value: id });
+        drawParent();
+        drawBlockers();
+        drawSubtasks();
+        drawExisting();
+        drawStart();
+      }
+    });
     const parentSelect = mountSelect(parentCell, {
       label: "Parent",
       value: d.parentId,
-      options: [{ id: NONE2, label: model.tracker === "local" ? "None (new feature)" : "None" }, ...model.parents],
-      searchable: model.parents.length > FILTER_OVER,
+      options: parentOptions(),
+      searchable: parentOptions().length - 1 > FILTER_OVER,
       onChange: (id) => {
         d.parentId = id;
         parentSelect.update({ value: id });
@@ -6209,18 +6343,26 @@ ${ref}`,
         bodyField.update({ value: v2 });
       }
     });
-    const fixed = [titleField, typeSelect, stateSelect, parentSelect, bodyField];
+    const drawParent = () => {
+      const options = parentOptions();
+      parentCell.hidden = !caps().subtasks;
+      parentSelect.update({ value: d.parentId, options, searchable: options.length - 1 > FILTER_OVER });
+    };
+    drawParent();
+    const fixed = [titleField, typeSelect, stateSelect, parentSelect, bodyField, ...sourceSelect === null ? [] : [sourceSelect]];
     let blockerDisposers = [];
     let blockerFilter = "";
     const drawBlockers = () => {
       for (const x of blockerDisposers) x();
       blockerDisposers = [];
       blockersBox.replaceChildren();
-      const offered = blockerChoices(model.tasks, model.tracker, d.parentId);
+      const offered = caps().blockedBy ? blockerChoices(tasks(), kind(), d.parentId) : [];
       d.blockedBy = keepOffered(d.blockedBy, offered);
+      blockersBox.hidden = !caps().blockedBy;
+      if (blockersBox.hidden) return;
       blockersBox.append(el3("h3", "kb-settings-heading", "Blocked by"));
       if (offered.length === 0) {
-        const why = model.tracker === "local" ? d.parentId === NONE2 ? "A new feature has no blockers; pick a parent to choose tickets of that feature." : "That feature has no open tickets." : "No open issues.";
+        const why = kind() === "local" ? d.parentId === NONE2 ? "A new feature has no blockers; pick a parent to choose tickets of that feature." : "That feature has no open tickets." : "No open issues.";
         blockersBox.append(el3("p", "kb-muted", why));
         return;
       }
@@ -6241,8 +6383,10 @@ ${ref}`,
       for (const x of subDisposers) x();
       subDisposers = [];
       subBox.replaceChildren();
+      subBox.hidden = !caps().subtasks;
+      if (subBox.hidden) return;
       subBox.append(el3("h3", "kb-settings-heading", "Sub-tasks"));
-      if (!canHaveSubtasks(model.tracker, d.parentId)) {
+      if (!canHaveSubtasks(kind(), d.parentId)) {
         subBox.append(el3("p", "kb-muted", "A ticket of a feature cannot have sub-tasks here; choose no parent to create a feature with sub-tasks."));
         return;
       }
@@ -6250,7 +6394,7 @@ ${ref}`,
         el3(
           "p",
           "kb-muted",
-          model.tracker === "local" ? "Created as tickets of the new feature, in this order." : "Created as sub-issues of the new issue, in this order."
+          kind() === "local" ? "Created as tickets of the new feature, in this order." : "Created as sub-issues of the new issue, in this order."
         )
       );
       d.subtasks.forEach((value, i) => {
@@ -6314,20 +6458,20 @@ ${ref}`,
       for (const x of existingDisposers) x();
       existingDisposers = [];
       existingBox.replaceChildren();
-      const offered = existingSubtaskChoices(model.tasks, model.tracker, d.parentId);
+      const offered = caps().subtasks ? existingSubtaskChoices(tasks(), kind(), d.parentId) : [];
       d.existing = keepOffered(d.existing, offered);
-      existingBox.hidden = !canHaveSubtasks(model.tracker, d.parentId);
+      existingBox.hidden = !caps().subtasks || !canHaveSubtasks(kind(), d.parentId);
       if (existingBox.hidden) return;
       existingBox.append(el3("h3", "kb-settings-heading", "Existing sub-tasks"));
       if (offered.length === 0) {
-        existingBox.append(el3("p", "kb-muted", model.tracker === "local" ? "No open tickets or features without tickets to move." : "No open issues."));
+        existingBox.append(el3("p", "kb-muted", kind() === "local" ? "No open tickets or features without tickets to move." : "No open issues."));
         return;
       }
       existingBox.append(
         el3(
           "p",
           "kb-muted",
-          model.tracker === "local" ? "Moved into the new feature as its tickets once it is created." : "Linked as sub-issues of the new issue once it is created."
+          kind() === "local" ? "Moved into the new feature as its tickets once it is created." : "Linked as sub-issues of the new issue once it is created."
         )
       );
       existingDisposers = mountCheckList(existingBox, {
@@ -6352,7 +6496,7 @@ ${ref}`,
     };
     const drawStart = () => {
       const s = start2;
-      const inherited = s === null ? null : s.inherited(draftType(d), draftSubtasks(d, model.tracker));
+      const inherited = s === null ? null : s.inherited(draftType(d), draftSubtasks(d, kind()));
       const key = s === null ? "loading" : JSON.stringify([s.projectId, inherited, s.summaryLanguage, s.presets.map((p) => [p.id, p.name])]);
       lockStart();
       if (key === startKey) return;
@@ -13569,7 +13713,7 @@ ${ref}`,
         },
         summary: deps.summary.model(task),
         session: sessionView(task),
-        publish: canPublish(task, deps.sources()),
+        publish: canPublish(task, deps.sources().sources.map((s) => s.id)),
         children: tasks.filter((t) => t.parentId === task.id).map((t) => ({ id: t.id, title: t.title, state: t.state })),
         addSubtask: canAddSubtask(task, kindOf(task)),
         archived: deps.archive.has(task),
@@ -13855,9 +13999,10 @@ ${ref}`,
       const api = deps.api();
       if (api === null) return { kind: "error", message: "No project is open." };
       const ctx = deps.start.context();
-      const tracker = deps.tracker();
+      const source2 = draft.source === "" ? deps.tracker() : draft.source;
+      const tracker = kindOfSource(source2, deps.tracker());
       const subtasks = subtasksToCreate(draft, tracker);
-      const existing = existingToLink(draft, tracker, deps.tasks()).map((id) => ({ id, label: find(id)?.title ?? id }));
+      const existing = existingToLink(draft, tracker, sourceTasks(deps.tasks(), source2)).map((id) => ({ id, label: find(id)?.title ?? id }));
       const saveStart = (taskId) => {
         if (ctx === null || Object.keys(draft.start).length === 0) return;
         try {
@@ -13924,12 +14069,14 @@ ${ref}`,
       const tasks = deps.tasks();
       const types = taskTypes(tasks, deps.baseTypes()).filter((t) => t !== MODEL_PICK);
       addOffer = { types, suggest: deps.suggest.enabled() && deps.suggest.suggester.available() };
+      const { view, sources } = deps.sources();
       addModal = openAddModal(
         {
           tracker: deps.tracker(),
           types,
           suggest: addOffer.suggest,
-          parents: parentChoices(tasks),
+          source: addSource(view, sources, deps.tracker()),
+          sources,
           tasks,
           labels: deps.labels(),
           start: addStart(),
@@ -14574,7 +14721,7 @@ ${note}` : note;
   };
 
   // src/panel/search.ts
-  var FILTER_KEYS = ["type", "state", "status", "column"];
+  var FILTER_KEYS = ["type", "state", "status", "column", "source"];
   var FILTER = /^([a-z]+)[:=](.*)$/;
   var isFilterKey = (key) => FILTER_KEYS.includes(key);
   var parseQuery = (query) => {
@@ -14603,7 +14750,7 @@ ${note}` : note;
     return c === void 0 ? [] : [c.id, c.title];
   };
   var namesColumn = (wanted) => COLUMNS.some((c) => anyMatches(columnNames(c.id), wanted));
-  var typeFilter = { holds: (t, _c, w) => t.type !== null && valueMatches(t.type, w), offers: (types) => [...types] };
+  var typeFilter = { holds: (t, _c, w) => t.type !== null && valueMatches(t.type, w), offers: ({ types }) => [...types] };
   var stateFilter = { holds: (t, _c, w) => valueMatches(t.state, w), offers: () => [...TASK_STATES] };
   var columnFilter = { holds: (_t, c, w) => anyMatches(columnNames(c), w), offers: () => COLUMNS.map((c) => c.id) };
   var FILTERS = {
@@ -14612,8 +14759,9 @@ ${note}` : note;
     column: columnFilter,
     status: {
       holds: (t, c, w) => (namesColumn(w) ? columnFilter : stateFilter).holds(t, c, w),
-      offers: (types) => [.../* @__PURE__ */ new Set([...columnFilter.offers(types), ...stateFilter.offers(types)])]
-    }
+      offers: (board2) => [.../* @__PURE__ */ new Set([...columnFilter.offers(board2), ...stateFilter.offers(board2)])]
+    },
+    source: { holds: (t, _c, w) => valueMatches(t.source, w), offers: ({ sources }) => [...sources] }
   };
   var matchesParsed = (task, q, tracker, column) => {
     for (const [key, wanted] of q.filters) if (!wanted.some((w) => FILTERS[key].holds(task, column, w))) return false;
@@ -14638,7 +14786,7 @@ ${body}`);
     for (const { id: column } of COLUMNS) out[column] = board2[column].filter((c) => keep.has(c.task.id));
     return out;
   };
-  var searchSuggestions = (text3, caret, types) => {
+  var searchSuggestions = (text3, caret, types, sources = []) => {
     if (/^\S/.test(text3.slice(caret))) return [];
     const start2 = text3.slice(0, caret).search(/\S*$/);
     const word = text3.slice(start2, caret);
@@ -14652,14 +14800,35 @@ ${body}`);
     const m = /^([a-zA-Z]+)([:=])(.*)$/.exec(word);
     if (m === null) {
       const typed2 = foldText(word);
-      return FILTER_KEYS.filter((k) => k.startsWith(typed2)).map((k) => replace2(`${k}:`, false));
+      const keys = sources.length > 1 ? FILTER_KEYS : FILTER_KEYS.filter((k) => k !== "source");
+      return keys.filter((k) => k.startsWith(typed2)).map((k) => replace2(`${k}:`, false));
     }
     const key = foldText(m[1]);
     if (!isFilterKey(key)) return [];
     const typed = foldText(m[3]);
-    const values = FILTERS[key].offers(types).filter((v2) => typed === "" || valueMatches(v2, typed));
+    const values = FILTERS[key].offers({ types, sources }).filter((v2) => typed === "" || valueMatches(v2, typed));
     if (values.every((v2) => foldText(v2) === typed)) return [];
     return values.map((v2) => replace2(`${m[1]}${m[2]}${v2}`, true));
+  };
+
+  // src/panel/sourceView.ts
+  var MAX_SEGMENT_SOURCES = 3;
+  var sourceSwitcher = (sources) => {
+    if (sources.length < 2) return null;
+    return {
+      kind: sources.length > MAX_SEGMENT_SOURCES ? "dropdown" : "segments",
+      options: [{ value: "all", label: "All" }, ...sources.map((s) => ({ value: s.id, label: s.label }))]
+    };
+  };
+  var currentSourceView = (stored2, config2) => {
+    const several = config2.sources.length > 1;
+    if (stored2 === "all") return several ? "all" : config2.primary;
+    return config2.sources.some((s) => s.id === stored2) ? stored2 : config2.primary;
+  };
+  var tasksInView = (tasks, view) => view === "all" ? [...tasks] : tasks.filter((t) => t.source === view);
+  var sourceBadge = (task, view, sources) => {
+    if (view !== "all" || sources.length < 2) return null;
+    return sources.find((s) => s.id === task.source)?.label ?? task.source;
   };
 
   // src/panel/projectFollow.ts
@@ -14777,7 +14946,7 @@ ${listKey(projects)}`;
         return s.outcome === "failed" ? { label: "agent failed", tone: "error" } : s.outcome === "completed" ? { label: "agent finished", tone: "success" } : { label: "agent idle", tone: "neutral" };
     }
   };
-  var renderCard = (model, busy = false, summary = null) => {
+  var renderCard = (model, busy = false, summary = null, source2 = null) => {
     const { task } = model;
     const disposers = [];
     const node = document.createElement("article");
@@ -14818,6 +14987,7 @@ ${listKey(projects)}`;
     } else if (model.starting) {
       badge2("starting agent\u2026", "info");
     }
+    if (source2 !== null) badge2(source2, "info");
     if (model.archived) badge2("archived", "neutral");
     if (model.ledByOrchestrator) badge2("led by orchestrator", "primary");
     if (task.kind === "parent") badge2("parent", "primary");
@@ -14955,13 +15125,15 @@ ${listKey(projects)}`;
     const shell = div3("kb");
     const toolbar = div3("kb-toolbar");
     const projectSlot = div3("kb-project");
+    const sourceSlot = div3("kb-source");
+    sourceSlot.hidden = true;
     const switchSlot = div3("kb-hide");
     const searchSlot = div3("kb-search");
     const spacer = div3("kb-spacer");
     const addSlot = div3("kb-add-button");
     const settingsSlot = div3("kb-settings-button");
     const refreshSlot = div3("kb-refresh");
-    toolbar.append(projectSlot, switchSlot, searchSlot, spacer, addSlot, settingsSlot, refreshSlot);
+    toolbar.append(projectSlot, sourceSlot, switchSlot, searchSlot, spacer, addSlot, settingsSlot, refreshSlot);
     if (VARIANT === "test") {
       const badge2 = document.createElement("span");
       badge2.className = "kb-test-badge";
@@ -14986,6 +15158,31 @@ ${listKey(projects)}`;
         callbacks.onProject(id);
       }
     });
+    let sourceControl = null;
+    const setSources = (switcher, view) => {
+      const key = switcher === null ? "" : JSON.stringify(switcher);
+      if (sourceControl?.key !== key) {
+        sourceControl?.dispose();
+        sourceControl = null;
+        sourceSlot.replaceChildren();
+        if (switcher !== null) {
+          const pick = (id) => {
+            sourceControl?.set(id);
+            callbacks.onSource(id);
+          };
+          const first = view ?? switcher.options[0].value;
+          if (switcher.kind === "segments") {
+            const tabs = mountTabs(sourceSlot, { items: switcher.options.map((o) => ({ id: o.value, label: o.label })), activeId: first, onChange: pick, trackBackground: true });
+            sourceControl = { key, set: (v2) => tabs.update({ activeId: v2 }), dispose: tabs.dispose };
+          } else {
+            const select = mountSelect(sourceSlot, { value: first, options: switcher.options.map((o) => ({ id: o.value, label: o.label })), onChange: pick });
+            sourceControl = { key, set: (v2) => select.update({ value: v2 }), dispose: select.dispose };
+          }
+        }
+      }
+      sourceSlot.hidden = sourceControl === null;
+      if (sourceControl !== null && view !== null) sourceControl.set(view);
+    };
     const hideSwitch = mountSwitch(switchSlot, {
       label: "Hide sub-tasks",
       checked: false,
@@ -14997,7 +15194,7 @@ ${listKey(projects)}`;
     const search = mountSearchField(searchSlot, {
       value: "",
       placeholder: "Search tasks, type:, status:\u2026",
-      label: "Search tasks by title or description, or filter with type:, state:, status: and column:",
+      label: "Search tasks by title or description, or filter with type:, state:, status:, column: and source:",
       onChange: (query) => setQuery(query)
     });
     const setQuery = (query) => {
@@ -15073,6 +15270,8 @@ ${listKey(projects)}`;
       setCanAdd: (enabled) => add2.update({ disabled: !enabled }),
       /** The "Hide sub-tasks" switch follows the project's settings when they load. */
       setHideSubtasks: (checked) => hideSwitch.update({ checked }),
+      /** The source switcher: null hides it (one source, or no board); `view` is the one shown. */
+      setSources,
       setProjects: (options, value) => {
         project2.update({
           options,
@@ -15130,7 +15329,7 @@ ${listKey(projects)}`;
         }
       },
       /** Draws the columns; null hides them (no project, no tracker, or an error). */
-      render: (board2, busy = /* @__PURE__ */ new Set(), summaryOf = () => null, done = NO_TOOLS) => {
+      render: (board2, busy = /* @__PURE__ */ new Set(), summaryOf = () => null, done = NO_TOOLS, sourceOf = () => null) => {
         for (const d of cardDisposers) d();
         cardDisposers = [];
         columns.replaceChildren();
@@ -15156,7 +15355,7 @@ ${listKey(projects)}`;
             list2.append(none);
           }
           for (const model of cards) {
-            const card = renderCard(model, busy.has(model.task.id), summaryOf(model.task));
+            const card = renderCard(model, busy.has(model.task.id), summaryOf(model.task), sourceOf(model.task));
             list2.append(card.node);
             cardDisposers.push(card.dispose);
           }
@@ -15362,6 +15561,8 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
 .kb { display: flex; flex-direction: column; gap: 0.75rem; padding: 0.75rem; min-height: 100vh; }
 .kb-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 0.75rem; }
 .kb-project { flex: 1 1 12rem; min-width: 10rem; max-width: 22rem; }
+.kb-source { flex: 0 0 auto; }
+.kb-source[hidden] { display: none; }
 .kb-search { position: relative; flex: 1 1 12rem; min-width: 9rem; max-width: 20rem; }
 .kb-search-suggest { position: absolute; left: 0; right: 0; top: calc(100% + 0.25rem); z-index: 30; display: flex; flex-direction: column;
   padding: 0.25rem; max-height: 16rem; overflow-y: auto; background: var(--oc-elevated); color: var(--oc-elevated-fg);
@@ -15654,7 +15855,9 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     showArchived: false,
     order: [],
     orderFor: null,
-    query: ""
+    query: "",
+    sourceView: null,
+    sourceViewFor: null
   };
   var store = createSettingsStore(host.storage);
   var fail = (message2) => void host.toast({ kind: "error", message: message2 }).catch(() => {
@@ -15667,6 +15870,22 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
   var archiveSync = createStorageSync();
   var order = () => state.orderFor === state.projectId ? state.order : [];
   var orderSync = createStorageSync();
+  var sourceView = () => {
+    if (state.config === null) return null;
+    return currentSourceView(state.sourceViewFor === state.projectId ? state.sourceView : null, state.config);
+  };
+  var viewTasks = () => {
+    const view = sourceView();
+    return state.tasks === null || view === null ? null : tasksInView(state.tasks, view);
+  };
+  var setSourceView = (view) => {
+    const id = state.projectId;
+    if (id === null) return;
+    state.sourceView = view;
+    state.sourceViewFor = id;
+    saver.save(STORAGE_KEYS.sourceView(id), () => store.saveSourceView(id, view));
+    draw();
+  };
   var unarchivedAt = /* @__PURE__ */ new Map();
   var removedFor = (projectId) => unarchivedAt.get(projectId) ?? /* @__PURE__ */ new Map();
   var pendingMarks = createPendingMarks();
@@ -15789,7 +16008,8 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
         global: state.globalSettings,
         project: p !== null && id !== null ? { name: p.name, layer: state.projectSettings } : null,
         presets: state.presets,
-        skills: id !== null ? state.skills?.found ?? null : null
+        skills: id !== null ? state.skills?.found ?? null : null,
+        sources: p !== null ? state.config : null
       },
       {
         onGlobal: (layer) => {
@@ -15807,6 +16027,23 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
           saver.save("presets", () => store.savePresets(stored2));
           editor.refresh();
         },
+        onSources: async (change) => {
+          if (p === null) return null;
+          try {
+            const next = await changeSource(
+              createApi(host, p.directory),
+              change,
+              async (message2) => await askChoice("Replace the edited tracker instructions?", message2, [
+                { id: "replace", label: "Replace", variant: "destructive" }
+              ]) === "replace"
+            );
+            if (next !== null && project()?.id === p.id) void load();
+            return next;
+          } catch (e) {
+            fail(`Could not change the sources: ${e instanceof Error ? e.message : String(e)}`);
+            return null;
+          }
+        },
         onDismiss: closeSettings,
         lists
       }
@@ -15819,19 +16056,24 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
   var draw = () => {
     board.setCanAdd(state.view === "board" && state.config !== null);
     state.columns = /* @__PURE__ */ new Map();
-    if (state.config === null || state.tasks === null) {
+    const view = sourceView();
+    const tasks = viewTasks();
+    if (state.config === null || tasks === null || view === null) {
+      board.setSources(null, null);
       setBadge(null);
       board.setSourceBanners([], () => {
       });
       board.render(null);
       return;
     }
-    board.setSourceBanners(sourceBanners(state.sourceErrors, state.config.sources), () => void load());
+    const { sources } = state.config;
+    board.setSources(sourceSwitcher(sources), view);
+    board.setSourceBanners(sourceBanners(state.sourceErrors, sources), () => void load());
     const marks = archivedTasks();
-    const archivedCount = archivedShown(state.tasks, marks);
+    const archivedCount = archivedShown(tasks, marks);
     if (archivedCount === 0) state.showArchived = false;
     const model = groupTasks(
-      applyOrder(state.tasks, order()),
+      applyOrder(tasks, order()),
       state.sessions,
       starter.isStarting,
       state.hideSubtasks,
@@ -15844,23 +16086,26 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     for (const [column, cards] of Object.entries(model)) for (const c of cards) state.columns.set(c.task.id, column);
     setBadge(model.review.length || null);
     const tracker = state.config.tracker;
-    const shown = filterBoard(model, state.tasks, state.query, tracker);
+    const shown = filterBoard(model, tasks, state.query, tracker);
     selection2.beforeRender();
-    board.render(shown, editor.busy, (task) => summaries.get(task), {
-      archivable: archivableIds(state.tasks, marks).length,
-      archived: archivedCount,
-      showArchived: state.showArchived
-    });
+    board.render(
+      shown,
+      editor.busy,
+      (task) => summaries.get(task),
+      { archivable: archivableIds(tasks, marks).length, archived: archivedCount, showArchived: state.showArchived },
+      (task) => sourceBadge(task, view, sources)
+    );
     selection2.rendered(layoutOf(shown));
     auditLinks();
     focusSession();
-    if (state.tasks.length > 0 && state.query.trim() !== "" && Object.values(shown).every((cards) => cards.length === 0)) {
+    const emptyKind = view === "all" ? tracker : view;
+    if (tasks.length > 0 && state.query.trim() !== "" && Object.values(shown).every((cards) => cards.length === 0)) {
       board.setStatus({ kind: "empty", title: "No tasks match", body: `No task on the board matches "${state.query.trim()}".` });
-    } else if (state.tasks.length === 0) {
+    } else if (tasks.length === 0) {
       board.setStatus({
         kind: "empty",
         title: "No tasks yet",
-        body: tracker === "github" ? "Open issues of this repository show up here. Create one on GitHub or with the task-board CLI, then press Refresh." : "Issues under .scratch/<feature>/issues/ show up here. Create one with the task-board CLI or an agent skill, then press Refresh."
+        body: emptyKind === "github" ? "Open issues of this repository show up here. Create one on GitHub or with the task-board CLI, then press Refresh." : "Issues under .scratch/<feature>/issues/ show up here. Create one with the task-board CLI or an agent skill, then press Refresh."
       });
     } else {
       board.setStatus({ kind: "none" });
@@ -15951,15 +16196,21 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
       }
       const token = archiveSync.loadToken();
       const orderToken = orderSync.loadToken();
-      const [listed2, marks, gone, shelved, ranked] = await Promise.all([
+      const [listed2, marks, gone, shelved, ranked, pickedSource] = await Promise.all([
         api.list(),
         store.loadDetached(p.id).catch(() => null),
         store.loadArchived(p.id).catch(() => null),
         store.loadArchivedTasks(p.id).catch(() => null),
         store.loadOrder(p.id).catch(() => null),
+        // Read once per project: afterwards this frame's own pick stands.
+        state.sourceViewFor === p.id ? Promise.resolve(state.sourceView) : store.loadSourceView(p.id).catch(() => null),
         starter.refresh(p.id, p.directory)
       ]);
       if (mine !== generation) return;
+      if (state.sourceViewFor !== p.id) {
+        state.sourceView = pickedSource;
+        state.sourceViewFor = p.id;
+      }
       const { tasks, errors: errors2, unlisted } = listed2;
       state.unlisted = unlisted;
       if (marks !== null) {
@@ -16023,6 +16274,8 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     state.showArchived = false;
     state.order = [];
     state.orderFor = null;
+    state.sourceView = null;
+    state.sourceViewFor = null;
     audited.clear();
     starter.reset();
     state.config = null;
@@ -16220,16 +16473,16 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
   };
   var archiveDone = async () => {
     const id = state.projectId;
-    if (id === null || state.tasks === null) return;
-    const n = archivableIds(state.tasks, archivedTasks()).length;
+    if (id === null || viewTasks() === null) return;
+    const n = archivableIds(viewTasks() ?? [], archivedTasks()).length;
     if (n === 0) return;
     const answer = await askChoice(
       `Archive ${n} done task${n === 1 ? "" : "s"}?`,
       "They leave the board. Nothing changes in the repository or on GitHub; \u201CShow archived\u201D brings them back, and a reopened task returns on its own.",
       [{ id: "archive", label: "Archive" }]
     );
-    if (answer === null || state.projectId !== id || state.tasks === null) return;
-    const ids = archivableIds(state.tasks, archivedTasks());
+    if (answer === null || state.projectId !== id || viewTasks() === null) return;
+    const ids = archivableIds(viewTasks() ?? [], archivedTasks());
     if (ids.length === 0) return;
     setArchivedTasks(id, archiveTasks(archivedTasks(), ids, Date.now()));
     info(`Archived ${ids.length} done task${ids.length === 1 ? "" : "s"}`);
@@ -16255,7 +16508,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     const p = project();
     if (id === null || p === null || state.view !== "board" || state.config === null || state.tasks === null) return;
     const tracker = state.config.tracker;
-    const plan = clearArchivePlan(tracker, state.tasks, archivedTasks());
+    const plan = clearArchivePlan(tracker, viewTasks() ?? [], archivedTasks());
     const ask = clearConfirm(tracker, plan);
     if (ask === null) {
       info("The archived features still have sub-tasks on the board; nothing to delete.");
@@ -16263,7 +16516,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     }
     const answer = await askChoice(ask.title, ask.body, [{ id: "clear", label: "Delete all", variant: "destructive" }]);
     if (answer === null || state.projectId !== id || state.tasks === null) return;
-    const fresh = clearArchivePlan(tracker, state.tasks, archivedTasks());
+    const fresh = clearArchivePlan(tracker, viewTasks() ?? [], archivedTasks());
     if (JSON.stringify(fresh) !== JSON.stringify(plan)) {
       info("The archive changed while you were asked; nothing was deleted. Try again.");
       return;
@@ -16491,7 +16744,8 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
         state.query = query;
         draw();
       },
-      suggest: (text3, caret) => searchSuggestions(text3, caret, boardTypes()),
+      suggest: (text3, caret) => searchSuggestions(text3, caret, boardTypes(), state.config?.sources.map((s) => s.id) ?? []),
+      onSource: setSourceView,
       // Second Esc: focus back on the Selected card, or on the Board itself when there is none.
       onSearchExit: () => {
         const id = selection2.get();
@@ -16525,8 +16779,8 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
       },
       tasks: () => state.tasks ?? [],
       tracker: () => state.config?.tracker ?? "local",
+      sources: () => ({ view: sourceView(), sources: state.config?.sources ?? [] }),
       labels: () => state.config?.labels ?? {},
-      sources: () => state.config?.sources.map((s) => s.id) ?? [],
       columnOf: (id) => state.columns.get(id) ?? null,
       reload: load,
       redraw: draw,

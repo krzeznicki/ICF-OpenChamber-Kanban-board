@@ -5,7 +5,8 @@
 // the creates and the links. The service's error shows inside the modal; when the task was created
 // but some sub-tasks were not created or linked, the modal says which and offers only Close. With
 // suggestions on, Type and State start on "Let the model pick" (suggest.ts fills those in after
-// the create).
+// the create). With several sources the task goes to the switcher's source; in All a Source select
+// (starting on the primary) picks it, and parent, blockers and existing sub-tasks come only from it.
 import { mountBanner, mountButton, mountSelect, mountTextField } from '@openchamber/sdk/ui';
 import type { Task, TaskState } from '../../core/types.ts';
 import {
@@ -15,6 +16,9 @@ import {
   draftSubtasks,
   draftType,
   emptyDraft,
+  parentChoices,
+  sourceTasks,
+  withSource,
   existingSubtaskChoices,
   isDirty,
   keepOffered,
@@ -24,7 +28,9 @@ import {
   type Choice,
   type TrackerKind,
 } from '../addTask.ts';
+import type { SourceInfo } from '../api.ts';
 import type { Preset } from '../presets.ts';
+import { kindOfSource } from '../sources.ts';
 import type { StartLists } from '../models.ts';
 import type { StartOptions } from '../settings.ts';
 import { mountCloseButton } from './closeButton.ts';
@@ -35,11 +41,14 @@ import { mountStartOptions } from './startOptions.ts';
 import { hintLastChild } from './shortcutHints.ts';
 
 export type AddModalModel = {
+  /** The primary source's kind: how a source the panel does not know is handled. */
   tracker: TrackerKind;
   types: string[];
-  /** Open parents (addTask.ts parentChoices). */
-  parents: Choice[];
-  /** The listed tasks, for the blocked-by and existing sub-task choices. */
+  /** Where the task goes and, in All, the Source select's options (addTask.ts addSource). */
+  source: { source: string; picker: Choice[] | null };
+  /** The project's sources, for what each can do (capabilities); empty: everything. */
+  sources: readonly SourceInfo[];
+  /** The listed tasks of every source; parent, blocked-by and existing sub-task choices take the chosen source's. */
   tasks: readonly Task[];
   /** Role -> label in the repo; shown as a hint when it differs. */
   labels: Record<string, string>;
@@ -89,6 +98,15 @@ export const openAddModal = (
 ): AddModalHandle => {
   const d: AddDraft = emptyDraft(model.suggest);
   if (!model.suggest) d.type = model.types.includes('enhancement') ? 'enhancement' : NONE;
+  d.source = model.source.source;
+  const ALL_CAPS: SourceInfo['capabilities'] = { create: true, subtasks: true, blockedBy: true, claim: true, delete: true };
+  /** What the chosen source can do; a source missing from the config can do everything. */
+  const caps = (): SourceInfo['capabilities'] => model.sources.find((s) => s.id === d.source)?.capabilities ?? ALL_CAPS;
+  /** How the chosen source works (wording, local file rules). */
+  const kind = (): TrackerKind => kindOfSource(d.source, model.tracker);
+  /** The chosen source's tasks: the only ones the form offers. */
+  const tasks = (): Task[] => sourceTasks(model.tasks, d.source);
+  const parentOptions = (): Choice[] => [{ id: NONE, label: kind() === 'local' ? 'None (new feature)' : 'None' }, ...parentChoices(tasks())];
   /** A type literally named like the sentinel is not offered (it would read as the model's pick). */
   const types = model.types.filter((t) => t !== MODEL_PICK);
   const pick = model.suggest ? [{ id: MODEL_PICK, label: 'Let the model pick', hint: 'Small Model, after the task is created' }] : [];
@@ -144,7 +162,9 @@ export const openAddModal = (
   const stateSlot = el('div', 'kb-field');
   row1.append(typeSlot, stateSlot);
   const parentSlot = part('kb-fields');
+  const sourceCell = el('div', 'kb-field');
   const parentCell = el('div', 'kb-field');
+  if (model.source.picker !== null) parentSlot.append(sourceCell);
   parentSlot.append(parentCell);
   const blockersBox = part('kb-sheet-part kb-add-group');
   const bodySlot = part('kb-add-body');
@@ -190,11 +210,29 @@ export const openAddModal = (
       stateSelect.update({ value: id });
     },
   });
+  /** The Source select (All only): a new source re-scopes everything picked so far. */
+  const sourceSelect =
+    model.source.picker === null
+      ? null
+      : mountSelect(sourceCell, {
+          label: 'Source',
+          value: d.source,
+          options: model.source.picker,
+          onChange: (id) => {
+            Object.assign(d, withSource(d, id, model.tasks, model.sources.find((s) => s.id === id)?.capabilities ?? ALL_CAPS));
+            sourceSelect?.update({ value: id });
+            drawParent();
+            drawBlockers();
+            drawSubtasks();
+            drawExisting();
+            drawStart();
+          },
+        });
   const parentSelect = mountSelect(parentCell, {
     label: 'Parent',
     value: d.parentId,
-    options: [{ id: NONE, label: model.tracker === 'local' ? 'None (new feature)' : 'None' }, ...model.parents],
-    searchable: model.parents.length > FILTER_OVER,
+    options: parentOptions(),
+    searchable: parentOptions().length - 1 > FILTER_OVER,
     onChange: (id) => {
       d.parentId = id;
       parentSelect.update({ value: id });
@@ -215,7 +253,14 @@ export const openAddModal = (
       bodyField.update({ value: v });
     },
   });
-  const fixed = [titleField, typeSelect, stateSelect, parentSelect, bodyField];
+  /** The chosen source's parents; hidden where it takes no sub-tasks. */
+  const drawParent = (): void => {
+    const options = parentOptions();
+    parentCell.hidden = !caps().subtasks;
+    parentSelect.update({ value: d.parentId, options, searchable: options.length - 1 > FILTER_OVER });
+  };
+  drawParent();
+  const fixed = [titleField, typeSelect, stateSelect, parentSelect, bodyField, ...(sourceSelect === null ? [] : [sourceSelect])];
 
   // --- blocked by: checkboxes of what addTask.ts offers for this parent ---
   let blockerDisposers: Array<() => void> = [];
@@ -224,12 +269,14 @@ export const openAddModal = (
     for (const x of blockerDisposers) x();
     blockerDisposers = [];
     blockersBox.replaceChildren();
-    const offered = blockerChoices(model.tasks, model.tracker, d.parentId);
+    const offered = caps().blockedBy ? blockerChoices(tasks(), kind(), d.parentId) : [];
     d.blockedBy = keepOffered(d.blockedBy, offered);
+    blockersBox.hidden = !caps().blockedBy;
+    if (blockersBox.hidden) return;
     blockersBox.append(el('h3', 'kb-settings-heading', 'Blocked by'));
     if (offered.length === 0) {
       const why =
-        model.tracker === 'local'
+        kind() === 'local'
           ? d.parentId === NONE
             ? 'A new feature has no blockers; pick a parent to choose tickets of that feature.'
             : 'That feature has no open tickets.'
@@ -256,8 +303,10 @@ export const openAddModal = (
     for (const x of subDisposers) x();
     subDisposers = [];
     subBox.replaceChildren();
+    subBox.hidden = !caps().subtasks;
+    if (subBox.hidden) return;
     subBox.append(el('h3', 'kb-settings-heading', 'Sub-tasks'));
-    if (!canHaveSubtasks(model.tracker, d.parentId)) {
+    if (!canHaveSubtasks(kind(), d.parentId)) {
       subBox.append(el('p', 'kb-muted', 'A ticket of a feature cannot have sub-tasks here; choose no parent to create a feature with sub-tasks.'));
       return;
     }
@@ -265,7 +314,7 @@ export const openAddModal = (
       el(
         'p',
         'kb-muted',
-        model.tracker === 'local' ? 'Created as tickets of the new feature, in this order.' : 'Created as sub-issues of the new issue, in this order.',
+        kind() === 'local' ? 'Created as tickets of the new feature, in this order.' : 'Created as sub-issues of the new issue, in this order.',
       ),
     );
     d.subtasks.forEach((value, i) => {
@@ -333,21 +382,21 @@ export const openAddModal = (
     for (const x of existingDisposers) x();
     existingDisposers = [];
     existingBox.replaceChildren();
-    const offered = existingSubtaskChoices(model.tasks, model.tracker, d.parentId);
+    const offered = caps().subtasks ? existingSubtaskChoices(tasks(), kind(), d.parentId) : [];
     d.existing = keepOffered(d.existing, offered);
     // Where the new task takes no sub-tasks, the Sub-tasks section already says why.
-    existingBox.hidden = !canHaveSubtasks(model.tracker, d.parentId);
+    existingBox.hidden = !caps().subtasks || !canHaveSubtasks(kind(), d.parentId);
     if (existingBox.hidden) return;
     existingBox.append(el('h3', 'kb-settings-heading', 'Existing sub-tasks'));
     if (offered.length === 0) {
-      existingBox.append(el('p', 'kb-muted', model.tracker === 'local' ? 'No open tickets or features without tickets to move.' : 'No open issues.'));
+      existingBox.append(el('p', 'kb-muted', kind() === 'local' ? 'No open tickets or features without tickets to move.' : 'No open issues.'));
       return;
     }
     existingBox.append(
       el(
         'p',
         'kb-muted',
-        model.tracker === 'local' ? 'Moved into the new feature as its tickets once it is created.' : 'Linked as sub-issues of the new issue once it is created.',
+        kind() === 'local' ? 'Moved into the new feature as its tickets once it is created.' : 'Linked as sub-issues of the new issue once it is created.',
       ),
     );
     existingDisposers = mountCheckList(existingBox, {
@@ -375,7 +424,7 @@ export const openAddModal = (
   };
   const drawStart = (): void => {
     const s = start;
-    const inherited = s === null ? null : s.inherited(draftType(d), draftSubtasks(d, model.tracker));
+    const inherited = s === null ? null : s.inherited(draftType(d), draftSubtasks(d, kind()));
     const key =
       s === null ? 'loading' : JSON.stringify([s.projectId, inherited, s.summaryLanguage, s.presets.map((p) => [p.id, p.name])]);
     lockStart();

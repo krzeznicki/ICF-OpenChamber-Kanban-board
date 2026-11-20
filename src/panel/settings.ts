@@ -293,6 +293,8 @@ export const STORAGE_KEYS = {
   archivedTasks: (projectId: string): string => fit(`archivedTasks:${projectId}`),
   /** Per project: the manual card order, task ids (order.ts). */
   taskOrder: (projectId: string): string => fit(`taskOrder:${projectId}`),
+  /** Per project: the source switcher's choice, `all` or a source id (sourceView.ts currentSourceView checks it). */
+  sourceView: (projectId: string): string => fit(`sourceView:${projectId}`),
   /** Which sections of the task modal are open (one entry for every task and project). */
   detailSections: 'detail-sections',
   /** The project the board last showed by the host's directory or the user's pick (projectFollow.ts): a fresh board that cannot place its directory opens it. */
@@ -422,6 +424,12 @@ export const createSettingsStore = (storage: SettingsStorage) => {
     loadOrder: async (projectId: string): Promise<string[]> => parseOrder(await storage.get(STORAGE_KEYS.taskOrder(projectId))),
     saveOrder: (projectId: string, order: readonly string[]): Promise<void> =>
       put(STORAGE_KEYS.taskOrder(projectId), order.slice(0, ORDER_MAX), order.length === 0),
+    /** The stored source switcher choice as text, or null; whether the project still has it is sourceView.ts's call. */
+    loadSourceView: async (projectId: string): Promise<string | null> => {
+      const v = await storage.get(STORAGE_KEYS.sourceView(projectId));
+      return typeof v === 'string' && v !== '' ? v : null;
+    },
+    saveSourceView: (projectId: string, view: string): Promise<void> => storage.set(STORAGE_KEYS.sourceView(projectId), view as never),
     loadLastProject: async (): Promise<string | null> => {
       const v = await storage.get(STORAGE_KEYS.lastProject);
       return typeof v === 'string' && v !== '' ? v : null;

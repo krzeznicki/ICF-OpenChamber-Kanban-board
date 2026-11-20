@@ -1,22 +1,26 @@
-// The board shell: a toolbar (a TEST badge in the test build, project switcher, "Hide sub-tasks", a search field,
+// The board shell: a toolbar (a TEST badge in the test build, project switcher, source switcher with several
+// sources (sourceView.ts), "Hide sub-tasks", a search field,
 // Add task, Settings, Refresh; the search completes filters, ui/searchSuggest.ts, and hands Esc in an
 // empty field and ↓ back to main.ts for the Board), a status slot for banners, spinner and empty states, and the five columns. The Done header carries
 // "Archive done", "Show archived (N)" (archive.ts) and "Clear archive" (clearArchive.ts).
 // It draws what main.ts hands it and reports clicks back; it holds no data of its own. Dragging
 // is attached to `columns` by the editor (ui/dnd.ts).
-import { mountBanner, mountButton, mountEmpty, mountSearchField, mountSelect, mountSpinner, mountSwitch } from '@openchamber/sdk/ui';
+import { mountBanner, mountButton, mountEmpty, mountSearchField, mountSelect, mountSpinner, mountSwitch, mountTabs } from '@openchamber/sdk/ui';
 import type { BannerTone, SelectOption } from '@openchamber/sdk/ui';
 import type { Task } from '../../core/types.ts';
 import { VARIANT } from '../../core/variant.ts';
 import { COLUMNS, type BoardModel } from '../columns.ts';
 import type { Suggestion } from '../search.ts';
 import type { SourceBanner } from '../sourceBanner.ts';
+import type { SourceSwitcher, SourceView } from '../sourceView.ts';
 import { hintLastChild, hintShortcut } from './shortcutHints.ts';
 import { renderCard } from './card.ts';
 import { mountSearchSuggest } from './searchSuggest.ts';
 
 export type BoardCallbacks = {
   onProject: (projectId: string) => void;
+  /** The source switcher's pick: All or one source. */
+  onSource: (view: SourceView) => void;
   onHideSubtasks: (hide: boolean) => void;
   /** The search field's text, on every keystroke (search.ts filters the cards). */
   onSearch: (query: string) => void;
@@ -60,13 +64,15 @@ export const createBoard = (root: HTMLElement, callbacks: BoardCallbacks) => {
   const shell = div('kb');
   const toolbar = div('kb-toolbar');
   const projectSlot = div('kb-project');
+  const sourceSlot = div('kb-source');
+  sourceSlot.hidden = true;
   const switchSlot = div('kb-hide');
   const searchSlot = div('kb-search');
   const spacer = div('kb-spacer');
   const addSlot = div('kb-add-button');
   const settingsSlot = div('kb-settings-button');
   const refreshSlot = div('kb-refresh');
-  toolbar.append(projectSlot, switchSlot, searchSlot, spacer, addSlot, settingsSlot, refreshSlot);
+  toolbar.append(projectSlot, sourceSlot, switchSlot, searchSlot, spacer, addSlot, settingsSlot, refreshSlot);
   // The local test build (npm run build:test) says so, so it is never mistaken for production.
   if (VARIANT === 'test') {
     const badge = document.createElement('span');
@@ -96,6 +102,32 @@ export const createBoard = (root: HTMLElement, callbacks: BoardCallbacks) => {
       callbacks.onProject(id);
     },
   });
+  // Segments or a dropdown, rebuilt only when the project's sources change (sourceView.ts sourceSwitcher).
+  let sourceControl: { key: string; set: (view: SourceView) => void; dispose: () => void } | null = null;
+  const setSources = (switcher: SourceSwitcher | null, view: SourceView | null): void => {
+    const key = switcher === null ? '' : JSON.stringify(switcher);
+    if (sourceControl?.key !== key) {
+      sourceControl?.dispose();
+      sourceControl = null;
+      sourceSlot.replaceChildren();
+      if (switcher !== null) {
+        const pick = (id: string): void => {
+          sourceControl?.set(id as SourceView);
+          callbacks.onSource(id as SourceView);
+        };
+        const first = view ?? switcher.options[0]!.value;
+        if (switcher.kind === 'segments') {
+          const tabs = mountTabs(sourceSlot, { items: switcher.options.map((o) => ({ id: o.value, label: o.label })), activeId: first, onChange: pick, trackBackground: true });
+          sourceControl = { key, set: (v) => tabs.update({ activeId: v }), dispose: tabs.dispose };
+        } else {
+          const select = mountSelect(sourceSlot, { value: first, options: switcher.options.map((o) => ({ id: o.value, label: o.label })), onChange: pick });
+          sourceControl = { key, set: (v) => select.update({ value: v }), dispose: select.dispose };
+        }
+      }
+    }
+    sourceSlot.hidden = sourceControl === null;
+    if (sourceControl !== null && view !== null) sourceControl.set(view);
+  };
   const hideSwitch = mountSwitch(switchSlot, {
     label: 'Hide sub-tasks',
     checked: false,
@@ -108,7 +140,7 @@ export const createBoard = (root: HTMLElement, callbacks: BoardCallbacks) => {
   const search = mountSearchField(searchSlot, {
     value: '',
     placeholder: 'Search tasks, type:, status:…',
-    label: 'Search tasks by title or description, or filter with type:, state:, status: and column:',
+    label: 'Search tasks by title or description, or filter with type:, state:, status:, column: and source:',
     onChange: (query) => setQuery(query),
   });
   const setQuery = (query: string): void => {
@@ -193,6 +225,8 @@ export const createBoard = (root: HTMLElement, callbacks: BoardCallbacks) => {
     setCanAdd: (enabled: boolean) => add.update({ disabled: !enabled }),
     /** The "Hide sub-tasks" switch follows the project's settings when they load. */
     setHideSubtasks: (checked: boolean) => hideSwitch.update({ checked }),
+    /** The source switcher: null hides it (one source, or no board); `view` is the one shown. */
+    setSources,
     setProjects: (options: SelectOption[], value: string | null) => {
       project.update({
         options,
@@ -255,6 +289,7 @@ export const createBoard = (root: HTMLElement, callbacks: BoardCallbacks) => {
       busy: ReadonlySet<string> = new Set(),
       summaryOf: (task: Task) => string | null = () => null,
       done: DoneTools = NO_TOOLS,
+      sourceOf: (task: Task) => string | null = () => null,
     ) => {
       for (const d of cardDisposers) d();
       cardDisposers = [];
@@ -281,7 +316,7 @@ export const createBoard = (root: HTMLElement, callbacks: BoardCallbacks) => {
           list.append(none);
         }
         for (const model of cards) {
-          const card = renderCard(model, busy.has(model.task.id), summaryOf(model.task));
+          const card = renderCard(model, busy.has(model.task.id), summaryOf(model.task), sourceOf(model.task));
           list.append(card.node);
           cardDisposers.push(card.dispose);
         }

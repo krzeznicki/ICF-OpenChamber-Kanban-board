@@ -1,6 +1,6 @@
 // The toolbar's search: which tasks match the words typed. Words look at the title and the
 // description as the edit form shows it (a local file without its heading and field lines, so
-// "ready" does not match every Status line); `type:`, `state:`, `column:` and `status:` filter on the
+// "ready" does not match every Status line); `type:`, `state:`, `column:`, `status:` and `source:` filter on the
 // task's fields and column, and searchSuggestions completes them. Pure: no DOM, so it runs under node:test.
 import type { Task } from '../core/types.ts';
 import { TASK_STATES } from '../core/types.ts';
@@ -11,7 +11,7 @@ import { editableText } from './taskEdit.ts';
 import { sourceKind } from './sources.ts';
 
 /** The filter keys a query understands, as `key:value` or `key=value`. */
-export const FILTER_KEYS = ['type', 'state', 'status', 'column'] as const;
+export const FILTER_KEYS = ['type', 'state', 'status', 'column', 'source'] as const;
 export type FilterKey = (typeof FILTER_KEYS)[number];
 
 type ParsedQuery = { words: string[]; filters: Map<FilterKey, string[]> };
@@ -56,13 +56,16 @@ const columnNames = (column: Column | null): string[] => {
 /** `status:` names a column ("ready", "prog") or else a tracker state ("info", "human"). */
 const namesColumn = (wanted: string): boolean => COLUMNS.some((c) => anyMatches(columnNames(c.id), wanted));
 
+/** What the board knows that a filter offers values from: its task types and the project's source ids. */
+type Offers = { types: readonly string[]; sources: readonly string[] };
+
 /**
  * Per key: whether a task (drawn in `column`, null: not drawn, as a sub-task hidden by "Hide
  * sub-tasks") matches one typed value, and the values searchSuggestions offers.
  */
-type FilterSpec = { holds: (task: Task, column: Column | null, wanted: string) => boolean; offers: (types: readonly string[]) => string[] };
+type FilterSpec = { holds: (task: Task, column: Column | null, wanted: string) => boolean; offers: (board: Offers) => string[] };
 
-const typeFilter: FilterSpec = { holds: (t, _c, w) => t.type !== null && valueMatches(t.type, w), offers: (types) => [...types] };
+const typeFilter: FilterSpec = { holds: (t, _c, w) => t.type !== null && valueMatches(t.type, w), offers: ({ types }) => [...types] };
 const stateFilter: FilterSpec = { holds: (t, _c, w) => valueMatches(t.state, w), offers: () => [...TASK_STATES] };
 const columnFilter: FilterSpec = { holds: (_t, c, w) => anyMatches(columnNames(c), w), offers: () => COLUMNS.map((c) => c.id) };
 
@@ -72,8 +75,9 @@ const FILTERS: Record<FilterKey, FilterSpec> = {
   column: columnFilter,
   status: {
     holds: (t, c, w) => (namesColumn(w) ? columnFilter : stateFilter).holds(t, c, w),
-    offers: (types) => [...new Set([...columnFilter.offers(types), ...stateFilter.offers(types)])],
+    offers: (board) => [...new Set([...columnFilter.offers(board), ...stateFilter.offers(board)])],
   },
+  source: { holds: (t, _c, w) => valueMatches(t.source, w), offers: ({ sources }) => [...sources] },
 };
 
 const matchesParsed = (task: Task, q: ParsedQuery, tracker: TrackerKind, column: Column | null): boolean => {
@@ -120,10 +124,11 @@ export type Suggestion = { label: string; text: string; caret: number };
 /**
  * What to offer for the word that ends at the caret: the keys it starts (`st` -> `state:`, `status:`), or
  * after `key:` (or `key=`) the values matching what follows (as filters match them). Picking a key
- * leaves the caret after it; picking a value ends the word with a space. `types`: the board's types.
+ * leaves the caret after it; picking a value ends the word with a space. `types`: the board's types;
+ * `sources`: the project's source ids (`source:` is offered only with several, though it filters always).
  * Nothing when the only match is what is already typed.
  */
-export const searchSuggestions = (text: string, caret: number, types: readonly string[]): Suggestion[] => {
+export const searchSuggestions = (text: string, caret: number, types: readonly string[], sources: readonly string[] = []): Suggestion[] => {
   // Only at the end of a word: completing inside one would leave or swallow the rest of it.
   if (/^\S/.test(text.slice(caret))) return [];
   const start = text.slice(0, caret).search(/\S*$/);
@@ -138,12 +143,13 @@ export const searchSuggestions = (text: string, caret: number, types: readonly s
   const m = /^([a-zA-Z]+)([:=])(.*)$/.exec(word);
   if (m === null) {
     const typed = foldText(word);
-    return FILTER_KEYS.filter((k) => k.startsWith(typed)).map((k) => replace(`${k}:`, false));
+    const keys = sources.length > 1 ? FILTER_KEYS : FILTER_KEYS.filter((k) => k !== 'source');
+    return keys.filter((k) => k.startsWith(typed)).map((k) => replace(`${k}:`, false));
   }
   const key = foldText(m[1]!);
   if (!isFilterKey(key)) return [];
   const typed = foldText(m[3]!);
-  const values = FILTERS[key].offers(types).filter((v) => typed === '' || valueMatches(v, typed));
+  const values = FILTERS[key].offers({ types, sources }).filter((v) => typed === '' || valueMatches(v, typed));
   if (values.every((v) => foldText(v) === typed)) return [];
   return values.map((v) => replace(`${m[1]}${m[2]}${v}`, true));
 };

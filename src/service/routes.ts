@@ -5,7 +5,17 @@ import { realpath, stat } from 'node:fs/promises';
 import { basename, dirname, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readSessionEventRequest, SESSION_EVENTS_PATH, type GuestSessionEventRequest } from '@openchamber/sdk';
-import { readConfig, readLabels, writeConfig, type ProjectConfig } from '../core/config.ts';
+import {
+  changeSources,
+  EditedTemplateError,
+  readConfig,
+  readLabels,
+  SOURCE_IDS,
+  writeConfig,
+  type ProjectConfig,
+  type SourceChange,
+  type SourceId,
+} from '../core/config.ts';
 import { createGithubTracker } from '../core/githubTracker.ts';
 import { openTracker } from '../core/openTracker.ts';
 import { publishTask } from '../core/publish.ts';
@@ -295,6 +305,20 @@ const followMove = async (id: string, task: Task, dir: string, deps: Deps): Prom
   await rekey('queue entry', () => renameInQueue(queueFile(deps), dir, id, task.id));
 };
 
+/** `body.change` of /config/sources: exactly one of add, remove and primary, naming a known source. */
+const sourceChange = (value: unknown): SourceChange => {
+  const keys = typeof value === 'object' && value !== null && !Array.isArray(value) ? Object.keys(value) : [];
+  const key = keys[0];
+  if (keys.length !== 1 || (key !== 'add' && key !== 'remove' && key !== 'primary')) {
+    return invalid('"change" must be one of {add}, {remove} and {primary} with a source id');
+  }
+  const id = (value as Record<string, unknown>)[key];
+  if (typeof id !== 'string' || !(SOURCE_IDS as readonly string[]).includes(id)) {
+    return invalid(`"change.${key}" must be ${SOURCE_IDS.map((s) => `"${s}"`).join(' or ')}`);
+  }
+  return { [key]: id as SourceId } as SourceChange;
+};
+
 /** The config already in `dir`, or null when it has none (an unsupported one throws). */
 const existingConfig = async (dir: string): Promise<ProjectConfig | null> => {
   try {
@@ -411,6 +435,37 @@ const POST: Record<string, Route> = {
     if (config.tracker !== kind) alreadySetUp(config.tracker);
     await gh?.setupLabels();
     return { config: configAnswer(config) };
+  },
+  /**
+   * Settings → Sources: `change` is `{add}`, `{remove}` or `{primary}` with a source id; the same file
+   * as `task-board init --add/--remove/--primary`. A primary change over a template edited by hand
+   * answers `{confirm: message}` and writes nothing; the panel asks and sends it again with `force`.
+   * A newly added GitHub source is checked (remote, gh) first and gets its labels, as in /config/init.
+   */
+  '/config/sources': async (body, dir, deps) => {
+    const change = sourceChange(body.change);
+    const force = body.force === true;
+    const config = await readConfig(dir);
+    const id = 'add' in change ? change.add : 'primary' in change ? change.primary : null;
+    const gh = id === 'github' && !config.sources.includes('github') ? createGithubTracker(dir, deps.exec, config.labels) : null;
+    if (gh !== null) {
+      if ((await detectRemote(dir, deps.exec)) === null) throw new TrackerError('INVALID', 'This folder has no GitHub remote; add one first');
+      await gh.preflight();
+    }
+    let changed: ProjectConfig;
+    try {
+      changed = await changeSources(dir, change, { force });
+    } catch (e) {
+      if (e instanceof EditedTemplateError) {
+        const label = (id: SourceId): string => sourceInfo(id).label;
+        return {
+          confirm: `The ${label(e.primary)} instructions in docs/agents/issue-tracker.md were edited by hand. Making ${label((change as { primary: SourceId }).primary)} the primary source replaces them with its template, and those edits are lost.`,
+        };
+      }
+      throw e;
+    }
+    await gh?.setupLabels();
+    return { config: configAnswer(changed) };
   },
   '/config/detect': async (_body, dir, deps) => ({ remote: await detectRemote(dir, deps.exec) }),
   /** `errors`: one per source that failed (SourceError); the other sources' tasks are still listed. */
