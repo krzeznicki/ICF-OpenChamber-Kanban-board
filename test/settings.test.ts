@@ -470,3 +470,18 @@ test('store: shortcut overrides round-trip in the global layer; resetting all de
   await store.saveGlobal({ shortcuts: {} });
   assert.equal(data.has('settings:global'), false);
 });
+
+test('source view: stored per project under sourceView:<projectId>; nothing stored reads as no choice', async () => {
+  const { data, storage } = fakeStorage();
+  const store = createSettingsStore(storage);
+  assert.equal(STORAGE_KEYS.sourceView('p1'), 'sourceView:p1');
+  assert.ok(STORAGE_KEYS.sourceView('p'.repeat(300)).length <= 128);
+  assert.equal(await store.loadSourceView('p1'), null);
+  await store.saveSourceView('p1', 'all');
+  await store.saveSourceView('p2', 'github');
+  assert.equal(data.get('sourceView:p1'), 'all');
+  assert.equal(await store.loadSourceView('p1'), 'all');
+  assert.equal(await store.loadSourceView('p2'), 'github');
+  data.set('sourceView:p3', 42);
+  assert.equal(await store.loadSourceView('p3'), null);
+});

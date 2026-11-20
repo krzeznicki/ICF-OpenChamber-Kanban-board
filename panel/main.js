@@ -4413,6 +4413,8 @@ ${ref}`,
     archivedTasks: (projectId) => fit(`archivedTasks:${projectId}`),
     /** Per project: the manual card order, task ids (order.ts). */
     taskOrder: (projectId) => fit(`taskOrder:${projectId}`),
+    /** Per project: the source switcher's choice, `all` or a source id (sourceView.ts currentSourceView checks it). */
+    sourceView: (projectId) => fit(`sourceView:${projectId}`),
     /** Which sections of the task modal are open (one entry for every task and project). */
     detailSections: "detail-sections",
     /** The project the board last showed by the host's directory or the user's pick (projectFollow.ts): a fresh board that cannot place its directory opens it. */
@@ -4511,6 +4513,12 @@ ${ref}`,
       saveArchivedTasks: (projectId, marks) => put(STORAGE_KEYS.archivedTasks(projectId), serializeArchived(marks), marks.size === 0),
       loadOrder: async (projectId) => parseOrder(await storage.get(STORAGE_KEYS.taskOrder(projectId))),
       saveOrder: (projectId, order2) => put(STORAGE_KEYS.taskOrder(projectId), order2.slice(0, ORDER_MAX), order2.length === 0),
+      /** The stored source switcher choice as text, or null; whether the project still has it is sourceView.ts's call. */
+      loadSourceView: async (projectId) => {
+        const v2 = await storage.get(STORAGE_KEYS.sourceView(projectId));
+        return typeof v2 === "string" && v2 !== "" ? v2 : null;
+      },
+      saveSourceView: (projectId, view) => storage.set(STORAGE_KEYS.sourceView(projectId), view),
       loadLastProject: async () => {
         const v2 = await storage.get(STORAGE_KEYS.lastProject);
         return typeof v2 === "string" && v2 !== "" ? v2 : null;
@@ -14508,7 +14516,7 @@ ${note}` : note;
   };
 
   // src/panel/search.ts
-  var FILTER_KEYS = ["type", "state", "status", "column"];
+  var FILTER_KEYS = ["type", "state", "status", "column", "source"];
   var FILTER = /^([a-z]+)[:=](.*)$/;
   var isFilterKey = (key) => FILTER_KEYS.includes(key);
   var parseQuery = (query) => {
@@ -14537,7 +14545,7 @@ ${note}` : note;
     return c === void 0 ? [] : [c.id, c.title];
   };
   var namesColumn = (wanted) => COLUMNS.some((c) => anyMatches(columnNames(c.id), wanted));
-  var typeFilter = { holds: (t, _c, w) => t.type !== null && valueMatches(t.type, w), offers: (types) => [...types] };
+  var typeFilter = { holds: (t, _c, w) => t.type !== null && valueMatches(t.type, w), offers: ({ types }) => [...types] };
   var stateFilter = { holds: (t, _c, w) => valueMatches(t.state, w), offers: () => [...TASK_STATES] };
   var columnFilter = { holds: (_t, c, w) => anyMatches(columnNames(c), w), offers: () => COLUMNS.map((c) => c.id) };
   var FILTERS = {
@@ -14546,8 +14554,9 @@ ${note}` : note;
     column: columnFilter,
     status: {
       holds: (t, c, w) => (namesColumn(w) ? columnFilter : stateFilter).holds(t, c, w),
-      offers: (types) => [.../* @__PURE__ */ new Set([...columnFilter.offers(types), ...stateFilter.offers(types)])]
-    }
+      offers: (board2) => [.../* @__PURE__ */ new Set([...columnFilter.offers(board2), ...stateFilter.offers(board2)])]
+    },
+    source: { holds: (t, _c, w) => valueMatches(t.source, w), offers: ({ sources }) => [...sources] }
   };
   var matchesParsed = (task, q, tracker, column) => {
     for (const [key, wanted] of q.filters) if (!wanted.some((w) => FILTERS[key].holds(task, column, w))) return false;
@@ -14572,7 +14581,7 @@ ${body}`);
     for (const { id: column } of COLUMNS) out[column] = board2[column].filter((c) => keep.has(c.task.id));
     return out;
   };
-  var searchSuggestions = (text3, caret, types) => {
+  var searchSuggestions = (text3, caret, types, sources = []) => {
     if (/^\S/.test(text3.slice(caret))) return [];
     const start2 = text3.slice(0, caret).search(/\S*$/);
     const word = text3.slice(start2, caret);
@@ -14586,14 +14595,35 @@ ${body}`);
     const m = /^([a-zA-Z]+)([:=])(.*)$/.exec(word);
     if (m === null) {
       const typed2 = foldText(word);
-      return FILTER_KEYS.filter((k) => k.startsWith(typed2)).map((k) => replace2(`${k}:`, false));
+      const keys = sources.length > 1 ? FILTER_KEYS : FILTER_KEYS.filter((k) => k !== "source");
+      return keys.filter((k) => k.startsWith(typed2)).map((k) => replace2(`${k}:`, false));
     }
     const key = foldText(m[1]);
     if (!isFilterKey(key)) return [];
     const typed = foldText(m[3]);
-    const values = FILTERS[key].offers(types).filter((v2) => typed === "" || valueMatches(v2, typed));
+    const values = FILTERS[key].offers({ types, sources }).filter((v2) => typed === "" || valueMatches(v2, typed));
     if (values.every((v2) => foldText(v2) === typed)) return [];
     return values.map((v2) => replace2(`${m[1]}${m[2]}${v2}`, true));
+  };
+
+  // src/panel/sourceView.ts
+  var MAX_SEGMENT_SOURCES = 3;
+  var sourceSwitcher = (sources) => {
+    if (sources.length < 2) return null;
+    return {
+      kind: sources.length > MAX_SEGMENT_SOURCES ? "dropdown" : "segments",
+      options: [{ value: "all", label: "All" }, ...sources.map((s) => ({ value: s.id, label: s.label }))]
+    };
+  };
+  var currentSourceView = (stored2, config2) => {
+    const several = config2.sources.length > 1;
+    if (stored2 === "all") return several ? "all" : config2.primary;
+    return config2.sources.some((s) => s.id === stored2) ? stored2 : config2.primary;
+  };
+  var tasksInView = (tasks, view) => view === "all" ? [...tasks] : tasks.filter((t) => t.source === view);
+  var sourceBadge = (task, view, sources) => {
+    if (view !== "all" || sources.length < 2) return null;
+    return sources.find((s) => s.id === task.source)?.label ?? task.source;
   };
 
   // src/panel/projectFollow.ts
@@ -14711,7 +14741,7 @@ ${listKey(projects)}`;
         return s.outcome === "failed" ? { label: "agent failed", tone: "error" } : s.outcome === "completed" ? { label: "agent finished", tone: "success" } : { label: "agent idle", tone: "neutral" };
     }
   };
-  var renderCard = (model, busy = false, summary = null) => {
+  var renderCard = (model, busy = false, summary = null, source2 = null) => {
     const { task } = model;
     const disposers = [];
     const node = document.createElement("article");
@@ -14752,6 +14782,7 @@ ${listKey(projects)}`;
     } else if (model.starting) {
       badge2("starting agent\u2026", "info");
     }
+    if (source2 !== null) badge2(source2, "info");
     if (model.archived) badge2("archived", "neutral");
     if (model.ledByOrchestrator) badge2("led by orchestrator", "primary");
     if (task.kind === "parent") badge2("parent", "primary");
@@ -14889,13 +14920,15 @@ ${listKey(projects)}`;
     const shell = div3("kb");
     const toolbar = div3("kb-toolbar");
     const projectSlot = div3("kb-project");
+    const sourceSlot = div3("kb-source");
+    sourceSlot.hidden = true;
     const switchSlot = div3("kb-hide");
     const searchSlot = div3("kb-search");
     const spacer = div3("kb-spacer");
     const addSlot = div3("kb-add-button");
     const settingsSlot = div3("kb-settings-button");
     const refreshSlot = div3("kb-refresh");
-    toolbar.append(projectSlot, switchSlot, searchSlot, spacer, addSlot, settingsSlot, refreshSlot);
+    toolbar.append(projectSlot, sourceSlot, switchSlot, searchSlot, spacer, addSlot, settingsSlot, refreshSlot);
     if (VARIANT === "test") {
       const badge2 = document.createElement("span");
       badge2.className = "kb-test-badge";
@@ -14919,6 +14952,31 @@ ${listKey(projects)}`;
         callbacks.onProject(id);
       }
     });
+    let sourceControl = null;
+    const setSources = (switcher, view) => {
+      const key = switcher === null ? "" : JSON.stringify(switcher);
+      if (sourceControl?.key !== key) {
+        sourceControl?.dispose();
+        sourceControl = null;
+        sourceSlot.replaceChildren();
+        if (switcher !== null) {
+          const pick = (id) => {
+            sourceControl?.set(id);
+            callbacks.onSource(id);
+          };
+          const first = view ?? switcher.options[0].value;
+          if (switcher.kind === "segments") {
+            const tabs = mountTabs(sourceSlot, { items: switcher.options.map((o) => ({ id: o.value, label: o.label })), activeId: first, onChange: pick, trackBackground: true });
+            sourceControl = { key, set: (v2) => tabs.update({ activeId: v2 }), dispose: tabs.dispose };
+          } else {
+            const select = mountSelect(sourceSlot, { value: first, options: switcher.options.map((o) => ({ id: o.value, label: o.label })), onChange: pick });
+            sourceControl = { key, set: (v2) => select.update({ value: v2 }), dispose: select.dispose };
+          }
+        }
+      }
+      sourceSlot.hidden = sourceControl === null;
+      if (sourceControl !== null && view !== null) sourceControl.set(view);
+    };
     const hideSwitch = mountSwitch(switchSlot, {
       label: "Hide sub-tasks",
       checked: false,
@@ -14930,7 +14988,7 @@ ${listKey(projects)}`;
     const search = mountSearchField(searchSlot, {
       value: "",
       placeholder: "Search tasks, type:, status:\u2026",
-      label: "Search tasks by title or description, or filter with type:, state:, status: and column:",
+      label: "Search tasks by title or description, or filter with type:, state:, status:, column: and source:",
       onChange: (query) => setQuery(query)
     });
     const setQuery = (query) => {
@@ -14995,6 +15053,8 @@ ${listKey(projects)}`;
       setCanAdd: (enabled) => add2.update({ disabled: !enabled }),
       /** The "Hide sub-tasks" switch follows the project's settings when they load. */
       setHideSubtasks: (checked) => hideSwitch.update({ checked }),
+      /** The source switcher: null hides it (one source, or no board); `view` is the one shown. */
+      setSources,
       setProjects: (options, value) => {
         project2.update({
           options,
@@ -15050,7 +15110,7 @@ ${listKey(projects)}`;
         }
       },
       /** Draws the columns; null hides them (no project, no tracker, or an error). */
-      render: (board2, busy = /* @__PURE__ */ new Set(), summaryOf = () => null, done = NO_TOOLS) => {
+      render: (board2, busy = /* @__PURE__ */ new Set(), summaryOf = () => null, done = NO_TOOLS, sourceOf = () => null) => {
         for (const d of cardDisposers) d();
         cardDisposers = [];
         columns.replaceChildren();
@@ -15076,7 +15136,7 @@ ${listKey(projects)}`;
             list2.append(none);
           }
           for (const model of cards) {
-            const card = renderCard(model, busy.has(model.task.id), summaryOf(model.task));
+            const card = renderCard(model, busy.has(model.task.id), summaryOf(model.task), sourceOf(model.task));
             list2.append(card.node);
             cardDisposers.push(card.dispose);
           }
@@ -15282,6 +15342,8 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
 .kb { display: flex; flex-direction: column; gap: 0.75rem; padding: 0.75rem; min-height: 100vh; }
 .kb-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 0.75rem; }
 .kb-project { flex: 1 1 12rem; min-width: 10rem; max-width: 22rem; }
+.kb-source { flex: 0 0 auto; }
+.kb-source[hidden] { display: none; }
 .kb-search { position: relative; flex: 1 1 12rem; min-width: 9rem; max-width: 20rem; }
 .kb-search-suggest { position: absolute; left: 0; right: 0; top: calc(100% + 0.25rem); z-index: 30; display: flex; flex-direction: column;
   padding: 0.25rem; max-height: 16rem; overflow-y: auto; background: var(--oc-elevated); color: var(--oc-elevated-fg);
@@ -15570,7 +15632,9 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     showArchived: false,
     order: [],
     orderFor: null,
-    query: ""
+    query: "",
+    sourceView: null,
+    sourceViewFor: null
   };
   var store = createSettingsStore(host.storage);
   var fail = (message2) => void host.toast({ kind: "error", message: message2 }).catch(() => {
@@ -15583,6 +15647,22 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
   var archiveSync = createStorageSync();
   var order = () => state.orderFor === state.projectId ? state.order : [];
   var orderSync = createStorageSync();
+  var sourceView = () => {
+    if (state.config === null) return null;
+    return currentSourceView(state.sourceViewFor === state.projectId ? state.sourceView : null, state.config);
+  };
+  var viewTasks = () => {
+    const view = sourceView();
+    return state.tasks === null || view === null ? null : tasksInView(state.tasks, view);
+  };
+  var setSourceView = (view) => {
+    const id = state.projectId;
+    if (id === null) return;
+    state.sourceView = view;
+    state.sourceViewFor = id;
+    saver.save(STORAGE_KEYS.sourceView(id), () => store.saveSourceView(id, view));
+    draw();
+  };
   var unarchivedAt = /* @__PURE__ */ new Map();
   var removedFor = (projectId) => unarchivedAt.get(projectId) ?? /* @__PURE__ */ new Map();
   var pendingMarks = createPendingMarks();
@@ -15735,16 +15815,21 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
   var draw = () => {
     board.setCanAdd(state.view === "board" && state.config !== null);
     state.columns = /* @__PURE__ */ new Map();
-    if (state.config === null || state.tasks === null) {
+    const view = sourceView();
+    const tasks = viewTasks();
+    if (state.config === null || tasks === null || view === null) {
+      board.setSources(null, null);
       setBadge(null);
       board.render(null);
       return;
     }
+    const { sources } = state.config;
+    board.setSources(sourceSwitcher(sources), view);
     const marks = archivedTasks();
-    const archivedCount = archivedShown(state.tasks, marks);
+    const archivedCount = archivedShown(tasks, marks);
     if (archivedCount === 0) state.showArchived = false;
     const model = groupTasks(
-      applyOrder(state.tasks, order()),
+      applyOrder(tasks, order()),
       state.sessions,
       starter.isStarting,
       state.hideSubtasks,
@@ -15757,23 +15842,26 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     for (const [column, cards] of Object.entries(model)) for (const c of cards) state.columns.set(c.task.id, column);
     setBadge(model.review.length || null);
     const tracker = state.config.tracker;
-    const shown = filterBoard(model, state.tasks, state.query, tracker);
+    const shown = filterBoard(model, tasks, state.query, tracker);
     selection2.beforeRender();
-    board.render(shown, editor.busy, (task) => summaries.get(task), {
-      archivable: archivableIds(state.tasks, marks).length,
-      archived: archivedCount,
-      showArchived: state.showArchived
-    });
+    board.render(
+      shown,
+      editor.busy,
+      (task) => summaries.get(task),
+      { archivable: archivableIds(tasks, marks).length, archived: archivedCount, showArchived: state.showArchived },
+      (task) => sourceBadge(task, view, sources)
+    );
     selection2.rendered(layoutOf(shown));
     auditLinks();
     focusSession();
-    if (state.tasks.length > 0 && state.query.trim() !== "" && Object.values(shown).every((cards) => cards.length === 0)) {
+    const emptyKind = view === "all" ? tracker : view;
+    if (tasks.length > 0 && state.query.trim() !== "" && Object.values(shown).every((cards) => cards.length === 0)) {
       board.setStatus({ kind: "empty", title: "No tasks match", body: `No task on the board matches "${state.query.trim()}".` });
-    } else if (state.tasks.length === 0) {
+    } else if (tasks.length === 0) {
       board.setStatus({
         kind: "empty",
         title: "No tasks yet",
-        body: tracker === "github" ? "Open issues of this repository show up here. Create one on GitHub or with the task-board CLI, then press Refresh." : "Issues under .scratch/<feature>/issues/ show up here. Create one with the task-board CLI or an agent skill, then press Refresh."
+        body: emptyKind === "github" ? "Open issues of this repository show up here. Create one on GitHub or with the task-board CLI, then press Refresh." : "Issues under .scratch/<feature>/issues/ show up here. Create one with the task-board CLI or an agent skill, then press Refresh."
       });
     } else {
       board.setStatus({ kind: "none" });
@@ -15864,15 +15952,21 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
       }
       const token = archiveSync.loadToken();
       const orderToken = orderSync.loadToken();
-      const [tasks, marks, gone, shelved, ranked] = await Promise.all([
+      const [tasks, marks, gone, shelved, ranked, pickedSource] = await Promise.all([
         api.list(),
         store.loadDetached(p.id).catch(() => null),
         store.loadArchived(p.id).catch(() => null),
         store.loadArchivedTasks(p.id).catch(() => null),
         store.loadOrder(p.id).catch(() => null),
+        // Read once per project: afterwards this frame's own pick stands.
+        state.sourceViewFor === p.id ? Promise.resolve(state.sourceView) : store.loadSourceView(p.id).catch(() => null),
         starter.refresh(p.id, p.directory)
       ]);
       if (mine !== generation) return;
+      if (state.sourceViewFor !== p.id) {
+        state.sourceView = pickedSource;
+        state.sourceViewFor = p.id;
+      }
       if (marks !== null) {
         const merged = new Map(detached());
         for (const [taskId, at] of marks) if (at > (merged.get(taskId) ?? 0)) merged.set(taskId, at);
@@ -15933,6 +16027,8 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     state.showArchived = false;
     state.order = [];
     state.orderFor = null;
+    state.sourceView = null;
+    state.sourceViewFor = null;
     audited.clear();
     starter.reset();
     state.config = null;
@@ -16127,16 +16223,16 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
   };
   var archiveDone = async () => {
     const id = state.projectId;
-    if (id === null || state.tasks === null) return;
-    const n = archivableIds(state.tasks, archivedTasks()).length;
+    if (id === null || viewTasks() === null) return;
+    const n = archivableIds(viewTasks() ?? [], archivedTasks()).length;
     if (n === 0) return;
     const answer = await askChoice(
       `Archive ${n} done task${n === 1 ? "" : "s"}?`,
       "They leave the board. Nothing changes in the repository or on GitHub; \u201CShow archived\u201D brings them back, and a reopened task returns on its own.",
       [{ id: "archive", label: "Archive" }]
     );
-    if (answer === null || state.projectId !== id || state.tasks === null) return;
-    const ids = archivableIds(state.tasks, archivedTasks());
+    if (answer === null || state.projectId !== id || viewTasks() === null) return;
+    const ids = archivableIds(viewTasks() ?? [], archivedTasks());
     if (ids.length === 0) return;
     setArchivedTasks(id, archiveTasks(archivedTasks(), ids, Date.now()));
     info(`Archived ${ids.length} done task${ids.length === 1 ? "" : "s"}`);
@@ -16162,7 +16258,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     const p = project();
     if (id === null || p === null || state.view !== "board" || state.config === null || state.tasks === null) return;
     const tracker = state.config.tracker;
-    const plan = clearArchivePlan(tracker, state.tasks, archivedTasks());
+    const plan = clearArchivePlan(tracker, viewTasks() ?? [], archivedTasks());
     const ask = clearConfirm(tracker, plan);
     if (ask === null) {
       info("The archived features still have sub-tasks on the board; nothing to delete.");
@@ -16170,7 +16266,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     }
     const answer = await askChoice(ask.title, ask.body, [{ id: "clear", label: "Delete all", variant: "destructive" }]);
     if (answer === null || state.projectId !== id || state.tasks === null) return;
-    const fresh = clearArchivePlan(tracker, state.tasks, archivedTasks());
+    const fresh = clearArchivePlan(tracker, viewTasks() ?? [], archivedTasks());
     if (JSON.stringify(fresh) !== JSON.stringify(plan)) {
       info("The archive changed while you were asked; nothing was deleted. Try again.");
       return;
@@ -16398,7 +16494,8 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
         state.query = query;
         draw();
       },
-      suggest: (text3, caret) => searchSuggestions(text3, caret, boardTypes()),
+      suggest: (text3, caret) => searchSuggestions(text3, caret, boardTypes(), state.config?.sources.map((s) => s.id) ?? []),
+      onSource: setSourceView,
       // Second Esc: focus back on the Selected card, or on the Board itself when there is none.
       onSearchExit: () => {
         const id = selection2.get();
