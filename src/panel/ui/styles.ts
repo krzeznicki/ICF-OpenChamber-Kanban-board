@@ -7,6 +7,8 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
 .kb { display: flex; flex-direction: column; gap: 0.75rem; padding: 0.75rem; min-height: 100vh; }
 .kb-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 0.75rem; }
 .kb-project { flex: 1 1 12rem; min-width: 10rem; max-width: 22rem; }
+.kb-source { flex: 0 0 auto; }
+.kb-source[hidden] { display: none; }
 .kb-search { position: relative; flex: 1 1 12rem; min-width: 9rem; max-width: 20rem; }
 .kb-search-suggest { position: absolute; left: 0; right: 0; top: calc(100% + 0.25rem); z-index: 30; display: flex; flex-direction: column;
   padding: 0.25rem; max-height: 16rem; overflow-y: auto; background: var(--oc-elevated); color: var(--oc-elevated-fg);
@@ -19,6 +21,8 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
   border: 1px solid var(--oc-warning, #d97706); color: var(--oc-warning-text, var(--oc-fg)); }
 .kb-status:empty { display: none; }
 .kb-session-note:empty { display: none; }
+.kb-source-notes { display: flex; flex-direction: column; gap: 0.5rem; }
+.kb-source-notes:empty { display: none; }
 /* Every column is as tall as the board (the longest column, at least the rest of the window): a card
    dragged sideways from anywhere in a long column is over the column beside it (ui/dnd.ts hit-tests the column). */
 .kb-columns { flex: 1 0 auto; display: flex; gap: 0.75rem; align-items: stretch; overflow-x: auto; padding-bottom: 0.25rem; }

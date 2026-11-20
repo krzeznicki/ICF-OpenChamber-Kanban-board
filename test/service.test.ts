@@ -482,6 +482,31 @@ test('/tasks/list returns the tasks of working sources and the errors of failing
   assert.deepEqual(partial.errors.map((e) => [e.source, e.code, e.availability]), [['github', 'GH_AUTH', 'needs-login']]);
 });
 
+test('/tasks/create takes an optional source; without it the task goes to the primary source', async (t) => {
+  const { fakeGh } = await import('./fakeGh.ts');
+  const directory = await local(t);
+  const path = join(directory, 'docs/agents/issue-tracker.md');
+  await writeFile(path, withAdditionalSources(await readFile(path, 'utf8'), ['github']));
+  const gh = fakeGh([{ number: 3, title: 'Public' }]);
+  const ghDeps = { exec: gh.exec };
+
+  const primary = await handle('POST', '/tasks/create', { directory, input: { title: 'Private' } }, ghDeps);
+  assert.equal(primary.status, 200, JSON.stringify(primary.json));
+  assert.equal((primary.json as { task: Task }).task.source, 'local');
+
+  const shared = await handle('POST', '/tasks/create', { directory, input: { title: 'Shared', source: 'github' } }, ghDeps);
+  assert.equal(shared.status, 200, JSON.stringify(shared.json));
+  assert.equal((shared.json as { task: Task }).task.source, 'github');
+
+  const clash = await handle('POST', '/tasks/create', { directory, input: { title: 'X', parentId: '#3', source: 'local' } }, ghDeps);
+  assert.equal(clash.status, 422, JSON.stringify(clash.json));
+  assert.equal((clash.json as Err).error.code, 'INVALID');
+
+  const bad = await handle('POST', '/tasks/create', { directory, input: { title: 'X', source: 42 } }, ghDeps);
+  assert.equal(bad.status, 400);
+  assert.equal((bad.json as Err).error.code, 'INVALID');
+});
+
 // --- Settings → Sources: /config/sources ---
 
 type Sourced = { config: { primary: string; sources: Array<{ id: string; label: string }> } };

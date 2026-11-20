@@ -81,17 +81,18 @@ var additionalSources = (text) => {
   return out;
 };
 var SOURCE_TEXT = {
-  local: "markdown files under `.scratch/` in this repository (private: they stay with the repository checkout)",
-  github: "this repository's GitHub Issues (shared with the team)"
+  local: "markdown files under `.scratch/` in this repository (private: they stay with the repository checkout; ids look like `.scratch/<feature>/spec.md`)",
+  github: "this repository's GitHub Issues (shared with the team; ids look like `#42`)"
 };
 var additionalSourcesSection = (ids) => [
   `## ${ADDITIONAL}`,
   "",
   "The Kanban board also shows tasks from the sources below. Everything above describes the primary source: a new task goes there unless you name another source.",
   "",
-  ...ids.map((id) => `- \`${id}\`: ${SOURCE_TEXT[id]}. Publish there with \`task-board create --source ${id} ...\`.`),
+  ...ids.map((id) => `- \`${id}\`: ${SOURCE_TEXT[id]}. Publish there with \`task-board create --source ${id} --title <title> ...\`.`),
   "",
-  "A sub-task always goes to its parent's source. Tasks of different sources are never linked: no parent or blocker across sources.",
+  "A sub-task (`task-board create --parent <id>`) always goes to its parent's source; naming another source is refused. Tasks of different sources are never linked: no parent or blocker across sources.",
+  "Every other command (`show`, `state`, `claim`, `parent`, `close`) works on an id from any source. `list` and `next` read every source and name each task's source; `--source <id>` reads only that one.",
   ""
 ].join("\n");
 var withAdditionalSources = (text, ids) => {
@@ -1276,13 +1277,51 @@ var createCombinedTracker = (primary, sources) => {
     const owner = sources.find((s) => s.owns(id));
     if (owner !== void 0) return owner;
     if (sources.length === 1) return sources[0];
-    throw new TrackerError("NOT_FOUND", `No source of this project has a task "${id}" (sources: ${sources.map((s) => s.id).join(", ")})`);
+    throw new TrackerError("NOT_FOUND", `No source of this project has a task "${id}" (sources: ${known()})`);
   };
   const primarySource = sources.find((s) => s.id === primary) ?? sources[0];
+  const known = () => sources.map((s) => s.id).join(", ");
+  const named = (id) => {
+    const source = sources.find((s) => s.id === id);
+    if (source === void 0) throw new TrackerError("INVALID", `Unknown source "${id}": this project has ${known()}`);
+    return source;
+  };
+  const NO_LINKS = "tasks of different sources are never linked";
+  const targetOf = (input) => {
+    const asked = input.source === void 0 ? void 0 : named(input.source);
+    if (input.parentId === void 0) return asked ?? primarySource;
+    const parent = sourceOf2(input.parentId);
+    if (asked !== void 0 && asked !== parent) {
+      throw new TrackerError(
+        "INVALID",
+        `A sub-task goes to its parent's source: ${input.parentId} is in ${parent.id}, not ${asked.id}; drop --source or pick a parent in ${asked.id}`
+      );
+    }
+    return parent;
+  };
+  const create = async (input) => {
+    const target = targetOf(input);
+    for (const b of input.blockedBy ?? []) {
+      const owner = sources.find((s) => s.owns(b));
+      if (owner !== void 0 && owner !== target) {
+        throw new TrackerError("INVALID", `Blocker ${b} is in ${owner.id}, but the new task goes to ${target.id}: ${NO_LINKS}`);
+      }
+    }
+    const { source: _source, ...rest } = input;
+    return target.create(rest);
+  };
+  const setParent = async (id, parentId) => {
+    const child = sourceOf2(id);
+    const parent = sourceOf2(parentId);
+    if (child !== parent) {
+      throw new TrackerError("INVALID", `${id} (${child.id}) and ${parentId} (${parent.id}) are in different sources: ${NO_LINKS}`);
+    }
+    return child.setParent(id, parentId);
+  };
   const listAll = async (opts = {}) => {
     const asked = opts.source === void 0 ? sources : sources.filter((s) => s.id === opts.source);
     if (asked.length === 0) {
-      throw new TrackerError("INVALID", `Unknown source "${opts.source}": this project has ${sources.map((s) => s.id).join(", ")}`);
+      throw new TrackerError("INVALID", `Unknown source "${opts.source}": this project has ${known()}`);
     }
     const results = await Promise.allSettled(asked.map((s) => s.list()));
     const failed = results.flatMap((r) => r.status === "rejected" ? [r.reason] : []);
@@ -1302,12 +1341,12 @@ var createCombinedTracker = (primary, sources) => {
     listAll,
     list: async () => (await listAll()).tasks,
     get: async (id) => sourceOf2(id).get(id),
-    create: async (input) => primarySource.create(input),
+    create,
     setState: async (id, state) => sourceOf2(id).setState(id, state),
     setType: async (id, type) => sourceOf2(id).setType(id, type),
     edit: async (id, changes) => sourceOf2(id).edit(id, changes),
     claim: async (id) => sourceOf2(id).claim(id),
-    setParent: async (id, parentId) => sourceOf2(id).setParent(id, parentId),
+    setParent,
     removeParent: async (id) => sourceOf2(id).removeParent(id),
     close: async (id, opts) => sourceOf2(id).close(id, opts),
     remove: async (id, opts) => sourceOf2(id).remove(id, opts)
@@ -1332,7 +1371,10 @@ Commands:
                                         names its source (--json always has "source")
   show <id>                             one task with its body
   create --title <t> [--type <x>] [--body-file <f>|-] [--parent <id>] [--state <state>]
-         [--blocked-by <id>[,<id>...]]...   blockers: repeat the option or separate ids with commas
+         [--blocked-by <id>[,<id>...]]... [--source <id>]
+                                        blockers: repeat the option or separate ids with commas;
+                                        the task goes to the primary source, or to --source; with
+                                        --parent always to the parent's source
   state <id> <state>                    set the state ('done' closes)
   edit <id> [--title <t>] [--body-file <f>|-]
                                         change the title and/or the description (local: the
@@ -1352,6 +1394,7 @@ Commands:
 Sources: list and next read every source in docs/agents/issue-tracker.md (the primary one and
 any under ## Additional sources); --source local|github reads only that one. Commands on an id
 go to the source that owns it. A source that fails is reported on stderr; the others still list.
+Tasks of different sources are never linked: a parent or blocker in another source is INVALID.
 
 Options for every command:
   --dir <path>   project root (default: current directory)
@@ -1384,7 +1427,7 @@ var OPTIONS = {
 var COMMANDS = {
   list: { positionals: 0, options: ["state", "ready", "source"] },
   show: { positionals: 1, options: [] },
-  create: { positionals: 0, options: ["title", "type", "body-file", "parent", "state", "blocked-by"] },
+  create: { positionals: 0, options: ["title", "type", "body-file", "parent", "state", "blocked-by", "source"] },
   state: { positionals: 2, options: [] },
   edit: { positionals: 1, options: ["title", "body-file"] },
   claim: { positionals: 1, options: [] },
@@ -1512,15 +1555,17 @@ ${task.body.replace(/\s*$/, "\n")}`);
         const blockedBy = (values["blocked-by"] ?? []).flatMap((v) => v.split(",")).map((v) => v.trim());
         if (blockedBy.some((id) => id === "")) usage("--blocked-by needs non-empty ids");
         const body = await bodyOf(values["body-file"]);
-        const task = await (await openTracker(root, exec)).create({
+        const tracker = await openTracker(root, exec);
+        const task = await tracker.create({
           title: values.title,
           ...body === void 0 ? {} : { body },
           ...values.type === void 0 ? {} : { type: values.type },
           ...values.parent === void 0 ? {} : { parentId: values.parent },
           ...blockedBy.length === 0 ? {} : { blockedBy },
-          ...state === void 0 ? {} : { state }
+          ...state === void 0 ? {} : { state },
+          ...values.source === void 0 ? {} : { source: values.source }
         });
-        print(task, line(task));
+        print(task, line(task, tracker.sources.length > 1));
         return 0;
       }
       case "state": {

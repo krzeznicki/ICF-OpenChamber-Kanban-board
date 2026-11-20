@@ -15,6 +15,7 @@ If `docs/agents/issue-tracker.md` is missing, ask the user which tracker they wa
 task-board list                        # every open task: <id>  [state, claimed]  title
 task-board list --state needs-triage   # one state
 task-board list --ready                # ready-for-agent tickets with no open blocker
+task-board list --source github        # one source only (with several, each line names its source)
 task-board show <id>                   # one task with its body
 ```
 

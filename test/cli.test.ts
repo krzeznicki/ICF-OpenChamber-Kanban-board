@@ -414,6 +414,39 @@ test('show, state and close reach a GitHub task by its id with no source named',
   assert.ok(gh.calls.some((c) => c[1] === 'issue' && c[2] === 'close'));
 });
 
+test('create goes to the primary source, --source picks another, and a sub-task follows its parent', async (t) => {
+  const { run: cli, gh, spec, ids } = await twoSources(t);
+  const local = await cli(['create', '--title', 'Private note']);
+  assert.equal(local.code, 0, local.err);
+  assert.match(local.out, /^\.scratch\/\S+  local  \[needs-triage\]  Private note$/m);
+
+  const shared = await cli(['create', '--title', 'Shared', '--source', 'github', '--json']);
+  assert.equal(shared.code, 0, shared.err);
+  assert.equal(json<Task>(shared).source, 'github');
+  assert.ok(gh.calls.some((c) => c[1] === 'issue' && c[2] === 'create'));
+
+  const sub = await cli(['create', '--title', 'Public sub', '--parent', '#5', '--json']);
+  assert.equal(sub.code, 0, sub.err);
+  assert.deepEqual([json<Task>(sub).source, json<Task>(sub).parentId], ['github', '#5']);
+
+  const clash = await cli(['create', '--title', 'X', '--parent', spec, '--source', 'github']);
+  assert.equal(clash.code, 4);
+  assert.match(clash.err, /INVALID: A sub-task goes to its parent's source/);
+
+  const blocker = await cli(['create', '--title', 'Y', '--source', 'github', '--blocked-by', ids[0]!]);
+  assert.equal(blocker.code, 4);
+  assert.match(blocker.err, /INVALID: Blocker .* never linked/);
+
+  const parent = await cli(['parent', '#6', spec]);
+  assert.equal(parent.code, 4);
+  assert.match(parent.err, /INVALID: .*different sources/);
+
+  const unknown = await cli(['create', '--title', 'Z', '--source', 'jira']);
+  assert.equal(unknown.code, 4);
+  assert.match(unknown.err, /INVALID: Unknown source "jira"/);
+  assert.match((await cli(['--help'])).out, /create .*--source <id>/s);
+});
+
 test('init --add / --remove / --primary change the sources in docs/agents/issue-tracker.md', async (t) => {
   const root = await tmp(t);
   await writeConfig(root, 'local');

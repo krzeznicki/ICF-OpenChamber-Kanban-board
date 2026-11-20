@@ -28,7 +28,10 @@ Commands:
                                         names its source (--json always has "source")
   show <id>                             one task with its body
   create --title <t> [--type <x>] [--body-file <f>|-] [--parent <id>] [--state <state>]
-         [--blocked-by <id>[,<id>...]]...   blockers: repeat the option or separate ids with commas
+         [--blocked-by <id>[,<id>...]]... [--source <id>]
+                                        blockers: repeat the option or separate ids with commas;
+                                        the task goes to the primary source, or to --source; with
+                                        --parent always to the parent's source
   state <id> <state>                    set the state ('done' closes)
   edit <id> [--title <t>] [--body-file <f>|-]
                                         change the title and/or the description (local: the
@@ -48,6 +51,7 @@ Commands:
 Sources: list and next read every source in docs/agents/issue-tracker.md (the primary one and
 any under ## Additional sources); --source local|github reads only that one. Commands on an id
 go to the source that owns it. A source that fails is reported on stderr; the others still list.
+Tasks of different sources are never linked: a parent or blocker in another source is INVALID.
 
 Options for every command:
   --dir <path>   project root (default: current directory)
@@ -93,7 +97,7 @@ type Values = {
 const COMMANDS: Record<string, { positionals: number; options: Option[] }> = {
   list: { positionals: 0, options: ['state', 'ready', 'source'] },
   show: { positionals: 1, options: [] },
-  create: { positionals: 0, options: ['title', 'type', 'body-file', 'parent', 'state', 'blocked-by'] },
+  create: { positionals: 0, options: ['title', 'type', 'body-file', 'parent', 'state', 'blocked-by', 'source'] },
   state: { positionals: 2, options: [] },
   edit: { positionals: 1, options: ['title', 'body-file'] },
   claim: { positionals: 1, options: [] },
@@ -240,15 +244,17 @@ export const main = async (argv: string[], io: CliIO): Promise<number> => {
         const blockedBy = (values['blocked-by'] ?? []).flatMap((v) => v.split(',')).map((v) => v.trim());
         if (blockedBy.some((id) => id === '')) usage('--blocked-by needs non-empty ids');
         const body = await bodyOf(values['body-file']);
-        const task = await (await openTracker(root, exec)).create({
+        const tracker = await openTracker(root, exec);
+        const task = await tracker.create({
           title: values.title!,
           ...(body === undefined ? {} : { body }),
           ...(values.type === undefined ? {} : { type: values.type }),
           ...(values.parent === undefined ? {} : { parentId: values.parent }),
           ...(blockedBy.length === 0 ? {} : { blockedBy }),
           ...(state === undefined ? {} : { state }),
+          ...(values.source === undefined ? {} : { source: values.source }),
         });
-        print(task, line(task));
+        print(task, line(task, tracker.sources.length > 1));
         return 0;
       }
       case 'state': {

@@ -2771,9 +2771,9 @@ ${GUEST_UI_LOOK_CSS}`;
     next.delete(id);
     return next;
   };
-  var reconcileArchived = (marks, tasks) => {
+  var reconcileArchived = (marks, tasks, unlisted = () => false) => {
     const done = new Set(tasks.filter((t) => t.state === "done").map((t) => t.id));
-    const next = new Map([...marks].filter(([id]) => done.has(id)));
+    const next = new Map([...marks].filter(([id]) => done.has(id) || unlisted(id)));
     return { marks: next, changed: next.size !== marks.size };
   };
   var archivedShown = (tasks, marks) => tasks.filter((t) => t.state === "done" && marks.has(t.id)).length;
@@ -2805,7 +2805,7 @@ ${GUEST_UI_LOOK_CSS}`;
   var archiveWriteJob = (snap, io, onWritten) => async () => {
     const stored2 = await io.load().catch(() => null);
     const merged = stored2 === null ? new Map(snap.marks) : mergeArchived(snap.marks, stored2, snap.removed);
-    const next = snap.tasks === null ? merged : reconcileArchived(merged, snap.tasks).marks;
+    const next = snap.tasks === null ? merged : reconcileArchived(merged, snap.tasks, snap.unlisted).marks;
     await io.save(next);
     onWritten(next);
   };
@@ -2882,6 +2882,29 @@ ${GUEST_UI_LOOK_CSS}`;
     return out;
   };
 
+  // src/panel/sourceBanner.ts
+  var sourceBanners = (errors2, sources) => errors2.map((e) => {
+    const label = sources.find((s) => s.id === e.source)?.label ?? e.source;
+    return e.availability === "needs-login" ? { source: e.source, tone: "warning", title: `${label} needs a login`, body: `Log in, then try again: ${e.message}`, action: "Try again" } : { source: e.source, tone: "warning", title: `${label} unavailable`, body: e.message, action: "Try again" };
+  });
+  var sourceOfId = (id) => {
+    if (id.startsWith(".scratch/")) return "local";
+    if (/^\s*#?\d+\s*$/.test(id)) return "github";
+    return null;
+  };
+  var listedBoard = (r) => {
+    const errors2 = r.errors ?? [];
+    const failed = new Set(errors2.map((e) => e.source));
+    return {
+      tasks: r.tasks,
+      errors: errors2,
+      unlisted: (id) => {
+        const source2 = sourceOfId(id);
+        return source2 !== null && failed.has(source2);
+      }
+    };
+  };
+
   // src/panel/api.ts
   var ApiError = class extends Error {
     code;
@@ -2903,11 +2926,6 @@ ${GUEST_UI_LOOK_CSS}`;
     const code2 = typeof e?.code === "string" ? e.code : "FAILED";
     const message2 = typeof e?.message === "string" ? e.message : `The service answered ${status}`;
     return new ApiError(code2, message2);
-  };
-  var listedTasks = (r) => {
-    const failed = r.errors?.[0];
-    if (failed !== void 0) throw new ApiError(failed.code, `${failed.source}: ${failed.message}`);
-    return r.tasks;
   };
   var createApi = (host2, directory) => {
     const call = async (method, path, body) => {
@@ -2937,8 +2955,11 @@ ${GUEST_UI_LOOK_CSS}`;
       changeSources: (change, force) => call("POST", "/config/sources", { change, force }),
       /** The github.com remote of the project (origin first), or null. */
       detect: () => call("POST", "/config/detect").then((r) => r.remote),
-      /** The tasks of every source; `/tasks/list` also answers `errors` (SourceError[]) for the sources that failed. */
-      list: () => call("POST", "/tasks/list").then(listedTasks),
+      /**
+       * The tasks of every source that listed, the errors of those that failed and which ids belong to
+       * a failed one (sourceBanner.ts's listedBoard). When every source fails the call fails.
+       */
+      list: () => call("POST", "/tasks/list").then(listedBoard),
       get: (id) => call("POST", "/tasks/get", { id }).then((r) => r.task),
       create: (input) => call("POST", "/tasks/create", { input }).then((r) => r.task),
       setState: (id, state2) => call("POST", "/tasks/state", { id, state: state2 }).then((r) => r.task),
@@ -3001,9 +3022,9 @@ ${GUEST_UI_LOOK_CSS}`;
   var ORDER_MAX = 500;
   var parseOrder = (raw) => Array.isArray(raw) ? [...new Set(raw.filter((id) => typeof id === "string" && id !== ""))].slice(0, ORDER_MAX) : [];
   var renameInOrder = (order2, from, to) => order2.includes(from) ? order2.filter((id) => id !== to).map((id) => id === from ? to : id) : [...order2];
-  var pruneOrder = (order2, tasks) => {
+  var pruneOrder = (order2, tasks, unlisted = () => false) => {
     const listed2 = new Set(tasks.map((t) => t.id));
-    return order2.filter((id) => listed2.has(id));
+    return order2.filter((id) => listed2.has(id) || unlisted(id));
   };
   var forgetInOrder = (order2, ids) => {
     const gone = new Set(ids);
@@ -4418,6 +4439,8 @@ ${ref}`,
     archivedTasks: (projectId) => fit(`archivedTasks:${projectId}`),
     /** Per project: the manual card order, task ids (order.ts). */
     taskOrder: (projectId) => fit(`taskOrder:${projectId}`),
+    /** Per project: the source switcher's choice, `all` or a source id (sourceView.ts currentSourceView checks it). */
+    sourceView: (projectId) => fit(`sourceView:${projectId}`),
     /** Which sections of the task modal are open (one entry for every task and project). */
     detailSections: "detail-sections",
     /** The project the board last showed by the host's directory or the user's pick (projectFollow.ts): a fresh board that cannot place its directory opens it. */
@@ -4516,6 +4539,12 @@ ${ref}`,
       saveArchivedTasks: (projectId, marks) => put(STORAGE_KEYS.archivedTasks(projectId), serializeArchived(marks), marks.size === 0),
       loadOrder: async (projectId) => parseOrder(await storage.get(STORAGE_KEYS.taskOrder(projectId))),
       saveOrder: (projectId, order2) => put(STORAGE_KEYS.taskOrder(projectId), order2.slice(0, ORDER_MAX), order2.length === 0),
+      /** The stored source switcher choice as text, or null; whether the project still has it is sourceView.ts's call. */
+      loadSourceView: async (projectId) => {
+        const v2 = await storage.get(STORAGE_KEYS.sourceView(projectId));
+        return typeof v2 === "string" && v2 !== "" ? v2 : null;
+      },
+      saveSourceView: (projectId, view) => storage.set(STORAGE_KEYS.sourceView(projectId), view),
       loadLastProject: async () => {
         const v2 = await storage.get(STORAGE_KEYS.lastProject);
         return typeof v2 === "string" && v2 !== "" ? v2 : null;
@@ -14142,7 +14171,12 @@ ${ref}`,
     if (key === "id") return shellWord(task.id);
     return noteHow(task, projectDir);
   });
-  var buildPrompt2 = (task, preset, cliPath, projectDir, children) => {
+  var otherSourceLines = (task, cli, primary2) => primary2 === void 0 || task.source === primary2 ? [] : [
+    `This project's primary source is ${primary2}, and docs/agents/issue-tracker.md describes that one; this task is in ${task.source} (see its ## Additional sources section).`,
+    `Create new tasks for this work in ${task.source}: ${cli} create --source ${task.source} --title <title>`,
+    "A sub-task (--parent) goes to its parent's source by itself. Tasks of different sources are never linked: a parent or blocker in another source is refused."
+  ];
+  var buildPrompt2 = (task, preset, cliPath, projectDir, children, primary2) => {
     const cli = `node ${shellWord(cliPath)} --dir ${shellWord(projectDir)}`;
     const id = shellWord(task.id);
     const leads = children.length > 0 || task.kind === "parent";
@@ -14151,6 +14185,7 @@ ${ref}`,
       "## Tracker",
       isGithub(task) ? "This task is a GitHub issue of this repository." : "This task is a local issue file under .scratch/ in this repository.",
       `Move it with the task-board CLI: ${cli} state ${id} <state>`,
+      ...otherSourceLines(task, cli, primary2),
       "Always pass --dir exactly as shown (the project root), even in a worktree: without it the CLI misses the tracker or writes to a copy the board never reads.",
       `States: ${STATES2}. Set "done" only when the work is finished.`,
       ...leads ? [] : ["This task was started from the board; you don't need to claim it."]
@@ -14378,7 +14413,7 @@ ${note}` : note;
       if (ctx === null) throw new Error("Settings are loading, try again in a moment");
       const preset = pickPreset(ctx.presets, opts.presetId);
       const children = (deps.tasks() ?? []).filter((t) => t.parentId === task.id);
-      return buildPrompt2(task, preset, await cliPath(p.directory), p.directory, children);
+      return buildPrompt2(task, preset, await cliPath(p.directory), p.directory, children, deps.primary() ?? void 0);
     };
     const isStarting = /* @__PURE__ */ new Set();
     const launcher = createLauncher({
@@ -14591,7 +14626,7 @@ ${note}` : note;
   };
 
   // src/panel/search.ts
-  var FILTER_KEYS = ["type", "state", "status", "column"];
+  var FILTER_KEYS = ["type", "state", "status", "column", "source"];
   var FILTER = /^([a-z]+)[:=](.*)$/;
   var isFilterKey = (key) => FILTER_KEYS.includes(key);
   var parseQuery = (query) => {
@@ -14620,7 +14655,7 @@ ${note}` : note;
     return c === void 0 ? [] : [c.id, c.title];
   };
   var namesColumn = (wanted) => COLUMNS.some((c) => anyMatches(columnNames(c.id), wanted));
-  var typeFilter = { holds: (t, _c, w) => t.type !== null && valueMatches(t.type, w), offers: (types) => [...types] };
+  var typeFilter = { holds: (t, _c, w) => t.type !== null && valueMatches(t.type, w), offers: ({ types }) => [...types] };
   var stateFilter = { holds: (t, _c, w) => valueMatches(t.state, w), offers: () => [...TASK_STATES] };
   var columnFilter = { holds: (_t, c, w) => anyMatches(columnNames(c), w), offers: () => COLUMNS.map((c) => c.id) };
   var FILTERS = {
@@ -14629,8 +14664,9 @@ ${note}` : note;
     column: columnFilter,
     status: {
       holds: (t, c, w) => (namesColumn(w) ? columnFilter : stateFilter).holds(t, c, w),
-      offers: (types) => [.../* @__PURE__ */ new Set([...columnFilter.offers(types), ...stateFilter.offers(types)])]
-    }
+      offers: (board2) => [.../* @__PURE__ */ new Set([...columnFilter.offers(board2), ...stateFilter.offers(board2)])]
+    },
+    source: { holds: (t, _c, w) => valueMatches(t.source, w), offers: ({ sources }) => [...sources] }
   };
   var matchesParsed = (task, q, tracker, column) => {
     for (const [key, wanted] of q.filters) if (!wanted.some((w) => FILTERS[key].holds(task, column, w))) return false;
@@ -14655,7 +14691,7 @@ ${body}`);
     for (const { id: column } of COLUMNS) out[column] = board2[column].filter((c) => keep.has(c.task.id));
     return out;
   };
-  var searchSuggestions = (text3, caret, types) => {
+  var searchSuggestions = (text3, caret, types, sources = []) => {
     if (/^\S/.test(text3.slice(caret))) return [];
     const start2 = text3.slice(0, caret).search(/\S*$/);
     const word = text3.slice(start2, caret);
@@ -14669,14 +14705,35 @@ ${body}`);
     const m = /^([a-zA-Z]+)([:=])(.*)$/.exec(word);
     if (m === null) {
       const typed2 = foldText(word);
-      return FILTER_KEYS.filter((k) => k.startsWith(typed2)).map((k) => replace2(`${k}:`, false));
+      const keys = sources.length > 1 ? FILTER_KEYS : FILTER_KEYS.filter((k) => k !== "source");
+      return keys.filter((k) => k.startsWith(typed2)).map((k) => replace2(`${k}:`, false));
     }
     const key = foldText(m[1]);
     if (!isFilterKey(key)) return [];
     const typed = foldText(m[3]);
-    const values = FILTERS[key].offers(types).filter((v2) => typed === "" || valueMatches(v2, typed));
+    const values = FILTERS[key].offers({ types, sources }).filter((v2) => typed === "" || valueMatches(v2, typed));
     if (values.every((v2) => foldText(v2) === typed)) return [];
     return values.map((v2) => replace2(`${m[1]}${m[2]}${v2}`, true));
+  };
+
+  // src/panel/sourceView.ts
+  var MAX_SEGMENT_SOURCES = 3;
+  var sourceSwitcher = (sources) => {
+    if (sources.length < 2) return null;
+    return {
+      kind: sources.length > MAX_SEGMENT_SOURCES ? "dropdown" : "segments",
+      options: [{ value: "all", label: "All" }, ...sources.map((s) => ({ value: s.id, label: s.label }))]
+    };
+  };
+  var currentSourceView = (stored2, config2) => {
+    const several = config2.sources.length > 1;
+    if (stored2 === "all") return several ? "all" : config2.primary;
+    return config2.sources.some((s) => s.id === stored2) ? stored2 : config2.primary;
+  };
+  var tasksInView = (tasks, view) => view === "all" ? [...tasks] : tasks.filter((t) => t.source === view);
+  var sourceBadge = (task, view, sources) => {
+    if (view !== "all" || sources.length < 2) return null;
+    return sources.find((s) => s.id === task.source)?.label ?? task.source;
   };
 
   // src/panel/projectFollow.ts
@@ -14794,7 +14851,7 @@ ${listKey(projects)}`;
         return s.outcome === "failed" ? { label: "agent failed", tone: "error" } : s.outcome === "completed" ? { label: "agent finished", tone: "success" } : { label: "agent idle", tone: "neutral" };
     }
   };
-  var renderCard = (model, busy = false, summary = null) => {
+  var renderCard = (model, busy = false, summary = null, source2 = null) => {
     const { task } = model;
     const disposers = [];
     const node = document.createElement("article");
@@ -14835,6 +14892,7 @@ ${listKey(projects)}`;
     } else if (model.starting) {
       badge2("starting agent\u2026", "info");
     }
+    if (source2 !== null) badge2(source2, "info");
     if (model.archived) badge2("archived", "neutral");
     if (model.ledByOrchestrator) badge2("led by orchestrator", "primary");
     if (task.kind === "parent") badge2("parent", "primary");
@@ -14972,13 +15030,15 @@ ${listKey(projects)}`;
     const shell = div3("kb");
     const toolbar = div3("kb-toolbar");
     const projectSlot = div3("kb-project");
+    const sourceSlot = div3("kb-source");
+    sourceSlot.hidden = true;
     const switchSlot = div3("kb-hide");
     const searchSlot = div3("kb-search");
     const spacer = div3("kb-spacer");
     const addSlot = div3("kb-add-button");
     const settingsSlot = div3("kb-settings-button");
     const refreshSlot = div3("kb-refresh");
-    toolbar.append(projectSlot, switchSlot, searchSlot, spacer, addSlot, settingsSlot, refreshSlot);
+    toolbar.append(projectSlot, sourceSlot, switchSlot, searchSlot, spacer, addSlot, settingsSlot, refreshSlot);
     if (VARIANT === "test") {
       const badge2 = document.createElement("span");
       badge2.className = "kb-test-badge";
@@ -14988,8 +15048,9 @@ ${listKey(projects)}`;
     }
     const status = div3("kb-status");
     const sessionNote = div3("kb-session-note");
+    const sourceNotes = div3("kb-source-notes");
     const columns = div3("kb-columns");
-    shell.append(toolbar, status, sessionNote, columns);
+    shell.append(toolbar, status, sourceNotes, sessionNote, columns);
     root.replaceChildren(shell);
     const project2 = mountSelect(projectSlot, {
       value: null,
@@ -15002,6 +15063,31 @@ ${listKey(projects)}`;
         callbacks.onProject(id);
       }
     });
+    let sourceControl = null;
+    const setSources = (switcher, view) => {
+      const key = switcher === null ? "" : JSON.stringify(switcher);
+      if (sourceControl?.key !== key) {
+        sourceControl?.dispose();
+        sourceControl = null;
+        sourceSlot.replaceChildren();
+        if (switcher !== null) {
+          const pick = (id) => {
+            sourceControl?.set(id);
+            callbacks.onSource(id);
+          };
+          const first = view ?? switcher.options[0].value;
+          if (switcher.kind === "segments") {
+            const tabs = mountTabs(sourceSlot, { items: switcher.options.map((o) => ({ id: o.value, label: o.label })), activeId: first, onChange: pick, trackBackground: true });
+            sourceControl = { key, set: (v2) => tabs.update({ activeId: v2 }), dispose: tabs.dispose };
+          } else {
+            const select = mountSelect(sourceSlot, { value: first, options: switcher.options.map((o) => ({ id: o.value, label: o.label })), onChange: pick });
+            sourceControl = { key, set: (v2) => select.update({ value: v2 }), dispose: select.dispose };
+          }
+        }
+      }
+      sourceSlot.hidden = sourceControl === null;
+      if (sourceControl !== null && view !== null) sourceControl.set(view);
+    };
     const hideSwitch = mountSwitch(switchSlot, {
       label: "Hide sub-tasks",
       checked: false,
@@ -15013,7 +15099,7 @@ ${listKey(projects)}`;
     const search = mountSearchField(searchSlot, {
       value: "",
       placeholder: "Search tasks, type:, status:\u2026",
-      label: "Search tasks by title or description, or filter with type:, state:, status: and column:",
+      label: "Search tasks by title or description, or filter with type:, state:, status:, column: and source:",
       onChange: (query) => setQuery(query)
     });
     const setQuery = (query) => {
@@ -15050,6 +15136,17 @@ ${listKey(projects)}`;
       if (text3 === null) return;
       sessionNoteDispose = mountBanner(sessionNote, { tone: "info", title: text3, action: { label: "Dismiss", onClick: () => setSessionNote(null) } }).dispose;
     };
+    let sourceNoteDisposers = [];
+    const setSourceBanners = (banners, onRetry) => {
+      for (const d of sourceNoteDisposers) d();
+      sourceNoteDisposers = [];
+      sourceNotes.replaceChildren();
+      for (const b of banners) {
+        const slot = div3("kb-source-note");
+        sourceNotes.append(slot);
+        sourceNoteDisposers.push(mountBanner(slot, { tone: b.tone, title: b.title, body: b.body, action: { label: b.action, onClick: onRetry } }).dispose);
+      }
+    };
     let cardDisposers = [];
     const doneTools = (done) => {
       const tools = div3("kb-column-tools");
@@ -15078,6 +15175,8 @@ ${listKey(projects)}`;
       setCanAdd: (enabled) => add2.update({ disabled: !enabled }),
       /** The "Hide sub-tasks" switch follows the project's settings when they load. */
       setHideSubtasks: (checked) => hideSwitch.update({ checked }),
+      /** The source switcher: null hides it (one source, or no board); `view` is the one shown. */
+      setSources,
       setProjects: (options, value) => {
         project2.update({
           options,
@@ -15088,6 +15187,8 @@ ${listKey(projects)}`;
       },
       /** A dismissible info banner above the columns (the rail panel's session note); null removes it. */
       setSessionNote,
+      /** The banners of the sources that failed to list, each with a retry; [] removes them. */
+      setSourceBanners,
       setBusy: (busy) => {
         refreshBusy = busy;
         refresh.update({ loading: busy, disabled: busy });
@@ -15133,7 +15234,7 @@ ${listKey(projects)}`;
         }
       },
       /** Draws the columns; null hides them (no project, no tracker, or an error). */
-      render: (board2, busy = /* @__PURE__ */ new Set(), summaryOf = () => null, done = NO_TOOLS) => {
+      render: (board2, busy = /* @__PURE__ */ new Set(), summaryOf = () => null, done = NO_TOOLS, sourceOf = () => null) => {
         for (const d of cardDisposers) d();
         cardDisposers = [];
         columns.replaceChildren();
@@ -15159,7 +15260,7 @@ ${listKey(projects)}`;
             list2.append(none);
           }
           for (const model of cards) {
-            const card = renderCard(model, busy.has(model.task.id), summaryOf(model.task));
+            const card = renderCard(model, busy.has(model.task.id), summaryOf(model.task), sourceOf(model.task));
             list2.append(card.node);
             cardDisposers.push(card.dispose);
           }
@@ -15365,6 +15466,8 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
 .kb { display: flex; flex-direction: column; gap: 0.75rem; padding: 0.75rem; min-height: 100vh; }
 .kb-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 0.75rem; }
 .kb-project { flex: 1 1 12rem; min-width: 10rem; max-width: 22rem; }
+.kb-source { flex: 0 0 auto; }
+.kb-source[hidden] { display: none; }
 .kb-search { position: relative; flex: 1 1 12rem; min-width: 9rem; max-width: 20rem; }
 .kb-search-suggest { position: absolute; left: 0; right: 0; top: calc(100% + 0.25rem); z-index: 30; display: flex; flex-direction: column;
   padding: 0.25rem; max-height: 16rem; overflow-y: auto; background: var(--oc-elevated); color: var(--oc-elevated-fg);
@@ -15377,6 +15480,8 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
   border: 1px solid var(--oc-warning, #d97706); color: var(--oc-warning-text, var(--oc-fg)); }
 .kb-status:empty { display: none; }
 .kb-session-note:empty { display: none; }
+.kb-source-notes { display: flex; flex-direction: column; gap: 0.5rem; }
+.kb-source-notes:empty { display: none; }
 /* Every column is as tall as the board (the longest column, at least the rest of the window): a card
    dragged sideways from anywhere in a long column is over the column beside it (ui/dnd.ts hit-tests the column). */
 .kb-columns { flex: 1 0 auto; display: flex; gap: 0.75rem; align-items: stretch; overflow-x: auto; padding-bottom: 0.25rem; }
@@ -15635,6 +15740,8 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     sessionsReady: false,
     config: null,
     tasks: null,
+    sourceErrors: [],
+    unlisted: () => false,
     hideSubtasks: false,
     lastLoad: 0,
     view: "none",
@@ -15653,7 +15760,9 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     showArchived: false,
     order: [],
     orderFor: null,
-    query: ""
+    query: "",
+    sourceView: null,
+    sourceViewFor: null
   };
   var store = createSettingsStore(host.storage);
   var fail = (message2) => void host.toast({ kind: "error", message: message2 }).catch(() => {
@@ -15666,6 +15775,22 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
   var archiveSync = createStorageSync();
   var order = () => state.orderFor === state.projectId ? state.order : [];
   var orderSync = createStorageSync();
+  var sourceView = () => {
+    if (state.config === null) return null;
+    return currentSourceView(state.sourceViewFor === state.projectId ? state.sourceView : null, state.config);
+  };
+  var viewTasks = () => {
+    const view = sourceView();
+    return state.tasks === null || view === null ? null : tasksInView(state.tasks, view);
+  };
+  var setSourceView = (view) => {
+    const id = state.projectId;
+    if (id === null) return;
+    state.sourceView = view;
+    state.sourceViewFor = id;
+    saver.save(STORAGE_KEYS.sourceView(id), () => store.saveSourceView(id, view));
+    draw();
+  };
   var unarchivedAt = /* @__PURE__ */ new Map();
   var removedFor = (projectId) => unarchivedAt.get(projectId) ?? /* @__PURE__ */ new Map();
   var pendingMarks = createPendingMarks();
@@ -15836,16 +15961,24 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
   var draw = () => {
     board.setCanAdd(state.view === "board" && state.config !== null);
     state.columns = /* @__PURE__ */ new Map();
-    if (state.config === null || state.tasks === null) {
+    const view = sourceView();
+    const tasks = viewTasks();
+    if (state.config === null || tasks === null || view === null) {
+      board.setSources(null, null);
       setBadge(null);
+      board.setSourceBanners([], () => {
+      });
       board.render(null);
       return;
     }
+    const { sources } = state.config;
+    board.setSources(sourceSwitcher(sources), view);
+    board.setSourceBanners(sourceBanners(state.sourceErrors, sources), () => void load());
     const marks = archivedTasks();
-    const archivedCount = archivedShown(state.tasks, marks);
+    const archivedCount = archivedShown(tasks, marks);
     if (archivedCount === 0) state.showArchived = false;
     const model = groupTasks(
-      applyOrder(state.tasks, order()),
+      applyOrder(tasks, order()),
       state.sessions,
       starter.isStarting,
       state.hideSubtasks,
@@ -15858,23 +15991,26 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     for (const [column, cards] of Object.entries(model)) for (const c of cards) state.columns.set(c.task.id, column);
     setBadge(model.review.length || null);
     const tracker = state.config.tracker;
-    const shown = filterBoard(model, state.tasks, state.query, tracker);
+    const shown = filterBoard(model, tasks, state.query, tracker);
     selection2.beforeRender();
-    board.render(shown, editor.busy, (task) => summaries.get(task), {
-      archivable: archivableIds(state.tasks, marks).length,
-      archived: archivedCount,
-      showArchived: state.showArchived
-    });
+    board.render(
+      shown,
+      editor.busy,
+      (task) => summaries.get(task),
+      { archivable: archivableIds(tasks, marks).length, archived: archivedCount, showArchived: state.showArchived },
+      (task) => sourceBadge(task, view, sources)
+    );
     selection2.rendered(layoutOf(shown));
     auditLinks();
     focusSession();
-    if (state.tasks.length > 0 && state.query.trim() !== "" && Object.values(shown).every((cards) => cards.length === 0)) {
+    const emptyKind = view === "all" ? tracker : view;
+    if (tasks.length > 0 && state.query.trim() !== "" && Object.values(shown).every((cards) => cards.length === 0)) {
       board.setStatus({ kind: "empty", title: "No tasks match", body: `No task on the board matches "${state.query.trim()}".` });
-    } else if (state.tasks.length === 0) {
+    } else if (tasks.length === 0) {
       board.setStatus({
         kind: "empty",
         title: "No tasks yet",
-        body: tracker === "github" ? "Open issues of this repository show up here. Create one on GitHub or with the task-board CLI, then press Refresh." : "Issues under .scratch/<feature>/issues/ show up here. Create one with the task-board CLI or an agent skill, then press Refresh."
+        body: emptyKind === "github" ? "Open issues of this repository show up here. Create one on GitHub or with the task-board CLI, then press Refresh." : "Issues under .scratch/<feature>/issues/ show up here. Create one with the task-board CLI or an agent skill, then press Refresh."
       });
     } else {
       board.setStatus({ kind: "none" });
@@ -15965,15 +16101,23 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
       }
       const token = archiveSync.loadToken();
       const orderToken = orderSync.loadToken();
-      const [tasks, marks, gone, shelved, ranked] = await Promise.all([
+      const [listed2, marks, gone, shelved, ranked, pickedSource] = await Promise.all([
         api.list(),
         store.loadDetached(p.id).catch(() => null),
         store.loadArchived(p.id).catch(() => null),
         store.loadArchivedTasks(p.id).catch(() => null),
         store.loadOrder(p.id).catch(() => null),
+        // Read once per project: afterwards this frame's own pick stands.
+        state.sourceViewFor === p.id ? Promise.resolve(state.sourceView) : store.loadSourceView(p.id).catch(() => null),
         starter.refresh(p.id, p.directory)
       ]);
       if (mine !== generation) return;
+      if (state.sourceViewFor !== p.id) {
+        state.sourceView = pickedSource;
+        state.sourceViewFor = p.id;
+      }
+      const { tasks, errors: errors2, unlisted } = listed2;
+      state.unlisted = unlisted;
       if (marks !== null) {
         const merged = new Map(detached());
         for (const [taskId, at] of marks) if (at > (merged.get(taskId) ?? 0)) merged.set(taskId, at);
@@ -15985,18 +16129,19 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
         state.archivedFor = p.id;
       }
       const base2 = shelved === null ? archivedTasks() : archiveSync.trusts(token) ? shelved : mergeArchived(archivedTasks(), shelved, removedFor(p.id));
-      const fixed = reconcileArchived(base2, tasks);
+      const fixed = reconcileArchived(base2, tasks, unlisted);
       state.archivedTasks = fixed.marks;
       state.archivedTasksFor = p.id;
       if (fixed.changed) writeArchivedTasks(p.id, fixed.marks, tasks);
       if (ranked !== null && (orderSync.trusts(orderToken) || state.orderFor !== p.id)) {
-        const pruned = pruneOrder(ranked, tasks);
+        const pruned = pruneOrder(ranked, tasks, unlisted);
         state.order = pruned;
         state.orderFor = p.id;
         if (pruned.length !== ranked.length && orderSync.trusts(orderToken)) setOrder(p.id, pruned);
       }
       state.config = result.config;
       state.tasks = tasks;
+      state.sourceErrors = errors2;
       state.view = "board";
       draw();
       editor.refresh();
@@ -16034,10 +16179,14 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     state.showArchived = false;
     state.order = [];
     state.orderFor = null;
+    state.sourceView = null;
+    state.sourceViewFor = null;
     audited.clear();
     starter.reset();
     state.config = null;
     state.tasks = null;
+    state.sourceErrors = [];
+    state.unlisted = () => false;
     board.setProjects(projectOptions(), id);
     unsubscribeSessions?.();
     unsubscribeSessions = null;
@@ -16156,6 +16305,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     host,
     project,
     tasks: () => state.tasks,
+    primary: () => state.config?.primary ?? null,
     sessions: () => state.sessions,
     context: startContext,
     loadCard: (projectId, taskId) => store.loadCard(projectId, taskId),
@@ -16185,7 +16335,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     const id = state.projectId;
     if (id === null || state.tasks === null) return;
     const ids = [...state.columns].filter(([, c]) => c === column).map(([t]) => t);
-    const next = pruneOrder(reorder(order(), ids, taskId, before), state.tasks);
+    const next = pruneOrder(reorder(order(), ids, taskId, before), state.tasks, state.unlisted);
     setOrder(id, next);
     draw();
   };
@@ -16202,14 +16352,14 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     const removed = new Map(removedFor(projectId));
     const snapshot = pendingMarks.queue(projectId, marks, removed, n);
     const job = archiveWriteJob(
-      { marks: snapshot, removed, tasks },
+      { marks: snapshot, removed, tasks, unlisted: state.unlisted },
       { load: () => store.loadArchivedTasks(projectId), save: (next) => store.saveArchivedTasks(projectId, next) },
       (next) => {
         archiveSync.written(n);
         pendingMarks.written(projectId, n);
         if (state.archivedTasksFor !== projectId || state.tasks === null) return;
         const current2 = state.archivedTasks;
-        const shown = reconcileArchived(mergeArchived(current2, next, removedFor(projectId)), state.tasks).marks;
+        const shown = reconcileArchived(mergeArchived(current2, next, removedFor(projectId)), state.tasks, state.unlisted).marks;
         if (sameMarks(current2, shown)) return;
         state.archivedTasks = shown;
         draw();
@@ -16228,16 +16378,16 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
   };
   var archiveDone = async () => {
     const id = state.projectId;
-    if (id === null || state.tasks === null) return;
-    const n = archivableIds(state.tasks, archivedTasks()).length;
+    if (id === null || viewTasks() === null) return;
+    const n = archivableIds(viewTasks() ?? [], archivedTasks()).length;
     if (n === 0) return;
     const answer = await askChoice(
       `Archive ${n} done task${n === 1 ? "" : "s"}?`,
       "They leave the board. Nothing changes in the repository or on GitHub; \u201CShow archived\u201D brings them back, and a reopened task returns on its own.",
       [{ id: "archive", label: "Archive" }]
     );
-    if (answer === null || state.projectId !== id || state.tasks === null) return;
-    const ids = archivableIds(state.tasks, archivedTasks());
+    if (answer === null || state.projectId !== id || viewTasks() === null) return;
+    const ids = archivableIds(viewTasks() ?? [], archivedTasks());
     if (ids.length === 0) return;
     setArchivedTasks(id, archiveTasks(archivedTasks(), ids, Date.now()));
     info(`Archived ${ids.length} done task${ids.length === 1 ? "" : "s"}`);
@@ -16263,7 +16413,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     const p = project();
     if (id === null || p === null || state.view !== "board" || state.config === null || state.tasks === null) return;
     const tracker = state.config.tracker;
-    const plan = clearArchivePlan(tracker, state.tasks, archivedTasks());
+    const plan = clearArchivePlan(tracker, viewTasks() ?? [], archivedTasks());
     const ask = clearConfirm(tracker, plan);
     if (ask === null) {
       info("The archived features still have sub-tasks on the board; nothing to delete.");
@@ -16271,7 +16421,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     }
     const answer = await askChoice(ask.title, ask.body, [{ id: "clear", label: "Delete all", variant: "destructive" }]);
     if (answer === null || state.projectId !== id || state.tasks === null) return;
-    const fresh = clearArchivePlan(tracker, state.tasks, archivedTasks());
+    const fresh = clearArchivePlan(tracker, viewTasks() ?? [], archivedTasks());
     if (JSON.stringify(fresh) !== JSON.stringify(plan)) {
       info("The archive changed while you were asked; nothing was deleted. Try again.");
       return;
@@ -16499,7 +16649,8 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
         state.query = query;
         draw();
       },
-      suggest: (text3, caret) => searchSuggestions(text3, caret, boardTypes()),
+      suggest: (text3, caret) => searchSuggestions(text3, caret, boardTypes(), state.config?.sources.map((s) => s.id) ?? []),
+      onSource: setSourceView,
       // Second Esc: focus back on the Selected card, or on the Board itself when there is none.
       onSearchExit: () => {
         const id = selection2.get();

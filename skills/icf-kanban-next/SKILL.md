@@ -15,7 +15,7 @@ If `docs/agents/issue-tracker.md` is missing, ask the user which tracker they wa
    ```sh
    task-board list --ready
    ```
-   Skip lines marked `claimed`: another agent has them. `task-board next` prints the first ready ticket, claimed or not. Exit code 3 means nothing is ready: tell the user and stop.
+   With several sources each line names its source (`local`, `github`); `--source <id>` reads only that one. Skip lines marked `claimed`: another agent has them. `task-board next` prints the first ready ticket, claimed or not. Exit code 3 means nothing is ready: tell the user and stop.
 2. Take the first unclaimed one exactly as the `icf-kanban-start` skill says: `task-board show <id>`, `task-board claim <id>`, do the work, then `task-board state <id> done`.
 3. Take another only if the user asked you to work through the board.
 

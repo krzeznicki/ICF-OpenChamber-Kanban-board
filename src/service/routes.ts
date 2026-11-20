@@ -128,6 +128,8 @@ const newTask = (v: unknown): NewTask => {
   if (v.type !== undefined) task.type = str(v, 'type');
   if (v.state !== undefined) task.state = state(v.state, 'input.state');
   if (v.parentId !== undefined) task.parentId = str(v, 'parentId');
+  // The Source to create it in; default the primary one, and with parentId the parent's one.
+  if (v.source !== undefined) task.source = str(v, 'source');
   if (v.blockedBy !== undefined) {
     const b = v.blockedBy;
     task.blockedBy =

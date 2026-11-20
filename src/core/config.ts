@@ -85,21 +85,27 @@ const additionalSources = (text: string): SourceId[] => {
   return out;
 };
 
+/** What each source is, for agents; its line in the Additional sources section. */
 const SOURCE_TEXT: Record<SourceId, string> = {
-  local: 'markdown files under `.scratch/` in this repository (private: they stay with the repository checkout)',
-  github: "this repository's GitHub Issues (shared with the team)",
+  local: 'markdown files under `.scratch/` in this repository (private: they stay with the repository checkout; ids look like `.scratch/<feature>/spec.md`)',
+  github: "this repository's GitHub Issues (shared with the team; ids look like `#42`)",
 };
 
-/** The Additional sources section for `ids`, as written to issue-tracker.md. */
+/**
+ * The Additional sources section for `ids`, as written to issue-tracker.md: the agent instructions
+ * for publishing in each source and the rules that tie tasks to one source (ADR 0001). Settings and
+ * the CLI both write it through withAdditionalSources, so this is the one place the text lives.
+ */
 export const additionalSourcesSection = (ids: readonly SourceId[]): string =>
   [
     `## ${ADDITIONAL}`,
     '',
     'The Kanban board also shows tasks from the sources below. Everything above describes the primary source: a new task goes there unless you name another source.',
     '',
-    ...ids.map((id) => `- \`${id}\`: ${SOURCE_TEXT[id]}. Publish there with \`task-board create --source ${id} ...\`.`),
+    ...ids.map((id) => `- \`${id}\`: ${SOURCE_TEXT[id]}. Publish there with \`task-board create --source ${id} --title <title> ...\`.`),
     '',
-    "A sub-task always goes to its parent's source. Tasks of different sources are never linked: no parent or blocker across sources.",
+    "A sub-task (`task-board create --parent <id>`) always goes to its parent's source; naming another source is refused. Tasks of different sources are never linked: no parent or blocker across sources.",
+    'Every other command (`show`, `state`, `claim`, `parent`, `close`) works on an id from any source. `list` and `next` read every source and name each task\'s source; `--source <id>` reads only that one.',
     '',
   ].join('\n');
 

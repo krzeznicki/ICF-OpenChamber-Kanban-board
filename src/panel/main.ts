@@ -15,7 +15,8 @@ import { VARIANT, panelId } from '../core/variant.ts';
 import type { Task } from '../core/types.ts';
 import { archivableIds, archivedShown, archiveTasks, archiveWriteJob, createStorageSync, createPendingMarks, isArchived, mergeArchived, reconcileArchived, unarchiveTask } from './archive.ts';
 import { clearArchivePlan, clearConfirm, runClearArchive } from './clearArchive.ts';
-import { ApiError, createApi, type Api, type ConfigResult, type ProjectConfig } from './api.ts';
+import { ApiError, createApi, type Api, type ConfigResult, type ProjectConfig, type SourceError } from './api.ts';
+import { sourceBanners } from './sourceBanner.ts';
 import { applyOrder, forgetInOrder, pruneOrder, renameInOrder, reorder } from './order.ts';
 import { COLUMNS, groupTasks, pruneArchived, resolveSession, sessionForTask, sessionTarget, type Column, type SessionLookup } from './columns.ts';
 import { createEditor, type Editor } from './edit.ts';
@@ -41,6 +42,7 @@ import { createSuggester, createTypeClassifier } from './suggest.ts';
 import { taskTypes } from './moves.ts';
 import { MODEL_PICK } from './addTask.ts';
 import { filterBoard, searchSuggestions } from './search.ts';
+import { currentSourceView, sourceBadge, sourceSwitcher, tasksInView, type SourceView } from './sourceView.ts';
 import { createSummaries } from './summaries.ts';
 import { createProjectFollow } from './projectFollow.ts';
 import { createSessionFocus } from './sessionFocus.ts';
@@ -79,6 +81,10 @@ type State = {
   sessionsReady: boolean;
   config: ProjectConfig | null;
   tasks: Task[] | null;
+  /** The sources that failed to list in the last load (a banner each); the board shows the others. */
+  sourceErrors: SourceError[];
+  /** True for an id of a source that failed to list: pruning the archive marks and order keeps it. */
+  unlisted: (id: string) => boolean;
   hideSubtasks: boolean;
   /** When the last load was attempted, successful or not. */
   lastLoad: number;
@@ -110,6 +116,9 @@ type State = {
   orderFor: string | null;
   /** The toolbar's search text (search.ts); this panel session only, kept across project switches. */
   query: string;
+  /** The source switcher's choice (sourceView.ts), stored per project; `sourceViewFor` is its project. */
+  sourceView: SourceView | null;
+  sourceViewFor: string | null;
 };
 
 const state: State = {
@@ -121,6 +130,8 @@ const state: State = {
   sessionsReady: false,
   config: null,
   tasks: null,
+  sourceErrors: [],
+  unlisted: () => false,
   hideSubtasks: false,
   lastLoad: 0,
   view: 'none',
@@ -140,6 +151,8 @@ const state: State = {
   order: [],
   orderFor: null,
   query: '',
+  sourceView: null,
+  sourceViewFor: null,
 };
 
 const store = createSettingsStore(host.storage);
@@ -158,6 +171,29 @@ const archiveSync = createStorageSync();
 const order = (): string[] => (state.orderFor === state.projectId ? state.order : []);
 /** The same rule for the card order: a load takes storage only when every reorder of this frame is written. */
 const orderSync = createStorageSync();
+/**
+ * What the board shows of the shown project's sources (sourceView.ts): its choice, re-checked against
+ * the config (a removed source falls back to the primary), else the primary. Null without a config.
+ * Add task (ticket 04) picks its source from this: a source id, or `all` for "let the user choose".
+ */
+const sourceView = (): SourceView | null => {
+  if (state.config === null) return null;
+  return currentSourceView(state.sourceViewFor === state.projectId ? state.sourceView : null, state.config);
+};
+/** The tasks the board draws: those of the switcher's source, every one in All. */
+const viewTasks = (): Task[] | null => {
+  const view = sourceView();
+  return state.tasks === null || view === null ? null : tasksInView(state.tasks, view);
+};
+/** The switcher's pick: stored for the project, then the board redraws with that source's tasks. */
+const setSourceView = (view: SourceView): void => {
+  const id = state.projectId;
+  if (id === null) return;
+  state.sourceView = view;
+  state.sourceViewFor = id;
+  saver.save(STORAGE_KEYS.sourceView(id), () => store.saveSourceView(id, view));
+  draw();
+};
 /**
  * Per project, task id -> when this frame unarchived it: a merge with storage does not bring those
  * marks back. Kept across project switches (a write of the old project may still be queued).
@@ -365,16 +401,23 @@ const follow = createProjectFollow({
 const draw = (): void => {
   board.setCanAdd(state.view === 'board' && state.config !== null);
   state.columns = new Map();
-  if (state.config === null || state.tasks === null) {
+  const view = sourceView();
+  const tasks = viewTasks();
+  if (state.config === null || tasks === null || view === null) {
+    board.setSources(null, null);
     setBadge(null);
+    board.setSourceBanners([], () => {});
     board.render(null);
     return;
   }
+  const { sources } = state.config;
+  board.setSources(sourceSwitcher(sources), view);
+  board.setSourceBanners(sourceBanners(state.sourceErrors, sources), () => void load());
   const marks = archivedTasks();
-  const archivedCount = archivedShown(state.tasks, marks);
+  const archivedCount = archivedShown(tasks, marks);
   if (archivedCount === 0) state.showArchived = false;
   const model = groupTasks(
-    applyOrder(state.tasks, order()),
+    applyOrder(tasks, order()),
     state.sessions,
     starter.isStarting,
     state.hideSubtasks,
@@ -388,24 +431,28 @@ const draw = (): void => {
   // The attention mark: sessions that finished or wait for the user.
   setBadge(model.review.length || null);
   const tracker = state.config.tracker;
-  const shown = filterBoard(model, state.tasks, state.query, tracker);
+  const shown = filterBoard(model, tasks, state.query, tracker);
   selection.beforeRender();
-  board.render(shown, editor.busy, (task) => summaries.get(task), {
-    archivable: archivableIds(state.tasks, marks).length,
-    archived: archivedCount,
-    showArchived: state.showArchived,
-  });
+  board.render(
+    shown,
+    editor.busy,
+    (task) => summaries.get(task),
+    { archivable: archivableIds(tasks, marks).length, archived: archivedCount, showArchived: state.showArchived },
+    (task) => sourceBadge(task, view, sources),
+  );
   selection.rendered(layoutOf(shown));
   auditLinks();
   focusSession();
-  if (state.tasks.length > 0 && state.query.trim() !== '' && Object.values(shown).every((cards) => cards.length === 0)) {
+  // The empty board speaks of the source it shows (in All: the primary one).
+  const emptyKind = view === 'all' ? tracker : view;
+  if (tasks.length > 0 && state.query.trim() !== '' && Object.values(shown).every((cards) => cards.length === 0)) {
     board.setStatus({ kind: 'empty', title: 'No tasks match', body: `No task on the board matches "${state.query.trim()}".` });
-  } else if (state.tasks.length === 0) {
+  } else if (tasks.length === 0) {
     board.setStatus({
       kind: 'empty',
       title: 'No tasks yet',
       body:
-        tracker === 'github'
+        emptyKind === 'github'
           ? 'Open issues of this repository show up here. Create one on GitHub or with the task-board CLI, then press Refresh.'
           : 'Issues under .scratch/<feature>/issues/ show up here. Create one with the task-board CLI or an agent skill, then press Refresh.',
     });
@@ -507,15 +554,24 @@ const load = async (): Promise<void> => {
     // Links and the start queue come from the service's own files (starter.ts).
     const token = archiveSync.loadToken();
     const orderToken = orderSync.loadToken();
-    const [tasks, marks, gone, shelved, ranked] = await Promise.all([
+    const [listed, marks, gone, shelved, ranked, pickedSource] = await Promise.all([
       api.list(),
       store.loadDetached(p.id).catch(() => null),
       store.loadArchived(p.id).catch(() => null),
       store.loadArchivedTasks(p.id).catch(() => null),
       store.loadOrder(p.id).catch(() => null),
+      // Read once per project: afterwards this frame's own pick stands.
+      state.sourceViewFor === p.id ? Promise.resolve(state.sourceView) : store.loadSourceView(p.id).catch(() => null),
       starter.refresh(p.id, p.directory),
     ]);
     if (mine !== generation) return;
+    if (state.sourceViewFor !== p.id) {
+      state.sourceView = pickedSource as SourceView | null;
+      state.sourceViewFor = p.id;
+    }
+    // A source that failed to list keeps its tasks' archive marks and places (listedBoard).
+    const { tasks, errors, unlisted } = listed;
+    state.unlisted = unlisted;
     // Stored marks (also those of the board's other frame) join this frame's own; unreadable ones keep memory.
     if (marks !== null) {
       const merged = new Map(detached());
@@ -533,7 +589,7 @@ const load = async (): Promise<void> => {
     // that is written back.
     const base =
       shelved === null ? archivedTasks() : archiveSync.trusts(token) ? shelved : mergeArchived(archivedTasks(), shelved, removedFor(p.id));
-    const fixed = reconcileArchived(base, tasks);
+    const fixed = reconcileArchived(base, tasks, unlisted);
     state.archivedTasks = fixed.marks;
     state.archivedTasksFor = p.id;
     if (fixed.changed) writeArchivedTasks(p.id, fixed.marks, tasks);
@@ -542,13 +598,14 @@ const load = async (): Promise<void> => {
     // but only when nothing changed the order since the load began: a task moved meanwhile (new id)
     // may be missing from this list yet.
     if (ranked !== null && (orderSync.trusts(orderToken) || state.orderFor !== p.id)) {
-      const pruned = pruneOrder(ranked, tasks);
+      const pruned = pruneOrder(ranked, tasks, unlisted);
       state.order = pruned;
       state.orderFor = p.id;
       if (pruned.length !== ranked.length && orderSync.trusts(orderToken)) setOrder(p.id, pruned);
     }
     state.config = result.config;
     state.tasks = tasks;
+    state.sourceErrors = errors;
     state.view = 'board';
     draw();
     editor.refresh();
@@ -590,10 +647,14 @@ const selectProject = async (id: string | null): Promise<void> => {
   state.showArchived = false;
   state.order = [];
   state.orderFor = null;
+  state.sourceView = null;
+  state.sourceViewFor = null;
   audited.clear();
   starter.reset();
   state.config = null;
   state.tasks = null;
+  state.sourceErrors = [];
+  state.unlisted = () => false;
   board.setProjects(projectOptions(), id);
   unsubscribeSessions?.();
   unsubscribeSessions = null;
@@ -757,6 +818,7 @@ const starter = createStarter({
   host,
   project,
   tasks: () => state.tasks,
+  primary: () => state.config?.primary ?? null,
   sessions: () => state.sessions,
   context: startContext,
   loadCard: (projectId, taskId) => store.loadCard(projectId, taskId),
@@ -796,7 +858,7 @@ const reorderCard = (taskId: string, column: Column, before: string | null): voi
   const id = state.projectId;
   if (id === null || state.tasks === null) return;
   const ids = [...state.columns].filter(([, c]) => c === column).map(([t]) => t);
-  const next = pruneOrder(reorder(order(), ids, taskId, before), state.tasks);
+  const next = pruneOrder(reorder(order(), ids, taskId, before), state.tasks, state.unlisted);
   setOrder(id, next);
   draw();
 };
@@ -827,7 +889,7 @@ const writeArchivedTasks = (projectId: string, marks: ReadonlyMap<string, number
   // Joined with marks still queued: a job this one replaces may hold some memory no longer has.
   const snapshot = pendingMarks.queue(projectId, marks, removed, n);
   const job = archiveWriteJob(
-    { marks: snapshot, removed, tasks },
+    { marks: snapshot, removed, tasks, unlisted: state.unlisted },
     { load: () => store.loadArchivedTasks(projectId), save: (next) => store.saveArchivedTasks(projectId, next) },
     (next) => {
       archiveSync.written(n);
@@ -835,7 +897,7 @@ const writeArchivedTasks = (projectId: string, marks: ReadonlyMap<string, number
       // The other frame's marks (or, after a switch back, this job's own) join what the board shows.
       if (state.archivedTasksFor !== projectId || state.tasks === null) return;
       const current = state.archivedTasks;
-      const shown = reconcileArchived(mergeArchived(current, next, removedFor(projectId)), state.tasks).marks;
+      const shown = reconcileArchived(mergeArchived(current, next, removedFor(projectId)), state.tasks, state.unlisted).marks;
       if (sameMarks(current, shown)) return;
       state.archivedTasks = shown;
       draw();
@@ -859,8 +921,8 @@ const setArchivedTasks = (projectId: string, marks: Map<string, number>): void =
 
 const archiveDone = async (): Promise<void> => {
   const id = state.projectId;
-  if (id === null || state.tasks === null) return;
-  const n = archivableIds(state.tasks, archivedTasks()).length;
+  if (id === null || viewTasks() === null) return;
+  const n = archivableIds(viewTasks() ?? [], archivedTasks()).length;
   if (n === 0) return;
   const answer = await askChoice(
     `Archive ${n} done task${n === 1 ? '' : 's'}?`,
@@ -868,8 +930,8 @@ const archiveDone = async (): Promise<void> => {
     [{ id: 'archive', label: 'Archive' }],
   );
   // The board may have reloaded or switched project while the question was open.
-  if (answer === null || state.projectId !== id || state.tasks === null) return;
-  const ids = archivableIds(state.tasks, archivedTasks());
+  if (answer === null || state.projectId !== id || viewTasks() === null) return;
+  const ids = archivableIds(viewTasks() ?? [], archivedTasks());
   if (ids.length === 0) return;
   setArchivedTasks(id, archiveTasks(archivedTasks(), ids, Date.now()));
   info(`Archived ${ids.length} done task${ids.length === 1 ? '' : 's'}`);
@@ -905,7 +967,8 @@ const clearArchiveNow = async (): Promise<void> => {
   const p = project();
   if (id === null || p === null || state.view !== 'board' || state.config === null || state.tasks === null) return;
   const tracker = state.config.tracker;
-  const plan = clearArchivePlan(tracker, state.tasks, archivedTasks());
+  // Only what the board shows: the switcher's source, or every source in All.
+  const plan = clearArchivePlan(tracker, viewTasks() ?? [], archivedTasks());
   const ask = clearConfirm(tracker, plan);
   if (ask === null) {
     info('The archived features still have sub-tasks on the board; nothing to delete.');
@@ -914,7 +977,7 @@ const clearArchiveNow = async (): Promise<void> => {
   const answer = await askChoice(ask.title, ask.body, [{ id: 'clear', label: 'Delete all', variant: 'destructive' }]);
   if (answer === null || state.projectId !== id || state.tasks === null) return;
   // The board may have reloaded while the question was open: delete only what the user confirmed.
-  const fresh = clearArchivePlan(tracker, state.tasks, archivedTasks());
+  const fresh = clearArchivePlan(tracker, viewTasks() ?? [], archivedTasks());
   if (JSON.stringify(fresh) !== JSON.stringify(plan)) {
     info('The archive changed while you were asked; nothing was deleted. Try again.');
     return;
@@ -1221,7 +1284,8 @@ const start = (ctx: HostReadyContext): void => {
       state.query = query;
       draw();
     },
-    suggest: (text, caret) => searchSuggestions(text, caret, boardTypes()),
+    suggest: (text, caret) => searchSuggestions(text, caret, boardTypes(), state.config?.sources.map((s) => s.id) ?? []),
+    onSource: setSourceView,
     // Second Esc: focus back on the Selected card, or on the Board itself when there is none.
     onSearchExit: () => {
       const id = selection.get();

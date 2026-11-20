@@ -230,3 +230,26 @@ test('matchesQuery reads each task as its own source stores it, whatever the pri
   assert.equal(matchesQuery(task('.scratch/f/issues/01-x.md', { body }), 'enhancement', 'github'), false);
   assert.equal(matchesQuery(task('.scratch/f/issues/01-x.md', { body }), 'plain', 'github'), true);
 });
+
+test('matchesQuery: source: keeps the tasks of that source and joins other filters', () => {
+  const mine = task('.scratch/a/issues/01.md', { type: 'bug' });
+  const shared = task('#7', { type: 'bug' });
+  assert.equal(matchesQuery(mine, 'source:local', 'local'), true);
+  assert.equal(matchesQuery(shared, 'source:local', 'local'), false);
+  assert.equal(matchesQuery(shared, 'source=git', 'local'), true);
+  assert.equal(matchesQuery(shared, 'source:github type:enh', 'local'), false);
+  assert.equal(matchesQuery(shared, 'source:github type:bug', 'local'), true);
+  // Either source, as with any key given twice.
+  assert.equal(matchesQuery(mine, 'source:github source:local', 'local'), true);
+});
+
+test('searchSuggestions: source: is offered with the project\'s sources when it has several', () => {
+  const sources = ['local', 'github'];
+  const offered = (text: string, list: string[]) => searchSuggestions(text, text.length, [], list).map((s) => s.label);
+  assert.deepEqual(offered('so', sources), ['source:']);
+  assert.deepEqual(offered('source:', sources), ['source:local', 'source:github']);
+  assert.deepEqual(offered('bug source:g', sources), ['source:github']);
+  // One source: nothing to tell apart, so the key is not offered.
+  assert.deepEqual(offered('so', ['local']), []);
+  assert.deepEqual(offered('so', []), []);
+});

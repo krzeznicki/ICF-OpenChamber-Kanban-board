@@ -1,11 +1,12 @@
 // Several sources per project (ADR 0001): one adapter per Source, and the combined tracker the CLI
 // and the service use. The combined tracker is a Tracker over the adapters: `list` merges theirs,
-// every operation on an id goes to the source that owns it, `create` goes to the primary source.
+// every operation on an id goes to the source that owns it, `create` goes to the parent's source, the
+// named one or the primary one. Links (parent, blockers) never cross sources.
 // Adding a source (Linear, Jira, ...) is one adapter here plus its id in config.ts SOURCE_IDS.
 import type { ProjectConfig, SourceId } from './config.ts';
 import { createGithubTracker } from './githubTracker.ts';
 import { createLocalTracker } from './localTracker.ts';
-import type { Exec, Task, Tracker, TrackerErrorCode } from './types.ts';
+import type { Exec, NewTask, Task, Tracker, TrackerErrorCode } from './types.ts';
 import { TrackerError } from './types.ts';
 
 /** What a source can do; the panel and the CLI ask these instead of checking the source's kind. */
@@ -107,14 +108,56 @@ export const createCombinedTracker = (primary: SourceId, sources: readonly Sourc
     if (owner !== undefined) return owner;
     // One source: it judges the id itself, so its own messages stay as they were.
     if (sources.length === 1) return sources[0]!;
-    throw new TrackerError('NOT_FOUND', `No source of this project has a task "${id}" (sources: ${sources.map((s) => s.id).join(', ')})`);
+    throw new TrackerError('NOT_FOUND', `No source of this project has a task "${id}" (sources: ${known()})`);
   };
   const primarySource = sources.find((s) => s.id === primary) ?? sources[0]!;
+  const known = (): string => sources.map((s) => s.id).join(', ');
+  const named = (id: string): SourceAdapter => {
+    const source = sources.find((s) => s.id === id);
+    if (source === undefined) throw new TrackerError('INVALID', `Unknown source "${id}": this project has ${known()}`);
+    return source;
+  };
+  const NO_LINKS = 'tasks of different sources are never linked';
+
+  /** Where a new task goes: its parent's source, else the named one, else the primary one. */
+  const targetOf = (input: NewTask): SourceAdapter => {
+    const asked = input.source === undefined ? undefined : named(input.source);
+    if (input.parentId === undefined) return asked ?? primarySource;
+    const parent = sourceOf(input.parentId);
+    if (asked !== undefined && asked !== parent) {
+      throw new TrackerError(
+        'INVALID',
+        `A sub-task goes to its parent's source: ${input.parentId} is in ${parent.id}, not ${asked.id}; drop --source or pick a parent in ${asked.id}`,
+      );
+    }
+    return parent;
+  };
+
+  const create = async (input: NewTask): Promise<Task> => {
+    const target = targetOf(input);
+    for (const b of input.blockedBy ?? []) {
+      const owner = sources.find((s) => s.owns(b));
+      if (owner !== undefined && owner !== target) {
+        throw new TrackerError('INVALID', `Blocker ${b} is in ${owner.id}, but the new task goes to ${target.id}: ${NO_LINKS}`);
+      }
+    }
+    const { source: _source, ...rest } = input;
+    return target.create(rest);
+  };
+
+  const setParent = async (id: string, parentId: string): Promise<Task> => {
+    const child = sourceOf(id);
+    const parent = sourceOf(parentId);
+    if (child !== parent) {
+      throw new TrackerError('INVALID', `${id} (${child.id}) and ${parentId} (${parent.id}) are in different sources: ${NO_LINKS}`);
+    }
+    return child.setParent(id, parentId);
+  };
 
   const listAll = async (opts: { source?: string } = {}): Promise<SourcedList> => {
     const asked = opts.source === undefined ? sources : sources.filter((s) => s.id === opts.source);
     if (asked.length === 0) {
-      throw new TrackerError('INVALID', `Unknown source "${opts.source}": this project has ${sources.map((s) => s.id).join(', ')}`);
+      throw new TrackerError('INVALID', `Unknown source "${opts.source}": this project has ${known()}`);
     }
     const results = await Promise.allSettled(asked.map((s) => s.list()));
     const failed = results.flatMap((r) => (r.status === 'rejected' ? [r.reason as unknown] : []));
@@ -135,12 +178,12 @@ export const createCombinedTracker = (primary: SourceId, sources: readonly Sourc
     listAll,
     list: async () => (await listAll()).tasks,
     get: async (id) => sourceOf(id).get(id),
-    create: async (input) => primarySource.create(input),
+    create,
     setState: async (id, state) => sourceOf(id).setState(id, state),
     setType: async (id, type) => sourceOf(id).setType(id, type),
     edit: async (id, changes) => sourceOf(id).edit(id, changes),
     claim: async (id) => sourceOf(id).claim(id),
-    setParent: async (id, parentId) => sourceOf(id).setParent(id, parentId),
+    setParent,
     removeParent: async (id) => sourceOf(id).removeParent(id),
     close: async (id, opts) => sourceOf(id).close(id, opts),
     remove: async (id, opts) => sourceOf(id).remove(id, opts),

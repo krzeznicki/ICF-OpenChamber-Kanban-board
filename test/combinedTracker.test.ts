@@ -153,3 +153,42 @@ test('sources declare capabilities and availability', async (t) => {
   const missing = await (await both(t, [], { version: null })).tracker.sources[1]!.availability();
   assert.equal(missing.status, 'unavailable');
 });
+
+test('create --source puts the task in that source; an unknown source is INVALID', async (t) => {
+  const { tracker, gh } = await both(t);
+  const shared = await tracker.create({ title: 'Shared', source: 'github' });
+  assert.equal(shared.source, 'github');
+  assert.equal(shared.id, '#7');
+  assert.ok(gh.calls.some((c) => c[1] === 'issue' && c[2] === 'create'));
+  assert.equal((await tracker.create({ title: 'Private', source: 'local' })).source, 'local');
+  await rejectsWith(tracker.create({ title: 'X', source: 'jira' }), 'INVALID', /jira.*local, github/);
+});
+
+test('create with a parent goes to the parent\'s source; a different --source is INVALID', async (t) => {
+  const { tracker, gh, spec } = await both(t);
+  const sub = await tracker.create({ title: 'Public sub', parentId: '#5' });
+  assert.equal(sub.source, 'github');
+  assert.equal(sub.parentId, '#5');
+  const local = await tracker.create({ title: 'Private sub', parentId: spec.id, source: 'local' });
+  assert.equal(local.source, 'local');
+  assert.equal(local.parentId, spec.id);
+
+  const before = gh.calls.length;
+  await rejectsWith(tracker.create({ title: 'X', parentId: spec.id, source: 'github' }), 'INVALID', /parent.*local/i);
+  assert.equal(gh.calls.length, before, 'gh not called');
+});
+
+test('blockers and parents across sources are INVALID with a readable message', async (t) => {
+  const { tracker, gh, spec, ticket } = await both(t);
+  const before = gh.calls.length;
+  await rejectsWith(
+    tracker.create({ title: 'X', parentId: '#5', blockedBy: [ticket.id] }),
+    'INVALID',
+    /source/,
+  );
+  await rejectsWith(tracker.create({ title: 'Y', blockedBy: ['#6'] }), 'INVALID', /#6.*github/);
+  await rejectsWith(tracker.setParent('#6', spec.id), 'INVALID', /different sources|another source/);
+  await rejectsWith(tracker.setParent(ticket.id, '#5'), 'INVALID', /different sources|another source/);
+  assert.equal(gh.calls.length, before, 'gh not called');
+  assert.equal((await tracker.get(ticket.id)).parentId, spec.id);
+});
