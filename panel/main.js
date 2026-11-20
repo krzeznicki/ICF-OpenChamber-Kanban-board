@@ -2930,6 +2930,11 @@ ${GUEST_UI_LOOK_CSS}`;
       directory,
       readConfig: () => call("POST", "/config/read"),
       initConfig: (tracker) => call("POST", "/config/init", { tracker }).then((r) => r.config),
+      /**
+       * Settings → Sources: adds or removes a source or makes one primary (rewrites issue-tracker.md).
+       * `{confirm}`: the change would replace a template edited by hand; send it again with `force`.
+       */
+      changeSources: (change, force) => call("POST", "/config/sources", { change, force }),
       /** The github.com remote of the project (origin first), or null. */
       detect: () => call("POST", "/config/detect").then((r) => r.remote),
       /** The tasks of every source; `/tasks/list` also answers `errors` (SourceError[]) for the sources that failed. */
@@ -5099,6 +5104,26 @@ ${ref}`,
     };
   };
 
+  // src/panel/sourceSettings.ts
+  var KNOWN = [
+    { id: "local", label: "Local" },
+    { id: "github", label: "GitHub" }
+  ];
+  var sourcesView = (config2) => ({
+    rows: config2.sources.map((s) => {
+      const primary2 = s.id === config2.primary;
+      return { id: s.id, label: s.label, primary: primary2, canRemove: !primary2, canMakePrimary: !primary2 };
+    }),
+    addable: KNOWN.filter((k) => !config2.sources.some((s) => s.id === k.id))
+  });
+  var changeSource = async (service, change, ask) => {
+    const first = await service.changeSources(change, false);
+    if ("config" in first) return first.config;
+    if (!await ask(first.confirm)) return null;
+    const forced = await service.changeSources(change, true);
+    return "config" in forced ? forced.config : null;
+  };
+
   // src/panel/ui/startTarget.ts
   var message = (e) => e instanceof Error ? e.message : String(e);
   var mountStartTarget = (cells, props) => {
@@ -5827,6 +5852,43 @@ ${ref}`,
       }).dispose
     );
   };
+  var drawSources = (body, disposers, config2, apply) => {
+    const view = sourcesView(config2);
+    const list2 = el2("section", "kb-settings-section");
+    list2.append(el2("h3", "kb-settings-heading", "Sources"));
+    list2.append(
+      el2(
+        "p",
+        "kb-settings-hint",
+        "Where the board reads tasks from. New tasks go to the primary source unless you pick another. Changes rewrite docs/agents/issue-tracker.md; removing a source only hides its tasks, its files or issues stay."
+      )
+    );
+    for (const r of view.rows) {
+      const row = el2("div", "kb-keys-row");
+      row.append(el2("span", "kb-keys-action", r.label));
+      row.append(el2("span", "kb-keys-key kb-muted", r.primary ? "Primary" : ""));
+      const actions = el2("span", "kb-keys-buttons");
+      row.append(actions);
+      if (r.canMakePrimary) {
+        disposers.push(mountButton(actions, { label: "Make primary", variant: "ghost", size: "xs", onClick: () => apply({ primary: r.id }) }).dispose);
+      }
+      if (r.canRemove) {
+        disposers.push(mountButton(actions, { label: "Remove", variant: "ghost", size: "xs", onClick: () => apply({ remove: r.id }) }).dispose);
+      }
+      list2.append(row);
+    }
+    body.append(list2);
+    if (view.addable.length === 0) return;
+    const add2 = el2("section", "kb-settings-section");
+    add2.append(el2("h3", "kb-settings-heading", "Add a source"));
+    const buttons = el2("div", "kb-keys-buttons");
+    buttons.style.justifyContent = "flex-start";
+    for (const a of view.addable) {
+      disposers.push(mountButton(buttons, { label: `Add ${a.label}`, variant: "outline", size: "xs", onClick: () => apply({ add: a.id }) }).dispose);
+    }
+    add2.append(buttons);
+    body.append(add2);
+  };
   var openSettings = (initial, callbacks) => {
     const backdrop = el2("div", "kb-backdrop");
     const sheet = el2("aside", "kb-sheet kb-settings");
@@ -5909,6 +5971,26 @@ ${ref}`,
             }
           });
         }
+      } else if (m.tab === "sources") {
+        const config2 = m.sources ?? null;
+        const onSources = callbacks.onSources;
+        if (config2 === null || onSources === void 0) {
+          disposers.push(mountEmpty(body, { title: "No project", body: "Open a project with a board to change its sources." }).dispose);
+        } else {
+          let busy = false;
+          drawSources(body, disposers, config2, (change) => {
+            if (busy) return;
+            busy = true;
+            body.setAttribute("aria-busy", "true");
+            void onSources(change).then((next) => {
+              busy = false;
+              body.removeAttribute("aria-busy");
+              if (next === null || m.tab !== "sources") return;
+              m.sources = next;
+              draw2();
+            });
+          });
+        }
       } else {
         const shown = m.editSet !== void 0 && m.editSet !== null && sets.some((x) => x.id === m.editSet) ? m.editSet : projectSet;
         drawPresets(
@@ -5928,7 +6010,8 @@ ${ref}`,
       items: [
         { id: "global", label: "Global" },
         { id: "project", label: "This project" },
-        { id: "presets", label: "Presets" }
+        { id: "presets", label: "Presets" },
+        { id: "sources", label: "Sources" }
       ],
       activeId: m.tab,
       onChange: (id) => {
@@ -15705,7 +15788,8 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
         global: state.globalSettings,
         project: p !== null && id !== null ? { name: p.name, layer: state.projectSettings } : null,
         presets: state.presets,
-        skills: id !== null ? state.skills?.found ?? null : null
+        skills: id !== null ? state.skills?.found ?? null : null,
+        sources: p !== null ? state.config : null
       },
       {
         onGlobal: (layer) => {
@@ -15722,6 +15806,23 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
           state.presets = stored2;
           saver.save("presets", () => store.savePresets(stored2));
           editor.refresh();
+        },
+        onSources: async (change) => {
+          if (p === null) return null;
+          try {
+            const next = await changeSource(
+              createApi(host, p.directory),
+              change,
+              async (message2) => await askChoice("Replace the edited tracker instructions?", message2, [
+                { id: "replace", label: "Replace", variant: "destructive" }
+              ]) === "replace"
+            );
+            if (next !== null && project()?.id === p.id) void load();
+            return next;
+          } catch (e) {
+            fail(`Could not change the sources: ${e instanceof Error ? e.message : String(e)}`);
+            return null;
+          }
         },
         onDismiss: closeSettings,
         lists

@@ -397,6 +397,34 @@ var additionalSources = (text) => {
   }
   return out;
 };
+var SOURCE_TEXT = {
+  local: "markdown files under `.scratch/` in this repository (private: they stay with the repository checkout)",
+  github: "this repository's GitHub Issues (shared with the team)"
+};
+var additionalSourcesSection = (ids) => [
+  `## ${ADDITIONAL}`,
+  "",
+  "The Kanban board also shows tasks from the sources below. Everything above describes the primary source: a new task goes there unless you name another source.",
+  "",
+  ...ids.map((id) => `- \`${id}\`: ${SOURCE_TEXT[id]}. Publish there with \`task-board create --source ${id} ...\`.`),
+  "",
+  "A sub-task always goes to its parent's source. Tasks of different sources are never linked: no parent or blocker across sources.",
+  ""
+].join("\n");
+var withAdditionalSources = (text, ids) => {
+  const lines = text.split("\n");
+  const range = additionalRange(lines);
+  const before = range === null ? text : lines.slice(0, range.start).join("\n");
+  const after = range === null ? "" : lines.slice(range.end).join("\n").replace(/\s+$/, "");
+  let out = `${before.replace(/\s+$/, "")}
+`;
+  if (after !== "") out += `
+${after}
+`;
+  if (ids.length > 0) out += `
+${additionalSourcesSection(ids)}`;
+  return out;
+};
 var detect = (text) => {
   const heading = firstHeading(text);
   if (heading === null) {
@@ -447,6 +475,49 @@ var writeConfig = async (root, tracker2) => {
   }
   await mkdir(join(root, DIR), { recursive: true });
   await writeNew(join(root, ISSUE_TRACKER), tracker2 === "local" ? TEMPLATES.local : TEMPLATES.github);
+};
+var EditedTemplateError = class extends TrackerError {
+  /** The primary source whose edited template would be replaced. */
+  primary;
+  constructor(primary) {
+    super(
+      "INVALID",
+      `The ${primary} part of ${ISSUE_TRACKER} was edited by hand; changing the primary source replaces it with the new template and the edits are lost. Run it again with force (--force) to go ahead.`
+    );
+    this.name = "EditedTemplateError";
+    this.primary = primary;
+  }
+};
+var sourceOf = (change) => "add" in change ? change.add : "remove" in change ? change.remove : change.primary;
+var changedText = (text, config, change, force) => {
+  const others = config.sources.filter((id) => id !== config.primary);
+  if ("add" in change) return withAdditionalSources(text, others.includes(change.add) || change.add === config.primary ? others : [...others, change.add]);
+  if ("remove" in change) {
+    if (change.remove === config.primary) {
+      throw new TrackerError("INVALID", `${change.remove} is the primary source; make another source primary before removing it`);
+    }
+    return withAdditionalSources(text, others.filter((id) => id !== change.remove));
+  }
+  const primary = change.primary;
+  if (primary === config.primary) return text;
+  const rest = [config.primary, ...others].filter((id) => id !== primary);
+  const base = withAdditionalSources(text, []);
+  const old = TEMPLATES[config.primary];
+  if (!base.startsWith(old) && !force) throw new EditedTemplateError(config.primary);
+  const kept = base.startsWith(old) ? base.slice(old.length) : "";
+  return withAdditionalSources(`${TEMPLATES[primary]}${kept}`, rest);
+};
+var changeSources = async (root, change, opts = {}) => {
+  const id = sourceOf(change);
+  if (!SOURCE_IDS.includes(id)) {
+    throw new TrackerError("INVALID", `Unknown source "${String(id)}": use ${SOURCE_IDS.join(" or ")}`);
+  }
+  const config = await readConfig(root);
+  const path = join(root, ISSUE_TRACKER);
+  const text = await readFile(path, "utf8");
+  const next = changedText(text, config, change, opts.force === true);
+  if (next !== text) await writeFile(path, next);
+  return readConfig(root);
 };
 
 // src/core/githubTracker.ts
@@ -1493,7 +1564,7 @@ var createGithubSource = (root, exec, labels) => {
   };
 };
 var createCombinedTracker = (primary, sources) => {
-  const sourceOf = (id) => {
+  const sourceOf2 = (id) => {
     const owner = sources.find((s) => s.owns(id));
     if (owner !== void 0) return owner;
     if (sources.length === 1) return sources[0];
@@ -1519,19 +1590,19 @@ var createCombinedTracker = (primary, sources) => {
   return {
     primary: primarySource.id,
     sources,
-    sourceOf,
+    sourceOf: sourceOf2,
     listAll,
     list: async () => (await listAll()).tasks,
-    get: async (id) => sourceOf(id).get(id),
+    get: async (id) => sourceOf2(id).get(id),
     create: async (input) => primarySource.create(input),
-    setState: async (id, state2) => sourceOf(id).setState(id, state2),
-    setType: async (id, type) => sourceOf(id).setType(id, type),
-    edit: async (id, changes) => sourceOf(id).edit(id, changes),
-    claim: async (id) => sourceOf(id).claim(id),
-    setParent: async (id, parentId) => sourceOf(id).setParent(id, parentId),
-    removeParent: async (id) => sourceOf(id).removeParent(id),
-    close: async (id, opts) => sourceOf(id).close(id, opts),
-    remove: async (id, opts) => sourceOf(id).remove(id, opts)
+    setState: async (id, state2) => sourceOf2(id).setState(id, state2),
+    setType: async (id, type) => sourceOf2(id).setType(id, type),
+    edit: async (id, changes) => sourceOf2(id).edit(id, changes),
+    claim: async (id) => sourceOf2(id).claim(id),
+    setParent: async (id, parentId) => sourceOf2(id).setParent(id, parentId),
+    removeParent: async (id) => sourceOf2(id).removeParent(id),
+    close: async (id, opts) => sourceOf2(id).close(id, opts),
+    remove: async (id, opts) => sourceOf2(id).remove(id, opts)
   };
 };
 
@@ -2271,6 +2342,18 @@ var followMove = async (id, task, dir, deps2) => {
   await rekey("session links", () => renameLinks(linksFile(deps2), dir, id, task.id));
   await rekey("queue entry", () => renameInQueue(queueFile(deps2), dir, id, task.id));
 };
+var sourceChange = (value) => {
+  const keys = typeof value === "object" && value !== null && !Array.isArray(value) ? Object.keys(value) : [];
+  const key = keys[0];
+  if (keys.length !== 1 || key !== "add" && key !== "remove" && key !== "primary") {
+    return invalid('"change" must be one of {add}, {remove} and {primary} with a source id');
+  }
+  const id = value[key];
+  if (typeof id !== "string" || !SOURCE_IDS.includes(id)) {
+    return invalid(`"change.${key}" must be ${SOURCE_IDS.map((s) => `"${s}"`).join(" or ")}`);
+  }
+  return { [key]: id };
+};
 var existingConfig = async (dir) => {
   try {
     return await readConfig(dir);
@@ -2358,6 +2441,37 @@ var POST = {
     if (config.tracker !== kind) alreadySetUp(config.tracker);
     await gh?.setupLabels();
     return { config: configAnswer(config) };
+  },
+  /**
+   * Settings → Sources: `change` is `{add}`, `{remove}` or `{primary}` with a source id; the same file
+   * as `task-board init --add/--remove/--primary`. A primary change over a template edited by hand
+   * answers `{confirm: message}` and writes nothing; the panel asks and sends it again with `force`.
+   * A newly added GitHub source is checked (remote, gh) first and gets its labels, as in /config/init.
+   */
+  "/config/sources": async (body, dir, deps2) => {
+    const change = sourceChange(body.change);
+    const force = body.force === true;
+    const config = await readConfig(dir);
+    const id = "add" in change ? change.add : "primary" in change ? change.primary : null;
+    const gh = id === "github" && !config.sources.includes("github") ? createGithubTracker(dir, deps2.exec, config.labels) : null;
+    if (gh !== null) {
+      if (await detectRemote(dir, deps2.exec) === null) throw new TrackerError("INVALID", "This folder has no GitHub remote; add one first");
+      await gh.preflight();
+    }
+    let changed;
+    try {
+      changed = await changeSources(dir, change, { force });
+    } catch (e) {
+      if (e instanceof EditedTemplateError) {
+        const label = (id2) => sourceInfo(id2).label;
+        return {
+          confirm: `The ${label(e.primary)} instructions in docs/agents/issue-tracker.md were edited by hand. Making ${label(change.primary)} the primary source replaces them with its template, and those edits are lost.`
+        };
+      }
+      throw e;
+    }
+    await gh?.setupLabels();
+    return { config: configAnswer(changed) };
   },
   "/config/detect": async (_body, dir, deps2) => ({ remote: await detectRemote(dir, deps2.exec) }),
   /** `errors`: one per source that failed (SourceError); the other sources' tasks are still listed. */
