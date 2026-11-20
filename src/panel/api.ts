@@ -4,6 +4,7 @@ import type { HostClient } from '@openchamber/sdk';
 import type { LinkStatus, QueueEntry } from '../core/queue.ts';
 import type { NewTask, Task, TaskEdit, TaskState } from '../core/types.ts';
 import type { AgentsAnswer, ModelsAnswer } from './models.ts';
+import { listedBoard } from './sourceBanner.ts';
 
 /** `/links/list` reports a failed status lookup as `unknown`. */
 export type LinkRecord = { taskId: string; sessionId: string; directory: string; createdAt: number; status: Exclude<LinkStatus, 'error'> };
@@ -58,17 +59,6 @@ const errorOf = (json: unknown, status: number): ApiError => {
   return new ApiError(code, message);
 };
 
-/**
- * The tasks of a `/tasks/list` answer. A source that failed fails the whole load for now (its
- * ApiError), as with one tracker: a partial list would prune the archive marks and the order of
- * that source's tasks. Showing the others with a banner instead is a later step.
- */
-export const listedTasks = (r: { tasks: Task[]; errors?: SourceError[] }): Task[] => {
-  const failed = r.errors?.[0];
-  if (failed !== undefined) throw new ApiError(failed.code, `${failed.source}: ${failed.message}`);
-  return r.tasks;
-};
-
 export const createApi = (host: HostClient, directory: string) => {
   const call = async <T>(method: 'GET' | 'POST', path: string, body?: Record<string, unknown>): Promise<T> => {
     let res: { status: number; body: string };
@@ -94,8 +84,11 @@ export const createApi = (host: HostClient, directory: string) => {
       call<{ config: ProjectConfig }>('POST', '/config/init', { tracker }).then((r) => r.config),
     /** The github.com remote of the project (origin first), or null. */
     detect: () => call<{ remote: string | null }>('POST', '/config/detect').then((r) => r.remote),
-    /** The tasks of every source; `/tasks/list` also answers `errors` (SourceError[]) for the sources that failed. */
-    list: () => call<{ tasks: Task[]; errors?: SourceError[] }>('POST', '/tasks/list').then(listedTasks),
+    /**
+     * The tasks of every source that listed, the errors of those that failed and which ids belong to
+     * a failed one (sourceBanner.ts's listedBoard). When every source fails the call fails.
+     */
+    list: () => call<{ tasks: Task[]; errors?: SourceError[] }>('POST', '/tasks/list').then(listedBoard),
     get: (id: string) => call<{ task: Task }>('POST', '/tasks/get', { id }).then((r) => r.task),
     create: (input: NewTask) => call<{ task: Task }>('POST', '/tasks/create', { input }).then((r) => r.task),
     setState: (id: string, state: TaskState) =>

@@ -2771,9 +2771,9 @@ ${GUEST_UI_LOOK_CSS}`;
     next.delete(id);
     return next;
   };
-  var reconcileArchived = (marks, tasks) => {
+  var reconcileArchived = (marks, tasks, unlisted = () => false) => {
     const done = new Set(tasks.filter((t) => t.state === "done").map((t) => t.id));
-    const next = new Map([...marks].filter(([id]) => done.has(id)));
+    const next = new Map([...marks].filter(([id]) => done.has(id) || unlisted(id)));
     return { marks: next, changed: next.size !== marks.size };
   };
   var archivedShown = (tasks, marks) => tasks.filter((t) => t.state === "done" && marks.has(t.id)).length;
@@ -2805,7 +2805,7 @@ ${GUEST_UI_LOOK_CSS}`;
   var archiveWriteJob = (snap, io, onWritten) => async () => {
     const stored2 = await io.load().catch(() => null);
     const merged = stored2 === null ? new Map(snap.marks) : mergeArchived(snap.marks, stored2, snap.removed);
-    const next = snap.tasks === null ? merged : reconcileArchived(merged, snap.tasks).marks;
+    const next = snap.tasks === null ? merged : reconcileArchived(merged, snap.tasks, snap.unlisted).marks;
     await io.save(next);
     onWritten(next);
   };
@@ -2882,6 +2882,29 @@ ${GUEST_UI_LOOK_CSS}`;
     return out;
   };
 
+  // src/panel/sourceBanner.ts
+  var sourceBanners = (errors2, sources) => errors2.map((e) => {
+    const label = sources.find((s) => s.id === e.source)?.label ?? e.source;
+    return e.availability === "needs-login" ? { source: e.source, tone: "warning", title: `${label} needs a login`, body: `Log in, then try again: ${e.message}`, action: "Try again" } : { source: e.source, tone: "warning", title: `${label} unavailable`, body: e.message, action: "Try again" };
+  });
+  var sourceOfId = (id) => {
+    if (id.startsWith(".scratch/")) return "local";
+    if (/^\s*#?\d+\s*$/.test(id)) return "github";
+    return null;
+  };
+  var listedBoard = (r) => {
+    const errors2 = r.errors ?? [];
+    const failed = new Set(errors2.map((e) => e.source));
+    return {
+      tasks: r.tasks,
+      errors: errors2,
+      unlisted: (id) => {
+        const source2 = sourceOfId(id);
+        return source2 !== null && failed.has(source2);
+      }
+    };
+  };
+
   // src/panel/api.ts
   var ApiError = class extends Error {
     code;
@@ -2903,11 +2926,6 @@ ${GUEST_UI_LOOK_CSS}`;
     const code2 = typeof e?.code === "string" ? e.code : "FAILED";
     const message2 = typeof e?.message === "string" ? e.message : `The service answered ${status}`;
     return new ApiError(code2, message2);
-  };
-  var listedTasks = (r) => {
-    const failed = r.errors?.[0];
-    if (failed !== void 0) throw new ApiError(failed.code, `${failed.source}: ${failed.message}`);
-    return r.tasks;
   };
   var createApi = (host2, directory) => {
     const call = async (method, path, body) => {
@@ -2932,8 +2950,11 @@ ${GUEST_UI_LOOK_CSS}`;
       initConfig: (tracker) => call("POST", "/config/init", { tracker }).then((r) => r.config),
       /** The github.com remote of the project (origin first), or null. */
       detect: () => call("POST", "/config/detect").then((r) => r.remote),
-      /** The tasks of every source; `/tasks/list` also answers `errors` (SourceError[]) for the sources that failed. */
-      list: () => call("POST", "/tasks/list").then(listedTasks),
+      /**
+       * The tasks of every source that listed, the errors of those that failed and which ids belong to
+       * a failed one (sourceBanner.ts's listedBoard). When every source fails the call fails.
+       */
+      list: () => call("POST", "/tasks/list").then(listedBoard),
       get: (id) => call("POST", "/tasks/get", { id }).then((r) => r.task),
       create: (input) => call("POST", "/tasks/create", { input }).then((r) => r.task),
       setState: (id, state2) => call("POST", "/tasks/state", { id, state: state2 }).then((r) => r.task),
@@ -2996,9 +3017,9 @@ ${GUEST_UI_LOOK_CSS}`;
   var ORDER_MAX = 500;
   var parseOrder = (raw) => Array.isArray(raw) ? [...new Set(raw.filter((id) => typeof id === "string" && id !== ""))].slice(0, ORDER_MAX) : [];
   var renameInOrder = (order2, from, to) => order2.includes(from) ? order2.filter((id) => id !== to).map((id) => id === from ? to : id) : [...order2];
-  var pruneOrder = (order2, tasks) => {
+  var pruneOrder = (order2, tasks, unlisted = () => false) => {
     const listed2 = new Set(tasks.map((t) => t.id));
-    return order2.filter((id) => listed2.has(id));
+    return order2.filter((id) => listed2.has(id) || unlisted(id));
   };
   var forgetInOrder = (order2, ids) => {
     const gone = new Set(ids);
@@ -14905,8 +14926,9 @@ ${listKey(projects)}`;
     }
     const status = div3("kb-status");
     const sessionNote = div3("kb-session-note");
+    const sourceNotes = div3("kb-source-notes");
     const columns = div3("kb-columns");
-    shell.append(toolbar, status, sessionNote, columns);
+    shell.append(toolbar, status, sourceNotes, sessionNote, columns);
     root.replaceChildren(shell);
     const project2 = mountSelect(projectSlot, {
       value: null,
@@ -14967,6 +14989,17 @@ ${listKey(projects)}`;
       if (text3 === null) return;
       sessionNoteDispose = mountBanner(sessionNote, { tone: "info", title: text3, action: { label: "Dismiss", onClick: () => setSessionNote(null) } }).dispose;
     };
+    let sourceNoteDisposers = [];
+    const setSourceBanners = (banners, onRetry) => {
+      for (const d of sourceNoteDisposers) d();
+      sourceNoteDisposers = [];
+      sourceNotes.replaceChildren();
+      for (const b of banners) {
+        const slot = div3("kb-source-note");
+        sourceNotes.append(slot);
+        sourceNoteDisposers.push(mountBanner(slot, { tone: b.tone, title: b.title, body: b.body, action: { label: b.action, onClick: onRetry } }).dispose);
+      }
+    };
     let cardDisposers = [];
     const doneTools = (done) => {
       const tools = div3("kb-column-tools");
@@ -15005,6 +15038,8 @@ ${listKey(projects)}`;
       },
       /** A dismissible info banner above the columns (the rail panel's session note); null removes it. */
       setSessionNote,
+      /** The banners of the sources that failed to list, each with a retry; [] removes them. */
+      setSourceBanners,
       setBusy: (busy) => {
         refreshBusy = busy;
         refresh.update({ loading: busy, disabled: busy });
@@ -15294,6 +15329,8 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
   border: 1px solid var(--oc-warning, #d97706); color: var(--oc-warning-text, var(--oc-fg)); }
 .kb-status:empty { display: none; }
 .kb-session-note:empty { display: none; }
+.kb-source-notes { display: flex; flex-direction: column; gap: 0.5rem; }
+.kb-source-notes:empty { display: none; }
 /* Every column is as tall as the board (the longest column, at least the rest of the window): a card
    dragged sideways from anywhere in a long column is over the column beside it (ui/dnd.ts hit-tests the column). */
 .kb-columns { flex: 1 0 auto; display: flex; gap: 0.75rem; align-items: stretch; overflow-x: auto; padding-bottom: 0.25rem; }
@@ -15552,6 +15589,8 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     sessionsReady: false,
     config: null,
     tasks: null,
+    sourceErrors: [],
+    unlisted: () => false,
     hideSubtasks: false,
     lastLoad: 0,
     view: "none",
@@ -15737,9 +15776,12 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     state.columns = /* @__PURE__ */ new Map();
     if (state.config === null || state.tasks === null) {
       setBadge(null);
+      board.setSourceBanners([], () => {
+      });
       board.render(null);
       return;
     }
+    board.setSourceBanners(sourceBanners(state.sourceErrors, state.config.sources), () => void load());
     const marks = archivedTasks();
     const archivedCount = archivedShown(state.tasks, marks);
     if (archivedCount === 0) state.showArchived = false;
@@ -15864,7 +15906,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
       }
       const token = archiveSync.loadToken();
       const orderToken = orderSync.loadToken();
-      const [tasks, marks, gone, shelved, ranked] = await Promise.all([
+      const [listed2, marks, gone, shelved, ranked] = await Promise.all([
         api.list(),
         store.loadDetached(p.id).catch(() => null),
         store.loadArchived(p.id).catch(() => null),
@@ -15873,6 +15915,8 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
         starter.refresh(p.id, p.directory)
       ]);
       if (mine !== generation) return;
+      const { tasks, errors: errors2, unlisted } = listed2;
+      state.unlisted = unlisted;
       if (marks !== null) {
         const merged = new Map(detached());
         for (const [taskId, at] of marks) if (at > (merged.get(taskId) ?? 0)) merged.set(taskId, at);
@@ -15884,18 +15928,19 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
         state.archivedFor = p.id;
       }
       const base2 = shelved === null ? archivedTasks() : archiveSync.trusts(token) ? shelved : mergeArchived(archivedTasks(), shelved, removedFor(p.id));
-      const fixed = reconcileArchived(base2, tasks);
+      const fixed = reconcileArchived(base2, tasks, unlisted);
       state.archivedTasks = fixed.marks;
       state.archivedTasksFor = p.id;
       if (fixed.changed) writeArchivedTasks(p.id, fixed.marks, tasks);
       if (ranked !== null && (orderSync.trusts(orderToken) || state.orderFor !== p.id)) {
-        const pruned = pruneOrder(ranked, tasks);
+        const pruned = pruneOrder(ranked, tasks, unlisted);
         state.order = pruned;
         state.orderFor = p.id;
         if (pruned.length !== ranked.length && orderSync.trusts(orderToken)) setOrder(p.id, pruned);
       }
       state.config = result.config;
       state.tasks = tasks;
+      state.sourceErrors = errors2;
       state.view = "board";
       draw();
       editor.refresh();
@@ -15937,6 +15982,8 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     starter.reset();
     state.config = null;
     state.tasks = null;
+    state.sourceErrors = [];
+    state.unlisted = () => false;
     board.setProjects(projectOptions(), id);
     unsubscribeSessions?.();
     unsubscribeSessions = null;
@@ -16084,7 +16131,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     const id = state.projectId;
     if (id === null || state.tasks === null) return;
     const ids = [...state.columns].filter(([, c]) => c === column).map(([t]) => t);
-    const next = pruneOrder(reorder(order(), ids, taskId, before), state.tasks);
+    const next = pruneOrder(reorder(order(), ids, taskId, before), state.tasks, state.unlisted);
     setOrder(id, next);
     draw();
   };
@@ -16101,14 +16148,14 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     const removed = new Map(removedFor(projectId));
     const snapshot = pendingMarks.queue(projectId, marks, removed, n);
     const job = archiveWriteJob(
-      { marks: snapshot, removed, tasks },
+      { marks: snapshot, removed, tasks, unlisted: state.unlisted },
       { load: () => store.loadArchivedTasks(projectId), save: (next) => store.saveArchivedTasks(projectId, next) },
       (next) => {
         archiveSync.written(n);
         pendingMarks.written(projectId, n);
         if (state.archivedTasksFor !== projectId || state.tasks === null) return;
         const current2 = state.archivedTasks;
-        const shown = reconcileArchived(mergeArchived(current2, next, removedFor(projectId)), state.tasks).marks;
+        const shown = reconcileArchived(mergeArchived(current2, next, removedFor(projectId)), state.tasks, state.unlisted).marks;
         if (sameMarks(current2, shown)) return;
         state.archivedTasks = shown;
         draw();

@@ -10,6 +10,7 @@ import type { Task } from '../../core/types.ts';
 import { VARIANT } from '../../core/variant.ts';
 import { COLUMNS, type BoardModel } from '../columns.ts';
 import type { Suggestion } from '../search.ts';
+import type { SourceBanner } from '../sourceBanner.ts';
 import { hintLastChild, hintShortcut } from './shortcutHints.ts';
 import { renderCard } from './card.ts';
 import { mountSearchSuggest } from './searchSuggest.ts';
@@ -78,8 +79,10 @@ export const createBoard = (root: HTMLElement, callbacks: BoardCallbacks) => {
   // The rail panel's note for its chat's session (sessionFocus.ts): independent of the status slot,
   // which every draw resets.
   const sessionNote = div('kb-session-note');
+  // One banner per source that failed to list (sourceBanner.ts); the other sources' cards stay below.
+  const sourceNotes = div('kb-source-notes');
   const columns = div('kb-columns');
-  shell.append(toolbar, status, sessionNote, columns);
+  shell.append(toolbar, status, sourceNotes, sessionNote, columns);
   root.replaceChildren(shell);
 
   const project = mountSelect(projectSlot, {
@@ -148,6 +151,17 @@ export const createBoard = (root: HTMLElement, callbacks: BoardCallbacks) => {
     if (text === null) return;
     sessionNoteDispose = mountBanner(sessionNote, { tone: 'info', title: text, action: { label: 'Dismiss', onClick: () => setSessionNote(null) } }).dispose;
   };
+  let sourceNoteDisposers: Array<() => void> = [];
+  const setSourceBanners = (banners: readonly SourceBanner[], onRetry: () => void): void => {
+    for (const d of sourceNoteDisposers) d();
+    sourceNoteDisposers = [];
+    sourceNotes.replaceChildren();
+    for (const b of banners) {
+      const slot = div('kb-source-note');
+      sourceNotes.append(slot);
+      sourceNoteDisposers.push(mountBanner(slot, { tone: b.tone, title: b.title, body: b.body, action: { label: b.action, onClick: onRetry } }).dispose);
+    }
+  };
   let cardDisposers: Array<() => void> = [];
 
   /** Under the Done header: "Archive done" and "Clear archive" side by side, then "Show archived (N)"; disposed with the cards. */
@@ -189,6 +203,8 @@ export const createBoard = (root: HTMLElement, callbacks: BoardCallbacks) => {
     },
     /** A dismissible info banner above the columns (the rail panel's session note); null removes it. */
     setSessionNote,
+    /** The banners of the sources that failed to list, each with a retry; [] removes them. */
+    setSourceBanners,
     setBusy: (busy: boolean) => {
       refreshBusy = busy;
       refresh.update({ loading: busy, disabled: busy });
