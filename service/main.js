@@ -162,8 +162,8 @@ var MENTIONS_IDLE_MS = 10 * 6e4;
 var ServiceHostError = class extends Error {
   code;
   status;
-  constructor(message3, code2, status) {
-    super(message3);
+  constructor(message4, code2, status) {
+    super(message4);
     this.name = "ServiceHostError";
     this.code = code2;
     this.status = status;
@@ -200,12 +200,12 @@ var createServiceHost = ({ env }) => {
       lastReply: (sessionId) => call("sessions.lastReply", { sessionId }),
       stop: (sessionId) => call("sessions.stop", { sessionId }),
       answerPermission: (sessionId, requestId, answer) => call("sessions.answerPermission", { sessionId, requestId, ...answer }),
-      answerForm: (sessionId, formId, values, message3) => call("sessions.answerForm", { sessionId, formId, values, ...message3 === void 0 ? {} : { message: message3 } })
+      answerForm: (sessionId, formId, values, message4) => call("sessions.answerForm", { sessionId, formId, values, ...message4 === void 0 ? {} : { message: message4 } })
     },
     setInstructions: (directory, text) => call("instructions.set", { directory, text }),
     emit: (topic, data) => call("panels.emit", { topic, data }),
     readSettings: () => call("settings.read", {}).then(({ settings }) => settings),
-    needsConfiguration: (message3) => call("status.set", { needsConfiguration: message3 }),
+    needsConfiguration: (message4) => call("status.set", { needsConfiguration: message4 }),
     setMark: (target, mark) => call("marks.set", { target, mark })
   };
 };
@@ -337,8 +337,8 @@ var TEMPLATES = {
 var TrackerError = class extends Error {
   // Declared explicitly: Node's type stripping does not support constructor parameter properties.
   code;
-  constructor(code2, message3) {
-    super(message3);
+  constructor(code2, message4) {
+    super(message4);
     this.name = "TrackerError";
     this.code = code2;
   }
@@ -1035,6 +1035,7 @@ var splitParts = (text) => {
     tail: tailAt < lines.length ? lines.slice(tailAt).join("\n").replace(/\s+$/, "") : null
   };
 };
+var issueDescription = (text) => splitParts(text).description;
 var withDescription = (text, description) => {
   const p = splitParts(text);
   const { lead, rest } = splitLead(normalizeBody(description));
@@ -1046,6 +1047,33 @@ var withDescription = (text, description) => {
   if (p.tail !== null) parts.push(p.tail);
   const out = parts.join("\n\n") + "\n";
   return text.includes("\r\n") ? out.replace(/\n/g, "\r\n") : out;
+};
+var withComment = (text, comment) => {
+  const crlf = text.includes("\r\n");
+  const lines = splitLines(text.replace(/\r\n/g, "\n"));
+  const plain = plainLines(lines, false);
+  const at = plain.find(([, c]) => /^## Comments\s*$/i.test(c))?.[0];
+  const body = comment.replace(/\r\n/g, "\n").trim();
+  let out;
+  if (at === void 0) {
+    out = `${text.replace(/\r\n/g, "\n").replace(/\s+$/, "")}
+
+## Comments
+
+${body}
+`;
+  } else {
+    const end = plain.find(([i, c]) => i > at && SECTION.test(c))?.[0] ?? lines.length;
+    const before = lines.slice(0, end).join("\n").replace(/\s+$/, "");
+    const after = lines.slice(end).join("\n").replace(/\s+$/, "");
+    out = `${before}
+
+${body}
+${after === "" ? "" : `
+${after}
+`}`;
+  }
+  return crlf ? out.replace(/\n/g, "\r\n") : out;
 };
 var fieldsTight = (text) => {
   const f = headerFields(splitLines(text));
@@ -1460,8 +1488,8 @@ var SOURCES = {
 };
 var sourceInfo = (id) => ({ id, ...SOURCES[id] });
 var availabilityOf = (e) => {
-  const message3 = e instanceof Error ? e.message : String(e);
-  return { status: e instanceof TrackerError && e.code === "GH_AUTH" ? "needs-login" : "unavailable", message: message3 };
+  const message4 = e instanceof Error ? e.message : String(e);
+  return { status: e instanceof TrackerError && e.code === "GH_AUTH" ? "needs-login" : "unavailable", message: message4 };
 };
 var sourceError = (source, e) => ({
   source,
@@ -1501,14 +1529,14 @@ var createCombinedTracker = (primary, sources) => {
   };
   const primarySource = sources.find((s) => s.id === primary) ?? sources[0];
   const known = () => sources.map((s) => s.id).join(", ");
-  const named = (id) => {
+  const named2 = (id) => {
     const source = sources.find((s) => s.id === id);
     if (source === void 0) throw new TrackerError("INVALID", `Unknown source "${id}": this project has ${known()}`);
     return source;
   };
   const NO_LINKS = "tasks of different sources are never linked";
   const targetOf = (input) => {
-    const asked = input.source === void 0 ? void 0 : named(input.source);
+    const asked = input.source === void 0 ? void 0 : named2(input.source);
     if (input.parentId === void 0) return asked ?? primarySource;
     const parent = sourceOf(input.parentId);
     if (asked !== void 0 && asked !== parent) {
@@ -1582,6 +1610,87 @@ var openTracker = async (root, exec) => {
   return createCombinedTracker(config.primary, sources);
 };
 
+// src/core/publish.ts
+import { readFile as readFile3, writeFile as writeFile3 } from "node:fs/promises";
+import { join as join3 } from "node:path";
+var publishedComment = (url) => `Published to GitHub: ${url}`;
+var named = (t) => `${t.id} (${t.title})`;
+var message = (e) => e instanceof Error ? e.message : String(e);
+var blockersFirst = (tickets) => {
+  const ids = new Set(tickets.map((t) => t.id));
+  const done = /* @__PURE__ */ new Set();
+  const out = [];
+  const rest = [...tickets];
+  while (rest.length > 0) {
+    const i = Math.max(0, rest.findIndex((t) => t.blockedBy.every((b) => !ids.has(b) || done.has(b))));
+    const [next] = rest.splice(i, 1);
+    out.push(next);
+    done.add(next.id);
+  }
+  return out;
+};
+var publishTask = async (root, tracker2, id) => {
+  if (!tracker2.sources.some((s) => s.id === "github")) {
+    throw new TrackerError("INVALID", "This project has no GitHub source; add one in Settings \u2192 Sources first");
+  }
+  const task = await tracker2.get(id);
+  if (task.source !== "local") {
+    throw new TrackerError("INVALID", `Only a local task can be published to GitHub; ${task.id} is in ${task.source}`);
+  }
+  const tickets = task.kind === "parent" ? blockersFirst(
+    (await tracker2.listAll({ source: "local" })).tasks.filter((t) => t.parentId === task.id).sort((a, b) => a.id.localeCompare(b.id, void 0, { numeric: true }))
+  ) : [];
+  const created = [];
+  const issueOf = /* @__PURE__ */ new Map();
+  const publishOne = async (t, parentId) => {
+    const blockedBy = t.blockedBy.flatMap((b) => {
+      const to = issueOf.get(b);
+      return to === void 0 ? [] : [to.id];
+    });
+    const made = await tracker2.create({
+      title: t.title,
+      body: issueDescription(t.body),
+      state: t.state,
+      ...t.type !== null ? { type: t.type } : {},
+      ...parentId !== void 0 ? { parentId } : {},
+      ...blockedBy.length > 0 ? { blockedBy } : {},
+      source: parentId === void 0 ? "github" : void 0
+    });
+    created.push(made);
+    issueOf.set(t.id, made);
+    return made;
+  };
+  let issue;
+  const subIssues = [];
+  let at = task;
+  try {
+    issue = await publishOne(task);
+    for (const ticket of tickets) {
+      at = ticket;
+      subIssues.push({ from: ticket.id, task: await publishOne(ticket, issue.id) });
+    }
+  } catch (e) {
+    if (created.length === 0) throw e;
+    throw new TrackerError(
+      "FAILED",
+      `Publishing stopped at ${named(at)}: ${message(e)}. Created on GitHub: ${created.map(named).join(", ")}. The local task was left open; delete those issues or finish the rest by hand before publishing again`
+    );
+  }
+  try {
+    const closed = await tracker2.close(task.id, { withChildren: task.kind === "parent" });
+    for (const [from, to] of issueOf) {
+      const path = join3(root, ...from.split("/"));
+      await writeFile3(path, withComment(await readFile3(path, "utf8"), publishedComment(to.url ?? to.id)));
+    }
+    return { from: task.id, issue, subIssues, closed };
+  } catch (e) {
+    throw new TrackerError(
+      "FAILED",
+      `Published to GitHub as ${created.map(named).join(", ")}, but the local task could not be closed: ${message(e)}`
+    );
+  }
+};
+
 // src/service/models.ts
 var MODELS_TTL_MS = 10 * 60 * 1e3;
 var MODELS_TIMEOUT_MS = 60 * 1e3;
@@ -1651,7 +1760,7 @@ var apiArgs = (path, directory) => [
   "-H",
   `x-opencode-directory:${encodeURIComponent(directory)}`
 ];
-var message = (e) => e instanceof Error ? e.message : String(e);
+var message2 = (e) => e instanceof Error ? e.message : String(e);
 var clip = (s) => s.slice(0, ERROR_MAX);
 var attempt = async (exec, what, args, directory, parse) => {
   try {
@@ -1660,7 +1769,7 @@ var attempt = async (exec, what, args, directory, parse) => {
     const parsed = parse(r.stdout);
     return parsed === null ? { error: `could not read the answer of ${what}` } : { ok: parsed };
   } catch (e) {
-    return { error: `${what} failed: ${clip(message(e))}` };
+    return { error: `${what} failed: ${clip(message2(e))}` };
   }
 };
 var cachedPerDirectory = (run, empty, wrap, now) => {
@@ -1717,7 +1826,7 @@ var createAgentList = (exec, now = Date.now) => {
 // src/service/skills.ts
 import { readdir as readdir2, stat as stat2 } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join as join3 } from "node:path";
+import { join as join4 } from "node:path";
 
 // src/core/skills.ts
 var MATT_SKILLS = [
@@ -1748,11 +1857,11 @@ var KNOWN_SKILLS = [...MATT_SKILLS, ...SUPERPOWERS_SKILLS];
 // src/service/skills.ts
 var SKILLS_TTL_MS = 5 * 60 * 1e3;
 var skillRoots = (home, project) => [
-  join3(home, ".config", "opencode", "skills"),
-  join3(home, ".claude", "skills"),
-  join3(home, ".agents", "skills"),
-  join3(project, ".opencode", "skills"),
-  join3(project, ".claude", "skills")
+  join4(home, ".config", "opencode", "skills"),
+  join4(home, ".claude", "skills"),
+  join4(home, ".agents", "skills"),
+  join4(project, ".opencode", "skills"),
+  join4(project, ".claude", "skills")
 ];
 var isFile = async (path) => {
   try {
@@ -1776,10 +1885,10 @@ var dirs = async (path) => {
   }
 };
 var pluginSkillRoots = async (home) => {
-  const npm = join3(home, ".cache", "opencode", "npm");
+  const npm = join4(home, ".cache", "opencode", "npm");
   const candidates = [];
   for (const plugin of await dirs(npm))
-    for (const version of await dirs(join3(npm, plugin))) candidates.push(join3(npm, plugin, version, "node_modules", "superpowers", "skills"));
+    for (const version of await dirs(join4(npm, plugin))) candidates.push(join4(npm, plugin, version, "node_modules", "superpowers", "skills"));
   const ok = await Promise.all(candidates.map(isDir));
   return candidates.filter((_, i) => ok[i]).sort((a, b) => a < b ? 1 : a > b ? -1 : 0);
 };
@@ -1787,7 +1896,7 @@ var detectSkills = async (home, project, names = KNOWN_SKILLS) => {
   const roots = [...skillRoots(home, project), ...await pluginSkillRoots(home)];
   const hits = await Promise.all(
     names.map(async (name) => {
-      const files = roots.map((r) => join3(r, name, "SKILL.md"));
+      const files = roots.map((r) => join4(r, name, "SKILL.md"));
       const ok = await Promise.all(files.map(isFile));
       return files.find((_, i) => ok[i]);
     })
@@ -1811,7 +1920,7 @@ var createSkillDetector = (home = homedir(), now = Date.now) => {
 
 // src/service/queue.ts
 import { homedir as homedir3 } from "node:os";
-import { join as join5 } from "node:path";
+import { join as join6 } from "node:path";
 
 // src/core/queue.ts
 var MAX_START_FAILURES = 3;
@@ -1819,15 +1928,15 @@ var nextToStart = (queued, running, maxParallel) => queued.slice(0, Math.max(0, 
 
 // src/service/store.ts
 import { randomBytes } from "node:crypto";
-import { mkdir as mkdir3, readFile as readFile3, rename, writeFile as writeFile3 } from "node:fs/promises";
+import { mkdir as mkdir3, readFile as readFile4, rename, writeFile as writeFile4 } from "node:fs/promises";
 import { homedir as homedir2 } from "node:os";
-import { dirname, join as join4 } from "node:path";
-var dataDir = (variant = VARIANT, home = homedir2()) => join4(home, dataDirName(variant));
+import { dirname, join as join5 } from "node:path";
+var dataDir = (variant = VARIANT, home = homedir2()) => join5(home, dataDirName(variant));
 var code = (e) => e?.code;
 var readJson = async (file, now = Date.now) => {
   let text;
   try {
-    text = await readFile3(file, "utf8");
+    text = await readFile4(file, "utf8");
   } catch (e) {
     if (code(e) === "ENOENT") return null;
     throw e;
@@ -1846,7 +1955,7 @@ var readJson = async (file, now = Date.now) => {
 var writeJson = async (file, data) => {
   await mkdir3(dirname(file), { recursive: true });
   const tmp = `${file}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
-  await writeFile3(tmp, `${JSON.stringify(data, null, 2)}
+  await writeFile4(tmp, `${JSON.stringify(data, null, 2)}
 `, "utf8");
   await rename(tmp, file);
 };
@@ -1863,7 +1972,7 @@ var serial = (file, fn) => {
 };
 
 // src/service/queue.ts
-var defaultQueueFile = (variant = VARIANT, home = homedir3()) => join5(dataDir(variant, home), "queue.json");
+var defaultQueueFile = (variant = VARIANT, home = homedir3()) => join6(dataDir(variant, home), "queue.json");
 var DEFAULT_MAX_PARALLEL = 3;
 var MAX_PARALLEL_LIMIT = 10;
 var RESERVE_MS = 18e4;
@@ -1994,9 +2103,9 @@ var takeFromQueue = (file, dir, input) => update(file, dir, async (q) => {
 // src/service/sessions.ts
 import { randomBytes as randomBytes2 } from "node:crypto";
 import { homedir as homedir4 } from "node:os";
-import { basename, dirname as dirname2, join as join6, sep } from "node:path";
+import { basename, dirname as dirname2, join as join7, sep } from "node:path";
 var LINKS_PER_PROJECT = 500;
-var defaultLinksFile = (variant = VARIANT, home = homedir4()) => join6(dataDir(variant, home), "links.json");
+var defaultLinksFile = (variant = VARIANT, home = homedir4()) => join7(dataDir(variant, home), "links.json");
 var worktreeBranch = (slug, variant = VARIANT) => `${branchPrefix(variant)}${slug}`;
 var isLink = (v) => {
   const l = v;
@@ -2077,8 +2186,8 @@ var worktreeSlug = (taskId, title, suffix = randomBytes2(3).toString("hex")) => 
   const name = base(title) || base(taskId.replace(/^.*\//, "").replace(/\.md$/, "")) || "task";
   return `${name}-${suffix}`;
 };
-var worktreesRoot = (directory) => join6(dirname2(directory), `${basename(directory)}-worktrees`);
-var message2 = (e) => e instanceof Error ? e.message : String(e);
+var worktreesRoot = (directory) => join7(dirname2(directory), `${basename(directory)}-worktrees`);
+var message3 = (e) => e instanceof Error ? e.message : String(e);
 var START_RETRY_MS = [1e3, 3e3, 6e3];
 var notReadyYet = (e) => e?.status === 503;
 var realSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -2102,7 +2211,7 @@ var removeWorktree = async (deps2, directory, path, branch) => {
       if (r.code === 0) return true;
       log(`icf-kanban: could not remove the ${what}: ${(r.stderr || r.stdout).trim() || `git exited ${r.code}`}`);
     } catch (e) {
-      log(`icf-kanban: could not remove the ${what}: ${message2(e)}`);
+      log(`icf-kanban: could not remove the ${what}: ${message3(e)}`);
     }
     return false;
   };
@@ -2115,7 +2224,7 @@ var startSession = async (input, deps2) => {
   let branch = "";
   if (input.location === "worktree") {
     const slug = worktreeSlug(input.taskId, input.title, deps2.suffix?.());
-    const path = join6(worktreesRoot(input.directory), slug);
+    const path = join7(worktreesRoot(input.directory), slug);
     branch = worktreeBranch(slug);
     const r = await deps2.exec("git", ["-C", input.directory, "worktree", "add", "-b", branch, path], { cwd: input.directory });
     if (r.code !== 0) {
@@ -2136,14 +2245,14 @@ var startSession = async (input, deps2) => {
     });
   } catch (e) {
     const kept = worktree === null || await removeWorktree(deps2, input.directory, worktree, branch) ? "" : ` The worktree ${worktree} could not be removed; remove it with git worktree remove if you do not need it.`;
-    throw new TrackerError("FAILED", `Could not start the session: ${message2(e).replace(/\.$/, "")}.${kept}`);
+    throw new TrackerError("FAILED", `Could not start the session: ${message3(e).replace(/\.$/, "")}.${kept}`);
   }
   const directory = started.directory ?? cwd;
   let linkError;
   try {
     await addLink(deps2.linksFile, input.directory, { taskId: input.taskId, sessionId: started.sessionId, directory, createdAt: Date.now() });
   } catch (e) {
-    linkError = `The session ${started.sessionId} started, but its link to the card could not be saved (${message2(e)}); the card will not follow it.`;
+    linkError = `The session ${started.sessionId} started, but its link to the card could not be saved (${message3(e)}); the card will not follow it.`;
     (deps2.log ?? ((m) => console.error(m)))(`icf-kanban: ${linkError}`);
   }
   return { sessionId: started.sessionId, directory, worktree, ...linkError !== void 0 ? { linkError } : {} };
@@ -2153,10 +2262,10 @@ var startSession = async (input, deps2) => {
 var STATES = ["needs-triage", "needs-info", "ready-for-agent", "ready-for-human", "wontfix", "done"];
 var InvalidRequest = class extends Error {
 };
-var invalid = (message3) => {
-  throw new InvalidRequest(message3);
+var invalid = (message4) => {
+  throw new InvalidRequest(message4);
 };
-var error = (status, code2, message3) => ({ status, json: { error: { code: code2, message: message3 } } });
+var error = (status, code2, message4) => ({ status, json: { error: { code: code2, message: message4 } } });
 var isObject = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
 var optional = (body, key) => {
   const v = body[key];
@@ -2242,11 +2351,11 @@ var start = async (dir, input, deps2) => {
 };
 var logOf = (deps2) => deps2.log ?? ((m) => console.error(m));
 var errorText = (e) => e instanceof Error ? e.message : String(e);
-var bestEffort = async (deps2, message3, action) => {
+var bestEffort = async (deps2, message4, action) => {
   try {
     await action();
   } catch (e) {
-    logOf(deps2)(`${message3}: ${errorText(e)}`);
+    logOf(deps2)(`${message4}: ${errorText(e)}`);
   }
 };
 var liveLinks = async (dir, deps2) => withStatus(await listLinks(linksFile(deps2), dir), deps2.sessions);
@@ -2448,6 +2557,15 @@ var POST = {
     const task = await (await tracker(dir, deps2)).removeParent(id);
     await followMove(id, task, dir, deps2);
     return { task };
+  },
+  /**
+   * Publishes a local task to GitHub (`to`, optional, is "github"): an issue, its tickets as sub-issues,
+   * then the local files closed with a link. Half done on GitHub: 422 FAILED naming the created issues.
+   */
+  "/tasks/publish": async (body, dir, deps2) => {
+    const id = str(body, "id");
+    if (body.to !== void 0 && body.to !== "github") return invalid('"to" must be "github"');
+    return await publishTask(dir, await tracker(dir, deps2), id);
   },
   "/tasks/close": async (body, dir, deps2) => {
     const id = str(body, "id");

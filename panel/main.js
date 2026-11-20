@@ -2970,6 +2970,11 @@ ${GUEST_UI_LOOK_CSS}`;
       remove: (id, withChildren = false) => call("POST", "/tasks/delete", { id, withChildren }).then((r) => r.deleted),
       /** Unlinks a sub-task from its parent; like setParent the returned task can have a new id (local: it became a feature). */
       removeParent: (id) => call("POST", "/tasks/unparent", { id }).then((r) => r.task),
+      /**
+       * Publishes a local task to GitHub (core/publish.ts): its issue and a feature's tickets as
+       * sub-issues; the local files are then closed. A half-done publish fails with what was created.
+       */
+      publish: (id) => call("POST", "/tasks/publish", { id, to: "github" }),
       close: (id, withChildren = false) => call("POST", "/tasks/close", { id, withChildren }).then((r) => r.tasks),
       /**
        * Which of `candidates` (project directories) the git worktree `directory` was made from, or
@@ -12866,12 +12871,19 @@ ${ref}`,
     };
     const drawSettings = (m) => {
       const { task } = m;
-      settingsSec.box.hidden = task.url === null && m.start === null;
+      settingsSec.box.hidden = task.url === null && m.start === null && !m.publish;
       const url = task.url;
       if (url !== null) {
         const actions = el5("div", "kb-actions kb-actions-start");
         disposers.push(
           mountButton(actions, { label: "Open on GitHub", variant: "ghost", size: "sm", onClick: () => callbacks.onOpenUrl(url) }).dispose
+        );
+        settingsTop.append(actions);
+      }
+      if (m.publish) {
+        const actions = el5("div", "kb-actions kb-actions-start");
+        disposers.push(
+          mountButton(actions, { label: "Publish to GitHub", variant: "outline", size: "sm", disabled: m.busy, onClick: callbacks.onPublish }).dispose
         );
         settingsTop.append(actions);
       }
@@ -13462,6 +13474,24 @@ ${ref}`,
     };
   };
 
+  // src/panel/taskPublish.ts
+  var canPublish = (task, sources) => task.source === "local" && task.state !== "done" && sources.includes("github");
+  var plural3 = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+  var publishConfirm = (task, tasks) => {
+    const n = task.kind === "parent" ? tasks.filter((t) => t.parentId === task.id).length : 0;
+    const what = n > 0 ? `an issue with ${plural3(n, "sub-issue")}` : "an issue";
+    const files = n > 0 ? "Its local files are" : "The local file is";
+    return {
+      title: `Publish \u201C${task.title}\u201D to GitHub?`,
+      body: `This creates ${what} in the project's GitHub Issues, visible to everyone who can see the repository. ${files} closed (Done) with a link to the issue. If GitHub fails half way, nothing local is closed.`,
+      label: "Publish"
+    };
+  };
+  var publishedMessage = (result) => {
+    const n = result.subIssues.length;
+    return n === 0 ? `Published as ${result.issue.id}` : `Published as ${result.issue.id} with ${plural3(n, "sub-issue")}`;
+  };
+
   // src/panel/edit.ts
   var errorText2 = (e) => e instanceof Error ? e.message : String(e);
   var createEditor = (deps) => {
@@ -13539,6 +13569,7 @@ ${ref}`,
         },
         summary: deps.summary.model(task),
         session: sessionView(task),
+        publish: canPublish(task, deps.sources()),
         children: tasks.filter((t) => t.parentId === task.id).map((t) => ({ id: t.id, title: t.title, state: t.state })),
         addSubtask: canAddSubtask(task, kindOf(task)),
         archived: deps.archive.has(task),
@@ -13726,6 +13757,13 @@ ${ref}`,
         for (const d of deleted) await deps.start.forget(ctx.projectId, d).catch((e) => fail2(`Could not drop the start options of ${d}: ${errorText2(e)}`));
       }
     };
+    const publishTask = async (id) => {
+      const task = find(id);
+      if (task === null || deps.api() === null || moving.has(id)) return;
+      const { title, body, label } = publishConfirm(task, deps.tasks());
+      if (await askChoice(title, body, [{ id: "publish", label }]) !== "publish") return;
+      await run(id, async (a) => info2(publishedMessage(await a.publish(id))));
+    };
     const closeDetail = () => {
       const d = detail;
       detail = null;
@@ -13759,6 +13797,7 @@ ${ref}`,
         onSetParent: (parentId) => linkTask(id, parentId),
         onEdit: (from, draft) => editTask(id, from, draft),
         onDelete: () => void deleteTask(id),
+        onPublish: () => void publishTask(id),
         onLinkChild: (childId) => linkTask(childId, id),
         onRemoveParent: () => unlinkTask(id),
         onUnlinkChild: async (childId) => {
@@ -16487,6 +16526,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
       tasks: () => state.tasks ?? [],
       tracker: () => state.config?.tracker ?? "local",
       labels: () => state.config?.labels ?? {},
+      sources: () => state.config?.sources.map((s) => s.id) ?? [],
       columnOf: (id) => state.columns.get(id) ?? null,
       reload: load,
       redraw: draw,
