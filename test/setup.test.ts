@@ -6,7 +6,7 @@ import { defaultChoice, githubChoice, loadNotice, setupOutcome } from '../src/pa
 const labels = {};
 const ALL = { create: true, subtasks: true, blockedBy: true, claim: true, delete: true };
 const configured = (tracker: 'local' | 'github'): ConfigResult => ({
-  config: { tracker, primary: tracker, sources: [{ id: tracker, label: tracker, capabilities: ALL }], labels },
+  config: { primary: tracker, sources: [{ id: tracker, label: tracker, capabilities: ALL }], known: [], labels },
 });
 const notConfigured: ConfigResult = { error: { code: 'NOT_CONFIGURED', message: 'No docs/agents/issue-tracker.md' } };
 

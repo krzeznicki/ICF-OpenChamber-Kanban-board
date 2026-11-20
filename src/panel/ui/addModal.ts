@@ -26,11 +26,11 @@ import {
   validateDraft,
   type AddDraft,
   type Choice,
-  type TrackerKind,
 } from '../addTask.ts';
+import type { SourceId } from '../../core/types.ts';
 import type { SourceInfo } from '../api.ts';
 import type { Preset } from '../presets.ts';
-import { kindOfSource } from '../sources.ts';
+import { sourceOr } from '../sources.ts';
 import type { StartLists } from '../models.ts';
 import type { StartOptions } from '../settings.ts';
 import { mountCloseButton } from './closeButton.ts';
@@ -42,10 +42,11 @@ import { hintLastChild } from './shortcutHints.ts';
 
 export type AddModalModel = {
   /** The primary source's kind: how a source the panel does not know is handled. */
-  tracker: TrackerKind;
+  /** The project's primary source (a draft with no source chosen goes there). */
+  primary: SourceId;
   types: string[];
   /** Where the task goes and, in All, the Source select's options (addTask.ts addSource). */
-  source: { source: string; picker: Choice[] | null };
+  source: { source: SourceId; picker: Choice[] | null };
   /** The project's sources, for what each can do (capabilities); empty: everything. */
   sources: readonly SourceInfo[];
   /** The listed tasks of every source; parent, blocked-by and existing sub-task choices take the chosen source's. */
@@ -92,6 +93,26 @@ export type AddModalHandle = {
   dispose: () => void;
 };
 
+/** The form's wording for each source (a local feature and its tickets, a GitHub issue and its sub-issues). */
+const COPY: Record<SourceId, { noParent: string; noBlockersTopLevel: string; noBlockers: string; newSubtasks: string; noExisting: string; existingSubtasks: string }> = {
+  local: {
+    noParent: 'None (new feature)',
+    noBlockersTopLevel: 'A new feature has no blockers; pick a parent to choose tickets of that feature.',
+    noBlockers: 'That feature has no open tickets.',
+    newSubtasks: 'Created as tickets of the new feature, in this order.',
+    noExisting: 'No open tickets or features without tickets to move.',
+    existingSubtasks: 'Moved into the new feature as its tickets once it is created.',
+  },
+  github: {
+    noParent: 'None',
+    noBlockersTopLevel: 'No open issues.',
+    noBlockers: 'No open issues.',
+    newSubtasks: 'Created as sub-issues of the new issue, in this order.',
+    noExisting: 'No open issues.',
+    existingSubtasks: 'Linked as sub-issues of the new issue once it is created.',
+  },
+};
+
 export const openAddModal = (
   model: AddModalModel,
   callbacks: AddModalCallbacks,
@@ -103,10 +124,12 @@ export const openAddModal = (
   /** What the chosen source can do; a source missing from the config can do everything. */
   const caps = (): SourceInfo['capabilities'] => model.sources.find((s) => s.id === d.source)?.capabilities ?? ALL_CAPS;
   /** How the chosen source works (wording, local file rules). */
-  const kind = (): TrackerKind => kindOfSource(d.source, model.tracker);
+  const kind = (): SourceId => sourceOr(d.source, model.primary);
   /** The chosen source's tasks: the only ones the form offers. */
   const tasks = (): Task[] => sourceTasks(model.tasks, d.source);
-  const parentOptions = (): Choice[] => [{ id: NONE, label: kind() === 'local' ? 'None (new feature)' : 'None' }, ...parentChoices(tasks())];
+  /** The wording of the chosen source. */
+  const copy = (): (typeof COPY)[SourceId] => COPY[kind()];
+  const parentOptions = (): Choice[] => [{ id: NONE, label: copy().noParent }, ...parentChoices(tasks())];
   /** A type literally named like the sentinel is not offered (it would read as the model's pick). */
   const types = model.types.filter((t) => t !== MODEL_PICK);
   const pick = model.suggest ? [{ id: MODEL_PICK, label: 'Let the model pick', hint: 'Small Model, after the task is created' }] : [];
@@ -219,7 +242,7 @@ export const openAddModal = (
           value: d.source,
           options: model.source.picker,
           onChange: (id) => {
-            Object.assign(d, withSource(d, id, model.tasks, model.sources.find((s) => s.id === id)?.capabilities ?? ALL_CAPS));
+            Object.assign(d, withSource(d, id as SourceId, model.tasks, model.sources.find((s) => s.id === id)?.capabilities ?? ALL_CAPS));
             sourceSelect?.update({ value: id });
             drawParent();
             drawBlockers();
@@ -275,12 +298,7 @@ export const openAddModal = (
     if (blockersBox.hidden) return;
     blockersBox.append(el('h3', 'kb-settings-heading', 'Blocked by'));
     if (offered.length === 0) {
-      const why =
-        kind() === 'local'
-          ? d.parentId === NONE
-            ? 'A new feature has no blockers; pick a parent to choose tickets of that feature.'
-            : 'That feature has no open tickets.'
-          : 'No open issues.';
+      const why = d.parentId === NONE ? copy().noBlockersTopLevel : copy().noBlockers;
       blockersBox.append(el('p', 'kb-muted', why));
       return;
     }
@@ -314,7 +332,7 @@ export const openAddModal = (
       el(
         'p',
         'kb-muted',
-        kind() === 'local' ? 'Created as tickets of the new feature, in this order.' : 'Created as sub-issues of the new issue, in this order.',
+        copy().newSubtasks,
       ),
     );
     d.subtasks.forEach((value, i) => {
@@ -389,14 +407,14 @@ export const openAddModal = (
     if (existingBox.hidden) return;
     existingBox.append(el('h3', 'kb-settings-heading', 'Existing sub-tasks'));
     if (offered.length === 0) {
-      existingBox.append(el('p', 'kb-muted', kind() === 'local' ? 'No open tickets or features without tickets to move.' : 'No open issues.'));
+      existingBox.append(el('p', 'kb-muted', copy().noExisting));
       return;
     }
     existingBox.append(
       el(
         'p',
         'kb-muted',
-        kind() === 'local' ? 'Moved into the new feature as its tickets once it is created.' : 'Linked as sub-issues of the new issue once it is created.',
+        copy().existingSubtasks,
       ),
     );
     existingDisposers = mountCheckList(existingBox, {

@@ -12,11 +12,11 @@ import { connectHost } from '@openchamber/sdk';
 import type { GuestProject, GuestSessionRecord, HostReadyContext } from '@openchamber/sdk';
 import { applyHostReady } from '@openchamber/sdk/ui';
 import { VARIANT, panelId } from '../core/variant.ts';
-import type { Task } from '../core/types.ts';
+import { errorMessage, type SourceId, type Task } from '../core/types.ts';
 import { archivableIds, archivedShown, archiveTasks, archiveWriteJob, createStorageSync, createPendingMarks, isArchived, mergeArchived, reconcileArchived, unarchiveTask } from './archive.ts';
 import { clearArchivePlan, clearConfirm, runClearArchive } from './clearArchive.ts';
 import { ApiError, createApi, type Api, type ConfigResult, type ProjectConfig, type SourceError } from './api.ts';
-import { sourceBanners } from './sourceBanner.ts';
+import { listedBoard, sourceBanners } from './sourceBanner.ts';
 import { applyOrder, forgetInOrder, pruneOrder, renameInOrder, reorder } from './order.ts';
 import { COLUMNS, groupTasks, pruneArchived, resolveSession, sessionForTask, sessionTarget, type Column, type SessionLookup } from './columns.ts';
 import { createEditor, type Editor } from './edit.ts';
@@ -85,6 +85,8 @@ type State = {
   sourceErrors: SourceError[];
   /** True for an id of a source that failed to list: pruning the archive marks and order keeps it. */
   unlisted: (id: string) => boolean;
+  /** The source of every task the shown project listed since it was opened (listedBoard's `seen`). */
+  seenSources: Map<string, SourceId>;
   hideSubtasks: boolean;
   /** When the last load was attempted, successful or not. */
   lastLoad: number;
@@ -132,6 +134,7 @@ const state: State = {
   tasks: null,
   sourceErrors: [],
   unlisted: () => false,
+  seenSources: new Map(),
   hideSubtasks: false,
   lastLoad: 0,
   view: 'none',
@@ -205,7 +208,7 @@ const pendingMarks = createPendingMarks();
 // Every field reports each keystroke; only the newest value per key is written.
 const saver = createLatestSaver<() => Promise<void>>(
   (_key, run) => run(),
-  (e) => fail(`Could not save settings: ${e instanceof Error ? e.message : String(e)}`),
+  (e) => fail(`Could not save settings: ${errorMessage(e)}`),
 );
 let settingsSheet: { dispose: () => void } | null = null;
 /** Global settings and presets are read once at start; editing waits for them, so nothing stored is overwritten. */
@@ -221,7 +224,7 @@ const loadGlobalSettings = async (): Promise<void> => {
     applySettings();
     summariseShown(); // tasks may have loaded before the settings
   } catch (e) {
-    fail(`Could not read the settings: ${e instanceof Error ? e.message : String(e)}`);
+    fail(`Could not read the settings: ${errorMessage(e)}`);
   }
 };
 
@@ -318,7 +321,7 @@ const loadProjectSettings = async (id: string): Promise<void> => {
     state.projectSettings = {};
     state.skills = found;
     state.settingsFor = id;
-    fail(`Could not read the project settings: ${e instanceof Error ? e.message : String(e)}`);
+    fail(`Could not read the project settings: ${errorMessage(e)}`);
   }
   applySettings();
   summariseShown(); // tasks may have loaded before the settings
@@ -382,7 +385,7 @@ const showSettings = (): void => {
           if (next !== null && project()?.id === p.id) void load();
           return next;
         } catch (e) {
-          fail(`Could not change the sources: ${e instanceof Error ? e.message : String(e)}`);
+          fail(`Could not change the sources: ${errorMessage(e)}`);
           return null;
         }
       },
@@ -430,8 +433,8 @@ const draw = (): void => {
   for (const [column, cards] of Object.entries(model)) for (const c of cards) state.columns.set(c.task.id, column as Column);
   // The attention mark: sessions that finished or wait for the user.
   setBadge(model.review.length || null);
-  const tracker = state.config.tracker;
-  const shown = filterBoard(model, tasks, state.query, tracker);
+  const primary = state.config.primary;
+  const shown = filterBoard(model, tasks, state.query);
   selection.beforeRender();
   board.render(
     shown,
@@ -444,7 +447,7 @@ const draw = (): void => {
   auditLinks();
   focusSession();
   // The empty board speaks of the source it shows (in All: the primary one).
-  const emptyKind = view === 'all' ? tracker : view;
+  const emptyKind = view === 'all' ? primary : view;
   if (tasks.length > 0 && state.query.trim() !== '' && Object.values(shown).every((cards) => cards.length === 0)) {
     board.setStatus({ kind: 'empty', title: 'No tasks match', body: `No task on the board matches "${state.query.trim()}".` });
   } else if (tasks.length === 0) {
@@ -463,7 +466,7 @@ const draw = (): void => {
 
 const failureOf = (e: unknown): ApiFailure => ({
   code: e instanceof ApiError ? e.code : 'FAILED',
-  message: e instanceof Error ? e.message : String(e),
+  message: errorMessage(e),
 });
 
 /** Clears the board and shows a notice whose button re-runs the load. */
@@ -570,7 +573,8 @@ const load = async (): Promise<void> => {
       state.sourceViewFor = p.id;
     }
     // A source that failed to list keeps its tasks' archive marks and places (listedBoard).
-    const { tasks, errors, unlisted } = listed;
+    const { tasks, errors, unlisted } = listedBoard(listed, (id) => state.seenSources.get(id));
+    for (const t of tasks) state.seenSources.set(t.id, t.source);
     state.unlisted = unlisted;
     // Stored marks (also those of the board's other frame) join this frame's own; unreadable ones keep memory.
     if (marks !== null) {
@@ -655,6 +659,7 @@ const selectProject = async (id: string | null): Promise<void> => {
   state.tasks = null;
   state.sourceErrors = [];
   state.unlisted = () => false;
+  state.seenSources = new Map();
   board.setProjects(projectOptions(), id);
   unsubscribeSessions?.();
   unsubscribeSessions = null;
@@ -806,7 +811,6 @@ const summarySettingsChanged = (): void => {
 
 // --- starting agents (starter.ts) ---
 
-const errorText = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
 /** What a start needs from the settings; null while the shown project's settings are loading. */
 const startContext = (): { projectId: string; settings: Settings; presets: Preset[] } | null => {
@@ -966,10 +970,10 @@ const clearArchiveNow = async (): Promise<void> => {
   const id = state.projectId;
   const p = project();
   if (id === null || p === null || state.view !== 'board' || state.config === null || state.tasks === null) return;
-  const tracker = state.config.tracker;
+  const primary = state.config.primary;
   // Only what the board shows: the switcher's source, or every source in All.
-  const plan = clearArchivePlan(tracker, viewTasks() ?? [], archivedTasks());
-  const ask = clearConfirm(tracker, plan);
+  const plan = clearArchivePlan(primary, viewTasks() ?? [], archivedTasks());
+  const ask = clearConfirm(plan);
   if (ask === null) {
     info('The archived features still have sub-tasks on the board; nothing to delete.');
     return;
@@ -977,7 +981,7 @@ const clearArchiveNow = async (): Promise<void> => {
   const answer = await askChoice(ask.title, ask.body, [{ id: 'clear', label: 'Delete all', variant: 'destructive' }]);
   if (answer === null || state.projectId !== id || state.tasks === null) return;
   // The board may have reloaded while the question was open: delete only what the user confirmed.
-  const fresh = clearArchivePlan(tracker, viewTasks() ?? [], archivedTasks());
+  const fresh = clearArchivePlan(primary, viewTasks() ?? [], archivedTasks());
   if (JSON.stringify(fresh) !== JSON.stringify(plan)) {
     info('The archive changed while you were asked; nothing was deleted. Try again.');
     return;
@@ -988,9 +992,9 @@ const clearArchiveNow = async (): Promise<void> => {
     if (result.deleted.length > 0) {
       info(`Deleted ${result.deleted.length} archived task${result.deleted.length === 1 ? '' : 's'}`);
       if (state.projectId === id) forgetOrdered(result.deleted);
-      for (const d of result.deleted) await forgetStartOptions(id, d).catch((e: unknown) => fail(`Could not drop the start options of ${d}: ${errorText(e)}`));
+      for (const d of result.deleted) await forgetStartOptions(id, d).catch((e: unknown) => fail(`Could not drop the start options of ${d}: ${errorMessage(e)}`));
     }
-    for (const f of result.failed) fail(`Could not delete ${f.id}: ${errorText(f.error)}`);
+    for (const f of result.failed) fail(`Could not delete ${f.id}: ${errorMessage(f.error)}`);
   } finally {
     // The reload prunes the marks of deleted tasks (reconcileArchived).
     await load();
@@ -1319,7 +1323,7 @@ const start = (ctx: HostReadyContext): void => {
       return p === null || state.view !== 'board' ? null : createApi(host, p.directory);
     },
     tasks: () => state.tasks ?? [],
-    tracker: () => state.config?.tracker ?? 'local',
+    primary: () => state.config?.primary ?? 'local',
     sources: () => ({ view: sourceView(), sources: state.config?.sources ?? [] }),
     labels: () => state.config?.labels ?? {},
     columnOf: (id) => state.columns.get(id) ?? null,
@@ -1332,7 +1336,7 @@ const start = (ctx: HostReadyContext): void => {
     session: {
       target: (task) => sessionTarget(task.id, state.sessions, starter.links(), detached().get(task.id)),
       check: checkSession,
-      open: (id) => void host.openSession(id).catch((e: unknown) => fail(`Could not open the session: ${errorText(e)}`)),
+      open: (id) => void host.openSession(id).catch((e: unknown) => fail(`Could not open the session: ${errorMessage(e)}`)),
     },
     sections: { get: () => sections, save: saveSections },
     // The Open task is the Selected card while it is drawn (a hidden sub-task is not), so a redraw
@@ -1404,7 +1408,7 @@ const start = (ctx: HostReadyContext): void => {
         kind: 'banner',
         tone: 'error',
         title: 'Projects are not available',
-        body: `${e instanceof Error ? e.message : String(e)}. Allow the “sessions” capability for Kanban Board in Settings → Extensions.`,
+        body: `${errorMessage(e)}. Allow the “sessions” capability for Kanban Board in Settings → Extensions.`,
       });
     });
 

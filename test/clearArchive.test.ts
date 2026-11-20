@@ -84,12 +84,12 @@ test('runClearArchive: deletes in plan order, a failure is recorded and the rest
 
 test('clearConfirm: counts what goes (a kept feature does not), says how it is deleted, and nothing to ask when nothing goes', () => {
   const tasks = [task(SPEC, 'done', { kind: 'parent' }), task(T1, 'done', { parentId: SPEC }), task(T2, 'ready-for-agent', { parentId: SPEC }), task('.scratch/g/spec.md', 'done', { kind: 'parent' })];
-  const local = clearConfirm('local', clearArchivePlan('local', tasks, marks(SPEC, T1, '.scratch/g/spec.md')));
+  const local = clearConfirm(clearArchivePlan('local', tasks, marks(SPEC, T1, '.scratch/g/spec.md')));
   assert.equal(local?.title, 'Delete 2 archived tasks for good?');
   assert.match(local?.body ?? '', /older than 30 days/);
   assert.match(local?.body ?? '', /1 archived feature with sub-tasks still on the board stays/);
-  assert.equal(clearConfirm('local', clearArchivePlan('local', tasks, marks(SPEC))), null);
-  const gh = clearConfirm('github', clearArchivePlan('github', [task('#4', 'done')], marks('#4')));
+  assert.equal(clearConfirm(clearArchivePlan('local', tasks, marks(SPEC))), null);
+  const gh = clearConfirm(clearArchivePlan('github', [task('#4', 'done')], marks('#4')));
   assert.equal(gh?.title, 'Delete 1 archived task for good?');
   assert.match(gh?.body ?? '', /repository admins/);
 });
@@ -108,9 +108,9 @@ test('several sources: each archived task goes by its own source rules, and the 
     { id: '#1', withChildren: false },
   ]);
   assert.equal(plan.count, 4);
-  const ask = clearConfirm('local', plan);
+  const ask = clearConfirm(plan);
   assert.match(ask!.body, /\.scratch\//);
   assert.match(ask!.body, /deleted on GitHub/);
   // One source on the board: only its wording.
-  assert.doesNotMatch(clearConfirm('local', clearArchivePlan('local', tasks.slice(0, 2), marks(SPEC, T1)))!.body, /GitHub/);
+  assert.doesNotMatch(clearConfirm(clearArchivePlan('local', tasks.slice(0, 2), marks(SPEC, T1)))!.body, /GitHub/);
 });

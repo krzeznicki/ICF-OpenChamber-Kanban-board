@@ -47,7 +47,7 @@ export const setupOutcome = (choice: TrackerChoice, initError: ApiFailure | null
     const notice = initError === null ? loadNotice(read.error) : { ...loadNotice(initError), title: 'Could not set up the board' };
     return { kind: 'notice', notice };
   }
-  const tracker = read.config.tracker;
+  const tracker = read.config.primary;
   if (tracker !== choice) {
     return {
       kind: 'notice',

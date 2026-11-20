@@ -1,12 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import type { Task, TaskState } from '../src/core/types.ts';
+import type { SourceId, Task, TaskState } from '../src/core/types.ts';
 import type { SourceError, SourceInfo } from '../src/panel/api.ts';
 import { archiveWriteJob, reconcileArchived } from '../src/panel/archive.ts';
 import { pruneOrder } from '../src/panel/order.ts';
 import { listedBoard, sourceBanners } from '../src/panel/sourceBanner.ts';
 
-const task = (id: string, source: string, state: TaskState = 'needs-triage'): Task => ({
+const task = (id: string, source: SourceId, state: TaskState = 'needs-triage'): Task => ({
   id, kind: 'ticket', title: id, body: '', state, type: null, parentId: null,
   blockedBy: [], url: null, updatedAt: 0, claimed: false, source,
 });
@@ -40,7 +40,7 @@ test('sourceBanners: a source that needs a login has its own text', () => {
 });
 
 test('sourceBanners: a source the panel does not know is named by its id', () => {
-  const [b] = sourceBanners([{ ...down, source: 'jira' }], SOURCES);
+  const [b] = sourceBanners([{ ...down, source: 'jira' as SourceId }], SOURCES);
   assert.equal(b?.title, 'jira unavailable');
 });
 
@@ -61,20 +61,28 @@ test('listedBoard: the tasks of the sources that listed, and nothing unlisted wh
   assert.deepEqual(listedBoard({ tasks }).errors, []);
 });
 
-test('listedBoard: ids of a failed source count as unlisted; ids of a working one do not', () => {
-  const r = listedBoard({ tasks: [task('.scratch/a/spec.md', 'local')], errors: [down] });
+/** The sources an earlier load listed: the panel learns them from task.source, never from the id. */
+const SEEN = new Map<string, SourceId>([['#7', 'github'], ['#4', 'github'], ['#2', 'github'], ['.scratch/gone/spec.md', 'local'], ['.scratch/a/spec.md', 'local']]);
+const seen = (id: string): SourceId | undefined => SEEN.get(id);
+
+test('listedBoard: ids seen in a failed source count as unlisted; ids seen in a working one do not', () => {
+  const r = listedBoard({ tasks: [task('.scratch/a/spec.md', 'local')], errors: [down] }, seen);
   assert.deepEqual(r.errors, [down]);
   assert.equal(r.unlisted('#7'), true);
-  assert.equal(r.unlisted('7'), true);
   assert.equal(r.unlisted('.scratch/gone/spec.md'), false);
-  const localDown = listedBoard({ tasks: [task('#1', 'github')], errors: [{ ...down, source: 'local' }] });
+  const localDown = listedBoard({ tasks: [task('#1', 'github')], errors: [{ ...down, source: 'local' }] }, seen);
   assert.equal(localDown.unlisted('.scratch/a/spec.md'), true);
   assert.equal(localDown.unlisted('#2'), false);
 });
 
+test('listedBoard: an id never seen is kept while a source is down, and pruned once every source answers', () => {
+  assert.equal(listedBoard({ tasks: [], errors: [down] }, seen).unlisted('.scratch/new/spec.md'), true);
+  assert.equal(listedBoard({ tasks: [], errors: [] }, seen).unlisted('.scratch/new/spec.md'), false);
+});
+
 // A GitHub outage must not wipe the archive marks and order of GitHub's tasks.
 test('a failed source keeps its archive marks and order; a working source is pruned', () => {
-  const r = listedBoard({ tasks: [task('.scratch/a/spec.md', 'local', 'done')], errors: [loggedOut] });
+  const r = listedBoard({ tasks: [task('.scratch/a/spec.md', 'local', 'done')], errors: [loggedOut] }, seen);
   const marks = new Map([['.scratch/a/spec.md', 1], ['.scratch/gone/spec.md', 2], ['#4', 3]]);
   const fixed = reconcileArchived(marks, r.tasks, r.unlisted);
   assert.deepEqual([...fixed.marks], [['.scratch/a/spec.md', 1], ['#4', 3]]);
@@ -83,7 +91,7 @@ test('a failed source keeps its archive marks and order; a working source is pru
 });
 
 test('an archive write while a source is down keeps that source\'s marks', async () => {
-  const r = listedBoard({ tasks: [task('.scratch/a/spec.md', 'local', 'done')], errors: [down] });
+  const r = listedBoard({ tasks: [task('.scratch/a/spec.md', 'local', 'done')], errors: [down] }, seen);
   let saved: ReadonlyMap<string, number> | null = null;
   const job = archiveWriteJob(
     { marks: new Map([['.scratch/a/spec.md', 5]]), removed: new Map(), tasks: r.tasks, unlisted: r.unlisted },

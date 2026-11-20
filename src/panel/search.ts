@@ -4,11 +4,9 @@
 // task's fields and column, and searchSuggestions completes them. Pure: no DOM, so it runs under node:test.
 import type { Task } from '../core/types.ts';
 import { TASK_STATES } from '../core/types.ts';
-import type { TrackerKind } from './addTask.ts';
 import { foldText } from '../core/localFormat.ts';
 import { COLUMNS, type BoardModel, type Column } from './columns.ts';
 import { editableText } from './taskEdit.ts';
-import { sourceKind } from './sources.ts';
 
 /** The filter keys a query understands, as `key:value` or `key=value`. */
 export const FILTER_KEYS = ['type', 'state', 'status', 'column', 'source'] as const;
@@ -80,11 +78,11 @@ const FILTERS: Record<FilterKey, FilterSpec> = {
   source: { holds: (t, _c, w) => valueMatches(t.source, w), offers: ({ sources }) => [...sources] },
 };
 
-const matchesParsed = (task: Task, q: ParsedQuery, tracker: TrackerKind, column: Column | null): boolean => {
+const matchesParsed = (task: Task, q: ParsedQuery, column: Column | null): boolean => {
   // The same key twice means either; different keys must all hold.
   for (const [key, wanted] of q.filters) if (!wanted.some((w) => FILTERS[key].holds(task, column, w))) return false;
   if (q.words.length === 0) return true;
-  const { title, body } = editableText(sourceKind(task, tracker), task);
+  const { title, body } = editableText(task.source, task);
   const text = foldText(`${title}\n${body}`);
   return q.words.every((w) => text.includes(w));
 };
@@ -94,7 +92,7 @@ const matchesParsed = (task: Task, q: ParsedQuery, tracker: TrackerKind, column:
  * own fields holds (`type:`, `state:`). Column filters need the board: see filterBoard. A blank
  * query matches all.
  */
-export const matchesQuery = (task: Task, query: string, tracker: TrackerKind): boolean => matchesParsed(task, parseQuery(query), tracker, null);
+export const matchesQuery = (task: Task, query: string): boolean => matchesParsed(task, parseQuery(query), null);
 
 /**
  * The board with only the cards that match (matchesQuery, `column:` against the column each card is
@@ -102,14 +100,14 @@ export const matchesQuery = (task: Task, query: string, tracker: TrackerKind): b
  * sub-task for context. Runs on groupTasks' result, so progress, blockers and the Review badge
  * still count every task. A kept sub-task always has its parent kept, so its indent holds.
  */
-export const filterBoard = (board: BoardModel, tasks: readonly Task[], query: string, tracker: TrackerKind): BoardModel => {
+export const filterBoard = (board: BoardModel, tasks: readonly Task[], query: string): BoardModel => {
   const q = parseQuery(query);
   if (isBlank(q)) return board;
   const drawnIn = new Map<string, Column>();
   for (const { id } of COLUMNS) for (const card of board[id]) drawnIn.set(card.task.id, id);
   const keep = new Set<string>();
   for (const t of tasks) {
-    if (!matchesParsed(t, q, tracker, drawnIn.get(t.id) ?? null)) continue;
+    if (!matchesParsed(t, q, drawnIn.get(t.id) ?? null)) continue;
     keep.add(t.id);
     if (t.parentId !== null) keep.add(t.parentId);
   }

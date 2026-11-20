@@ -1,6 +1,6 @@
 // A source that fails to list (gh logged out, no network) does not take the board down (ADR 0001):
 // the board shows the other sources and a banner per failed source. Pure, so it runs under node:test.
-import type { Task } from '../core/types.ts';
+import type { SourceId, Task } from '../core/types.ts';
 import type { SourceError, SourceInfo } from './api.ts';
 
 /** One failed source's banner above the columns; `action` retries the load. */
@@ -20,28 +20,29 @@ export const sourceBanners = (errors: readonly SourceError[], sources: readonly 
   ...warnings.map((w): SourceBanner => ({ source: '', tone: 'warning', title: 'A source in issue-tracker.md was skipped', body: w, action: 'Try again' })),
 ];
 
-/** The source an id belongs to, as core/sources.ts's adapters `owns` it; null for an id of no known source. */
-const sourceOfId = (id: string): string | null => {
-  if (id.startsWith('.scratch/')) return 'local';
-  if (/^\s*#?\d+\s*$/.test(id)) return 'github';
-  return null;
-};
-
 /**
  * A `/tasks/list` answer for the board: the tasks of the sources that listed, the errors of those
  * that failed, and `unlisted(id)`, true for an id of a failed source. Pruning the archive marks and
  * order skips those ids: their tasks are missing from the list only because the source did not answer.
- * (When every source fails the service answers an error, and the load fails as with one tracker.)
+ * The panel never reads a source from an id: `seen(id)` is the source of a task an earlier load
+ * listed (its task.source); an id never seen counts as unlisted while any source failed, so it is
+ * kept until a load where every source answers. (When every source fails the service answers an
+ * error, and the load fails as with one tracker.)
  */
-export const listedBoard = (r: { tasks: Task[]; errors?: SourceError[] }): { tasks: Task[]; errors: SourceError[]; unlisted: (id: string) => boolean } => {
+export const listedBoard = (
+  r: { tasks: Task[]; errors?: SourceError[] },
+  seen: (id: string) => SourceId | undefined = () => undefined,
+): { tasks: Task[]; errors: SourceError[]; unlisted: (id: string) => boolean } => {
   const errors = r.errors ?? [];
   const failed = new Set(errors.map((e) => e.source));
+  const listed = new Set(r.tasks.map((t) => t.id));
   return {
     tasks: r.tasks,
     errors,
     unlisted: (id) => {
-      const source = sourceOfId(id);
-      return source !== null && failed.has(source);
+      if (failed.size === 0 || listed.has(id)) return false;
+      const source = seen(id);
+      return source === undefined || failed.has(source);
     },
   };
 };

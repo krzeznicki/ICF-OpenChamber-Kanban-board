@@ -2,10 +2,9 @@
 // and the in-panel confirms. Every write goes through `run`, which marks the card busy (further
 // drags of it are ignored), reports a failure in a toast and reloads the board afterwards.
 import type { HostClient } from '@openchamber/sdk';
-import type { NewTask, Task, TaskState } from '../core/types.ts';
+import { errorMessage, type NewTask, type SourceId, type Task, type TaskState } from '../core/types.ts';
 import {
   MODEL_PICK,
-  type TrackerKind,
   addSource,
   canAddSubtask,
   createWithSubtasks,
@@ -29,7 +28,7 @@ import { askChoice } from './ui/confirm.ts';
 import { openDetail, type DetailHandle, type DetailModel, type OpenTaskShortcuts, type SessionView, type SummaryModel } from './ui/detail.ts';
 import { attachDrag } from './ui/dnd.ts';
 import { canLinkUnder, followingMove, linkChoices, linkConfirm, unlinkConfirm } from './link.ts';
-import { kindOfSource, sourceKind } from './sources.ts';
+import { sourceOr } from './sources.ts';
 import { deleteConfirm } from './taskDelete.ts';
 import { canPublish, publishConfirm, publishedMessage } from './taskPublish.ts';
 import { editChanges, editConflict, editableText, type EditText } from './taskEdit.ts';
@@ -41,12 +40,13 @@ export type EditorDeps = {
   api: () => Api | null;
   tasks: () => Task[];
   /** The primary source's kind (and id). A listed task goes by its own source (kindOf), a new one by Add task's source. */
-  tracker: () => TrackerKind;
+  /** The project's primary source. */
+  primary: () => SourceId;
   /**
    * Where Add task creates (addTask.ts addSource): the switcher's view (main.ts sourceView: a source
    * id, `all`, or null without a config) and the project's sources with what each can do.
    */
-  sources: () => { view: string | null; sources: SourceInfo[] };
+  sources: () => { view: SourceId | 'all' | null; sources: SourceInfo[] };
   labels: () => Record<string, string>;
   /** Where a listed task is drawn now; null when hidden (e.g. "Hide sub-tasks"). */
   columnOf: (id: string) => Column | null;
@@ -125,7 +125,6 @@ export type EditorDeps = {
   };
 };
 
-const errorText = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
 export const createEditor = (deps: EditorDeps) => {
   const moving = new Set<string>();
@@ -141,7 +140,7 @@ export const createEditor = (deps: EditorDeps) => {
 
   const find = (id: string): Task | null => deps.tasks().find((t) => t.id === id) ?? null;
   /** How `task` is handled (wording, local file rules): by the source it lives in. */
-  const kindOf = (task: Task): TrackerKind => sourceKind(task, deps.tracker());
+  const kindOf = (task: Task): SourceId => task.source;
   const info = (message: string): void => void deps.host.toast({ kind: 'info', message }).catch(() => {});
   const fail = (message: string): void => void deps.host.toast({ kind: 'error', message }).catch(() => {});
 
@@ -257,7 +256,7 @@ export const createEditor = (deps: EditorDeps) => {
         mine.version++;
         refreshDetail();
       })
-      .catch((e: unknown) => fail(`Could not read the card's start options: ${errorText(e)}`));
+      .catch((e: unknown) => fail(`Could not read the card's start options: ${errorMessage(e)}`));
   };
 
   /** The open task's new id after a link moved it, until the reload lists it under that id. */
@@ -297,14 +296,14 @@ export const createEditor = (deps: EditorDeps) => {
   const run = async (id: string, action: (api: Api) => Promise<unknown>): Promise<void> => {
     const api = deps.api();
     if (api === null || moving.has(id)) return;
-    await busyWhile(id, () => action(api).then(() => undefined, (e: unknown) => fail(errorText(e))));
+    await busyWhile(id, () => action(api).then(() => undefined, (e: unknown) => fail(errorMessage(e))));
   };
 
   /** A write whose failure comes back as text for the caller to show (null: done). */
   const attempt = (action: () => Promise<unknown>): Promise<string | null> =>
     action().then(
       () => null,
-      (e: unknown) => errorText(e),
+      (e: unknown) => errorMessage(e),
     );
 
   /**
@@ -321,7 +320,7 @@ export const createEditor = (deps: EditorDeps) => {
         const ctx = deps.start.context();
         if (ctx !== null) await deps.start.move(ctx.projectId, from, to);
       },
-      (from, to, e) => fail(`${from} is now ${to}, but its start options could not follow: ${errorText(e)}`),
+      (from, to, e) => fail(`${from} is now ${to}, but its start options could not follow: ${errorMessage(e)}`),
     );
   const setParentOf = (api: Api) => following(api.setParent);
 
@@ -464,7 +463,7 @@ export const createEditor = (deps: EditorDeps) => {
     deps.order.forget(deleted);
     const ctx = deps.start.context();
     if (ctx !== null) {
-      for (const d of deleted) await deps.start.forget(ctx.projectId, d).catch((e: unknown) => fail(`Could not drop the start options of ${d}: ${errorText(e)}`));
+      for (const d of deleted) await deps.start.forget(ctx.projectId, d).catch((e: unknown) => fail(`Could not drop the start options of ${d}: ${errorMessage(e)}`));
     }
   };
 
@@ -502,7 +501,7 @@ export const createEditor = (deps: EditorDeps) => {
           const created = await api.create(input);
           info(`Created ${created.id}`);
         } catch (e) {
-          return errorText(e);
+          return errorMessage(e);
         }
         await deps.reload();
         refreshDetail();
@@ -551,7 +550,7 @@ export const createEditor = (deps: EditorDeps) => {
         refreshDetail(); // the select snaps back until the reload shows the saved state
       },
       onType: (type) => void run(id, (api) => api.setType(id, type)),
-      onOpenUrl: (url) => void deps.host.openUrl(url).catch((e: unknown) => fail(errorText(e))),
+      onOpenUrl: (url) => void deps.host.openUrl(url).catch((e: unknown) => fail(errorMessage(e))),
       onDismiss: () => {
         closeDetail();
         deps.onOpenTaskClosed?.(id, 'dismissed');
@@ -573,10 +572,9 @@ export const createEditor = (deps: EditorDeps) => {
     if (api === null) return { kind: 'error', message: 'No project is open.' };
     const ctx = deps.start.context();
     // The draft's source decides how it is handled; its parent and links are of that source only.
-    const source = draft.source === '' ? deps.tracker() : draft.source;
-    const tracker = kindOfSource(source, deps.tracker());
-    const subtasks = subtasksToCreate(draft, tracker);
-    const existing = existingToLink(draft, tracker, sourceTasks(deps.tasks(), source)).map((id) => ({ id, label: find(id)?.title ?? id }));
+    const source = sourceOr(draft.source, deps.primary());
+    const subtasks = subtasksToCreate(draft, source);
+    const existing = existingToLink(draft, source, sourceTasks(deps.tasks(), source)).map((id) => ({ id, label: find(id)?.title ?? id }));
     /** Never throws: the task exists by now, so a storage hiccup is a toast, not "could not create". */
     const saveStart = (taskId: string): void => {
       if (ctx === null || Object.keys(draft.start).length === 0) return;
@@ -584,7 +582,7 @@ export const createEditor = (deps: EditorDeps) => {
         deps.start.save(ctx.projectId, taskId, draft.start);
         if (draft.start.summaryLanguage !== undefined) deps.summary.onLanguage(ctx.projectId, taskId, draft.start.summaryLanguage);
       } catch (e) {
-        fail(`Could not save the start options of ${taskId}: ${errorText(e)}`);
+        fail(`Could not save the start options of ${taskId}: ${errorMessage(e)}`);
       }
     };
     let first = true;
@@ -598,17 +596,17 @@ export const createEditor = (deps: EditorDeps) => {
             first = false;
             saveStart(task.id);
             if (ctx !== null && draft.type === '') {
-              void deps.start.markNoType(ctx.projectId, task.id).catch((e: unknown) => fail(`Could not keep "No type" for ${task.id}: ${errorText(e)}`));
+              void deps.start.markNoType(ctx.projectId, task.id).catch((e: unknown) => fail(`Could not keep "No type" for ${task.id}: ${errorMessage(e)}`));
             }
           }
           return task;
         },
-        toNewTask(draft, tracker),
+        toNewTask(draft, source),
         subtasks,
         { existing, setParent: setParentOf(api) },
       );
     } catch (e) {
-      return { kind: 'error', message: errorText(e) };
+      return { kind: 'error', message: errorMessage(e) };
     }
     const { task, failed } = result;
     // Fields left on "Let the model pick": asked once the task (and its sub-tasks) exist. Only this
@@ -656,10 +654,10 @@ export const createEditor = (deps: EditorDeps) => {
     const { view, sources } = deps.sources();
     addModal = openAddModal(
       {
-        tracker: deps.tracker(),
+        primary: deps.primary(),
         types,
         suggest: addOffer.suggest,
-        source: addSource(view, sources, deps.tracker()),
+        source: addSource(view, sources, deps.primary()),
         sources,
         tasks,
         labels: deps.labels(),

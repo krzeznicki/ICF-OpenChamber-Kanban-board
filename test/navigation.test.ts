@@ -74,7 +74,7 @@ test('hidden sub-tasks and the search filter: only drawn cards are stepped throu
   assert.equal(step('p', 'down', shown), 'k');
   const hidden = layoutOf(groupTasks(tasks, [], new Set(), true));
   assert.equal(step('p', 'down', hidden), 'n');
-  const searched = layoutOf(filterBoard(groupTasks(tasks, [], new Set(), false), tasks, 'apple', 'local'));
+  const searched = layoutOf(filterBoard(groupTasks(tasks, [], new Set(), false), tasks, 'apple'));
   assert.deepEqual(searched[0], []);
   assert.equal(step('apple', 'left', searched), 'apple');
   assert.equal(nextSelected(searched, null, 'down')?.id, 'apple');
@@ -99,7 +99,7 @@ test('firstSelected (↓ from the search field): the first card in Navigation or
     source: id.startsWith('#') ? 'github' : 'local',
   });
   const tasks = [t('b1', 'Banana', 'needs-triage'), t('r1', 'Red apple', 'ready-for-agent'), t('r2', 'Green apple', 'ready-for-agent')];
-  const searched = layoutOf(filterBoard(groupTasks(tasks, [], new Set(), false), tasks, 'apple', 'local'));
+  const searched = layoutOf(filterBoard(groupTasks(tasks, [], new Set(), false), tasks, 'apple'));
   const first = firstSelected(searched);
   assert.ok(first !== null);
   assert.equal(first.column, 1);

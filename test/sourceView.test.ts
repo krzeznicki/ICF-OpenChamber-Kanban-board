@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { SourceInfo } from '../src/panel/api.ts';
-import type { Task } from '../src/core/types.ts';
+import type { SourceId, Task } from '../src/core/types.ts';
 import { currentSourceView, sourceBadge, sourceSwitcher, tasksInView } from '../src/panel/sourceView.ts';
 
 const CAPS = { create: true, subtasks: true, blockedBy: true, claim: true, delete: true };
@@ -56,7 +56,7 @@ test('currentSourceView: a project with one source always shows it, also after A
   assert.equal(currentSourceView('all', config([github])), 'github');
 });
 
-const task = (id: string, source: string): Task => ({
+const task = (id: string, source: SourceId): Task => ({
   id, kind: 'ticket', title: id, body: '', state: 'ready-for-agent', type: null, parentId: null,
   blockedBy: [], url: null, updatedAt: 0, claimed: false, source,
 });
@@ -75,5 +75,5 @@ test('sourceBadge: the card names its source only in the All view', () => {
   // One source: no switcher, so no badges either.
   assert.equal(sourceBadge(task('#1', 'github'), 'github', [github]), null);
   // A source the panel has no label for shows its id.
-  assert.equal(sourceBadge(task('jira:X-1', 'jira'), 'all', [local, github]), 'jira');
+  assert.equal(sourceBadge(task('jira:X-1', 'jira' as SourceId), 'all', [local, github]), 'jira');
 });

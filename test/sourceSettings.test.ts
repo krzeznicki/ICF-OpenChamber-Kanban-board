@@ -6,9 +6,9 @@ import { changeSource, sourcesView, type SourceChange } from '../src/panel/sourc
 const CAPS = { create: true, subtasks: true, blockedBy: true, claim: true, delete: true };
 const info = (id: 'local' | 'github'): SourceInfo => ({ id, label: id === 'local' ? 'Local' : 'GitHub', capabilities: CAPS });
 const config = (primary: 'local' | 'github', ...others: Array<'local' | 'github'>): ProjectConfig => ({
-  tracker: primary,
   primary,
   sources: [primary, ...others].map(info),
+  known: [info('local'), info('github')],
   labels: {},
 });
 
