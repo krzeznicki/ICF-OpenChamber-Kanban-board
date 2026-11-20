@@ -740,6 +740,7 @@ const starter = createStarter({
   host,
   project,
   tasks: () => state.tasks,
+  primary: () => state.config?.primary ?? null,
   sessions: () => state.sessions,
   context: startContext,
   loadCard: (projectId, taskId) => store.loadCard(projectId, taskId),

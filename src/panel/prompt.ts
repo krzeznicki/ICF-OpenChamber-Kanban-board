@@ -1,8 +1,8 @@
 // The first message an agent gets when a card starts. Pure: no DOM, no host, so it runs under node:test.
-// Order: the task (title, id, link), its full body, how to move it (tracker and task-board CLI line),
-// for a parent its sub-tasks, then the preset's instructions (placeholders filled, then the SKILL.md
-// paths of the skills a skills text uses). The whole text stays within the
-// host's attach text limit; a long body is cut and the agent is told how to read the rest.
+// Order: the task (title, id, link), its full body, how to move it (the tracker of the task's own
+// source and the task-board CLI line), for a parent its sub-tasks, then the preset's instructions
+// (placeholders filled, then the SKILL.md paths of the skills a skills text uses). The whole text
+// stays within the host's attach text limit; a long body is cut and the agent is told how to read the rest.
 import { GUEST_ATTACH_TEXT_MAX } from '@openchamber/sdk';
 import { TASK_STATES, type Task } from '../core/types.ts';
 import type { Preset } from './presets.ts';
@@ -43,11 +43,32 @@ export const fillPreset = (text: string, task: Task, cli: string, projectDir: st
   });
 
 /**
+ * The tracker lines for a task outside the project's primary source: docs/agents/issue-tracker.md
+ * (and Matt's skills) describe the primary one, so the agent is told to create in this task's source.
+ */
+const otherSourceLines = (task: Task, cli: string, primary: string | undefined): string[] =>
+  primary === undefined || task.source === primary
+    ? []
+    : [
+        `This project's primary source is ${primary}, and docs/agents/issue-tracker.md describes that one; this task is in ${task.source} (see its ## Additional sources section).`,
+        `Create new tasks for this work in ${task.source}: ${cli} create --source ${task.source} --title <title>`,
+        "A sub-task (--parent) goes to its parent's source by itself. Tasks of different sources are never linked: a parent or blocker in another source is refused.",
+      ];
+
+/**
  * `projectDir` is the project root (the main checkout). Every CLI line passes it with --dir: the
  * agent usually runs in its own worktree, where the tracker config is missing (GitHub) or the
  * `.scratch/` files are a copy the board never reads (local).
  */
-export const buildPrompt = (task: Task, preset: Preset, cliPath: string, projectDir: string, children: Task[]): string => {
+export const buildPrompt = (
+  task: Task,
+  preset: Preset,
+  cliPath: string,
+  projectDir: string,
+  children: Task[],
+  /** The project's primary source; a task in another source gets that source's tracker lines. */
+  primary?: string,
+): string => {
   const cli = `node ${shellWord(cliPath)} --dir ${shellWord(projectDir)}`;
   const id = shellWord(task.id);
   const leads = children.length > 0 || task.kind === 'parent';
@@ -58,6 +79,7 @@ export const buildPrompt = (task: Task, preset: Preset, cliPath: string, project
       ? 'This task is a GitHub issue of this repository.'
       : 'This task is a local issue file under .scratch/ in this repository.',
     `Move it with the task-board CLI: ${cli} state ${id} <state>`,
+    ...otherSourceLines(task, cli, primary),
     'Always pass --dir exactly as shown (the project root), even in a worktree: without it the CLI misses the tracker or writes to a copy the board never reads.',
     `States: ${STATES}. Set "done" only when the work is finished.`,
     ...(leads ? [] : ["This task was started from the board; you don't need to claim it."]),

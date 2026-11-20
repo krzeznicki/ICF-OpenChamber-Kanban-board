@@ -194,3 +194,26 @@ test("prompt: {root}, {tracker} and {note} are shell-quoted for a root with a sp
     assert.ok(!p.includes(`${root}/docs`), `${preset.id}: unquoted root`);
   }
 });
+
+test('prompt: a task outside the primary source gets the tracker of its own source', () => {
+  // Local primary, the task is a GitHub issue: new tasks for it go to GitHub, not to .scratch/.
+  const gh = buildPrompt(task({ id: '#42', url: 'https://github.com/o/r/issues/42' }), implement, CLI, DIR, [], 'local');
+  assert.match(gh, /GitHub issue/);
+  assert.ok(gh.includes(`${TB} create --source github --title <title>`), gh);
+  assert.match(gh, /primary source is local/);
+  assert.match(gh, /parent's source/);
+  assert.ok(gh.indexOf('--source github') < gh.indexOf(implement.text));
+
+  // GitHub primary, the task is a local file: new tasks go to local.
+  const local = buildPrompt(task(), implement, CLI, DIR, [], 'github');
+  assert.match(local, /local issue file/);
+  assert.ok(local.includes(`${TB} create --source local --title <title>`), local);
+  assert.match(local, /primary source is github/);
+});
+
+test('prompt: a task in the primary source (or with no primary known) has no source note', () => {
+  for (const p of [buildPrompt(task(), implement, CLI, DIR, [], 'local'), buildPrompt(task(), implement, CLI, DIR, [])]) {
+    assert.ok(!p.includes('--source'));
+    assert.ok(!p.includes('primary source'));
+  }
+});

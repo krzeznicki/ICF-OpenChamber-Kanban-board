@@ -35,6 +35,8 @@ export type StarterDeps = {
   host: HostClient;
   project: () => GuestProject | null;
   tasks: () => Task[] | null;
+  /** The shown project's primary source; null before its config is read. */
+  primary: () => string | null;
   sessions: () => GuestSessionRecord[];
   /** Null while the shown project's settings are loading. */
   context: () => StartContext | null;
@@ -177,7 +179,7 @@ export const createStarter = (deps: StarterDeps) => {
     // A preset the set does not have falls back to its Implement, else Plain's (a set may be empty).
     const preset = pickPreset(ctx.presets, opts.presetId);
     const children = (deps.tasks() ?? []).filter((t) => t.parentId === task.id);
-    return buildPrompt(task, preset, await cliPath(p.directory), p.directory, children);
+    return buildPrompt(task, preset, await cliPath(p.directory), p.directory, children, deps.primary() ?? undefined);
   };
 
   const isStarting = new Set<string>();
