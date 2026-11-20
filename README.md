@@ -276,6 +276,10 @@ Commands:
                                         which changes in a local tracker: the file moves)
   next                                  first ready-for-agent ticket with no open blocker
   close <id> [--with-children]          close a task (and a feature's tickets)
+  delete <id> [--with-children]         delete a task for good (prints the deleted ids); a local
+                                        feature with tickets needs --with-children (its whole
+                                        folder goes); GitHub: repository admins only, without
+                                        --with-children sub-issues stay as top-level issues
   publish <id> [--to github]            publish a local task to GitHub: an issue (a feature's
                                         tickets become sub-issues), then the local files are closed
                                         with a link; if GitHub fails half way nothing local closes

@@ -42,6 +42,10 @@ Commands:
                                         which changes in a local tracker: the file moves)
   next [--source <id>]                  first ready-for-agent ticket with no open blocker
   close <id> [--with-children]          close a task (and a feature's tickets)
+  delete <id> [--with-children]         delete a task for good (prints the deleted ids); a local
+                                        feature with tickets needs --with-children (its whole
+                                        folder goes); GitHub: repository admins only, without
+                                        --with-children sub-issues stay as top-level issues
   publish <id> [--to github]            publish a local task to GitHub: an issue (a feature's
                                         tickets become sub-issues), then the local files are closed
                                         with a link; if GitHub fails half way nothing local closes
@@ -109,6 +113,7 @@ const COMMANDS: Record<string, { positionals: number; options: Option[] }> = {
   parent: { positionals: 2, options: [] },
   next: { positionals: 0, options: ['source'] },
   close: { positionals: 1, options: ['with-children'] },
+  delete: { positionals: 1, options: ['with-children'] },
   publish: { positionals: 1, options: ['to'] },
   init: { positionals: 1, options: ['add', 'remove', 'primary', 'force'] },
 };
@@ -302,6 +307,11 @@ export const main = async (argv: string[], io: CliIO): Promise<number> => {
       case 'close': {
         const closed = await (await openTracker(root, exec)).close(args[0]!, { withChildren: values['with-children'] === true });
         print(closed, closed.map((t) => line(t)).join(''));
+        return 0;
+      }
+      case 'delete': {
+        const deleted = await (await openTracker(root, exec)).remove(args[0]!, { withChildren: values['with-children'] === true });
+        print(deleted, deleted.map((id) => `${id}\n`).join(''));
         return 0;
       }
       case 'publish': {

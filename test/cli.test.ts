@@ -522,3 +522,22 @@ test('init usage: a tracker or exactly one of --add/--remove/--primary', async (
     assert.equal(r.code, 2, `${argv.join(' ')} -> ${r.code} ${r.err}`);
   }
 });
+
+test('delete removes a task for good on an id of any source; a feature needs --with-children', async (t) => {
+  const { run: cli, gh, spec, ids } = await twoSources(t);
+  const refused = await cli(['delete', spec]);
+  assert.equal(refused.code, 4, refused.out);
+  const one = await cli(['delete', ids[2]!]);
+  assert.equal(one.code, 0, one.err);
+  assert.equal(one.out, `${ids[2]}\n`);
+  const all = await cli(['delete', spec, '--with-children', '--json']);
+  assert.equal(all.code, 0, all.err);
+  assert.deepEqual((JSON.parse(all.out) as string[]).sort(), [spec, ids[0]!, ids[1]!].sort());
+  const issue = await cli(['delete', '#6']);
+  assert.equal(issue.code, 0, issue.err);
+  assert.ok(gh.calls.some((c) => c[1] === 'issue' && c[2] === 'delete'));
+});
+
+test('help lists delete', async (t) => {
+  assert.match((await run(['--help'], await tmp(t))).out, /^  delete <id> \[--with-children\]/m);
+});
