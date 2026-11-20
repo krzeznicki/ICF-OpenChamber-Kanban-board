@@ -4,6 +4,7 @@ import type { HostClient } from '@openchamber/sdk';
 import type { LinkStatus, QueueEntry } from '../core/queue.ts';
 import type { NewTask, Task, TaskEdit, TaskState } from '../core/types.ts';
 import type { AgentsAnswer, ModelsAnswer } from './models.ts';
+import type { SourceChange, SourcesAnswer } from './sourceSettings.ts';
 import { listedBoard } from './sourceBanner.ts';
 
 /** `/links/list` reports a failed status lookup as `unknown`. */
@@ -82,6 +83,11 @@ export const createApi = (host: HostClient, directory: string) => {
     readConfig: () => call<ConfigResult>('POST', '/config/read'),
     initConfig: (tracker: 'local' | 'github') =>
       call<{ config: ProjectConfig }>('POST', '/config/init', { tracker }).then((r) => r.config),
+    /**
+     * Settings → Sources: adds or removes a source or makes one primary (rewrites issue-tracker.md).
+     * `{confirm}`: the change would replace a template edited by hand; send it again with `force`.
+     */
+    changeSources: (change: SourceChange, force: boolean) => call<SourcesAnswer>('POST', '/config/sources', { change, force }),
     /** The github.com remote of the project (origin first), or null. */
     detect: () => call<{ remote: string | null }>('POST', '/config/detect').then((r) => r.remote),
     /**

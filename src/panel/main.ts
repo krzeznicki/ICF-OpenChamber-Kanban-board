@@ -48,6 +48,7 @@ import { createProjectFollow } from './projectFollow.ts';
 import { createSessionFocus } from './sessionFocus.ts';
 import { createBoard, type Board } from './ui/board.ts';
 import { askChoice } from './ui/confirm.ts';
+import { changeSource } from './sourceSettings.ts';
 import { mountNotice } from './ui/notice.ts';
 import { stateTone, type OpenTaskShortcuts } from './ui/detail.ts';
 import { openSessionTasks } from './ui/sessionTasks.ts';
@@ -352,6 +353,7 @@ const showSettings = (): void => {
       project: p !== null && id !== null ? { name: p.name, layer: state.projectSettings } : null,
       presets: state.presets,
       skills: id !== null ? (state.skills?.found ?? null) : null,
+      sources: p !== null ? state.config : null,
     },
     {
       onGlobal: (layer) => {
@@ -368,6 +370,21 @@ const showSettings = (): void => {
         state.presets = stored;
         saver.save('presets', () => store.savePresets(stored));
         editor.refresh();
+      },
+      onSources: async (change) => {
+        if (p === null) return null;
+        try {
+          const next = await changeSource(createApi(host, p.directory), change, async (message) =>
+            (await askChoice('Replace the edited tracker instructions?', message, [
+              { id: 'replace', label: 'Replace', variant: 'destructive' },
+            ])) === 'replace',
+          );
+          if (next !== null && project()?.id === p.id) void load();
+          return next;
+        } catch (e) {
+          fail(`Could not change the sources: ${e instanceof Error ? e.message : String(e)}`);
+          return null;
+        }
       },
       onDismiss: closeSettings,
       lists,

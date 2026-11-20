@@ -6,6 +6,8 @@
 // preset texts, the user's own presets and sets. Every change is reported at once with the whole new
 // layer or stored sets; the caller saves it. The sheet redraws a tab only when the tab is switched, a
 // set is chosen, or a preset or set is added or deleted, so a text field keeps its focus while typing.
+// "Sources" lists the open project's sources (sourceSettings.ts): add one, remove one, make one
+// primary; each change rewrites docs/agents/issue-tracker.md through the service.
 import { mountButton, mountEmpty, mountSelect, mountTabs, mountTextField } from '@openchamber/sdk/ui';
 import type { SelectOption } from '@openchamber/sdk/ui';
 import {
@@ -53,11 +55,13 @@ import {
   type Platform,
 } from '../keymap.ts';
 import { detectPlatform } from '../shortcuts.ts';
+import type { ProjectConfig } from '../api.ts';
+import { sourcesView, type SourceChange } from '../sourceSettings.ts';
 import { mountCloseButton } from './closeButton.ts';
 import { askChoice } from './confirm.ts';
 import { mountStartTarget } from './startTarget.ts';
 
-export type SettingsTab = 'global' | 'project' | 'presets';
+export type SettingsTab = 'global' | 'project' | 'presets' | 'sources';
 
 export type SettingsModel = {
   tab: SettingsTab;
@@ -69,12 +73,19 @@ export type SettingsModel = {
   skills: string[] | null;
   /** The set the Presets tab shows; null: the open project's (else the global) set. */
   editSet?: string | null;
+  /** The open project's config for the Sources tab; null when no project is open or it is not set up. */
+  sources?: ProjectConfig | null;
 };
 
 export type SettingsCallbacks = {
   onGlobal: (layer: SettingsLayer) => void;
   onProject: (layer: SettingsLayer) => void;
   onPresets: (stored: StoredSets) => void;
+  /**
+   * Applies a change of the project's sources (asking first when the service wants a confirmation);
+   * resolves to the new config, or null when nothing changed (declined or failed: the caller reports a failure).
+   */
+  onSources?: (change: SourceChange) => Promise<ProjectConfig | null>;
   onDismiss: () => void;
   /** The model and agent lists of the start pickers (loaded once per project). */
   lists: StartLists;
@@ -741,6 +752,50 @@ const drawPresets = (
   );
 };
 
+/** The Sources tab: each source with Make primary / Remove, then the sources that can be added. */
+const drawSources = (
+  body: HTMLElement,
+  disposers: Disposers,
+  config: ProjectConfig,
+  apply: (change: SourceChange) => void,
+): void => {
+  const view = sourcesView(config);
+  const list = el('section', 'kb-settings-section');
+  list.append(el('h3', 'kb-settings-heading', 'Sources'));
+  list.append(
+    el(
+      'p',
+      'kb-settings-hint',
+      'Where the board reads tasks from. New tasks go to the primary source unless you pick another. Changes rewrite docs/agents/issue-tracker.md; removing a source only hides its tasks, its files or issues stay.',
+    ),
+  );
+  for (const r of view.rows) {
+    const row = el('div', 'kb-keys-row');
+    row.append(el('span', 'kb-keys-action', r.label));
+    row.append(el('span', 'kb-keys-key kb-muted', r.primary ? 'Primary' : ''));
+    const actions = el('span', 'kb-keys-buttons');
+    row.append(actions);
+    if (r.canMakePrimary) {
+      disposers.push(mountButton(actions, { label: 'Make primary', variant: 'ghost', size: 'xs', onClick: () => apply({ primary: r.id }) }).dispose);
+    }
+    if (r.canRemove) {
+      disposers.push(mountButton(actions, { label: 'Remove', variant: 'ghost', size: 'xs', onClick: () => apply({ remove: r.id }) }).dispose);
+    }
+    list.append(row);
+  }
+  body.append(list);
+  if (view.addable.length === 0) return;
+  const add = el('section', 'kb-settings-section');
+  add.append(el('h3', 'kb-settings-heading', 'Add a source'));
+  const buttons = el('div', 'kb-keys-buttons');
+  buttons.style.justifyContent = 'flex-start';
+  for (const a of view.addable) {
+    disposers.push(mountButton(buttons, { label: `Add ${a.label}`, variant: 'outline', size: 'xs', onClick: () => apply({ add: a.id }) }).dispose);
+  }
+  add.append(buttons);
+  body.append(add);
+};
+
 export const openSettings = (initial: SettingsModel, callbacks: SettingsCallbacks): { dispose: () => void } => {
   const backdrop = el('div', 'kb-backdrop');
   const sheet = el('aside', 'kb-sheet kb-settings');
@@ -827,6 +882,26 @@ export const openSettings = (initial: SettingsModel, callbacks: SettingsCallback
           },
         });
       }
+    } else if (m.tab === 'sources') {
+      const config = m.sources ?? null;
+      const onSources = callbacks.onSources;
+      if (config === null || onSources === undefined) {
+        disposers.push(mountEmpty(body, { title: 'No project', body: 'Open a project with a board to change its sources.' }).dispose);
+      } else {
+        let busy = false;
+        drawSources(body, disposers, config, (change) => {
+          if (busy) return;
+          busy = true;
+          body.setAttribute('aria-busy', 'true');
+          void onSources(change).then((next) => {
+            busy = false;
+            body.removeAttribute('aria-busy');
+            if (next === null || m.tab !== 'sources') return;
+            m.sources = next;
+            draw();
+          });
+        });
+      }
     } else {
       const shown = m.editSet !== undefined && m.editSet !== null && sets.some((x) => x.id === m.editSet) ? m.editSet : projectSet;
       drawPresets(
@@ -848,6 +923,7 @@ export const openSettings = (initial: SettingsModel, callbacks: SettingsCallback
       { id: 'global', label: 'Global' },
       { id: 'project', label: 'This project' },
       { id: 'presets', label: 'Presets' },
+      { id: 'sources', label: 'Sources' },
     ],
     activeId: m.tab,
     onChange: (id) => {

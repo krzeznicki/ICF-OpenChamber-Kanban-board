@@ -204,6 +204,8 @@ Three layers, each overriding the one before, field by field:
 
 All of them are per user and stored in the extension's storage.
 
+**Settings → Sources** is different: it lists the open project's sources (the primary one first) and changes `docs/agents/issue-tracker.md` in the repository. **Add Local** / **Add GitHub** adds a source (GitHub needs a github.com remote and a logged-in `gh`; its labels are created), **Remove** stops showing a source's tasks (nothing is deleted: the `.scratch/` files or the issues stay), and **Make primary** writes the new primary source's template and lists the others under `## Additional sources`. Text you added after the old template is kept; if the template itself was edited by hand, the board asks before replacing it. The CLI does the same with `task-board init --add <id>`, `--remove <id>` and `--primary <id>` (`--force` replaces an edited template), and writes the same file. The first-run wizard still asks only for the primary source.
+
 **Model**, **Thinking** and **Agent** are picked from lists, not typed, in every place start options are set (the card, Add task, the start form, Settings → Global and This project). The lists are what OpenCode's server reports for the project (`opencode api GET /api/model` and `GET /api/agent`; when the model request fails, `opencode models`, which has no names or thinking levels). Each list is fetched the first time a picker needs it in that project, then kept for the panel session, one list per project; the service caches it for 10 minutes.
 
 - **Model** shows the models by name (the `provider/model` id beside it); type to filter by name or id, arrows and Enter to pick.
@@ -274,7 +276,12 @@ Commands:
                                         which changes in a local tracker: the file moves)
   next                                  first ready-for-agent ticket with no open blocker
   close <id> [--with-children]          close a task (and a feature's tickets)
-  init <local|github>                   write docs/agents/issue-tracker.md
+  init <local|github>                   write docs/agents/issue-tracker.md (the primary source)
+  init --add <id> | --remove <id> | --primary <id> [--force]
+                                        add or remove a source, or make one primary; this
+                                        rewrites docs/agents/issue-tracker.md as Settings does.
+                                        Removing deletes nothing (its files or issues stay).
+                                        --force: replace a primary template edited by hand
 
 Options for every command:
   --dir <path>   project root (default: current directory)
