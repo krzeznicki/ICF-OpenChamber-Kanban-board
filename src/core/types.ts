@@ -45,6 +45,11 @@ export type NewTask = {
   state?: TaskState;
   parentId?: string;
   blockedBy?: string[];
+  /**
+   * The Source to create it in (combined tracker); default the primary source. With `parentId` the
+   * task goes to the parent's source, and a different `source` is INVALID.
+   */
+  source?: string;
 };
 
 /** What `Tracker.edit` changes; an omitted field stays as it is. */
