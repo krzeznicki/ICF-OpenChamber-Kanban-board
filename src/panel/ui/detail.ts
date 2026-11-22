@@ -1,6 +1,6 @@
 // The task modal, opened by a click on any card. A header (title, id, badges, Edit, Delete, ×, and
 // the task's session: "Open session" or why not; "Unarchive" for an archived task), a compact row
-// (State, Type, Parent with "No parent", Publish to GitHub on a local task, Move to; a GitHub task links
+// (State, Type, Parent with "No parent", Move to with Publish to GitHub on the right for a local task; a GitHub task links
 // to its issue under the title), then collapsible sections whose open state is
 // remembered: Summary, Task (the body as markdown, or the Edit form, ui/editForm.ts), Sub-tasks
 // (rows with Unlink; "Add sub-task" opens New task / Existing tasks) and Settings (
@@ -567,29 +567,33 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
       }).dispose,
     );
 
-    // "Publish to GitHub" sits right under State, Type and Parent (taskPublish.ts canPublish).
-    if (m.publish) {
-      const publishRow = el('div', 'kb-actions kb-actions-start kb-quick-publish');
-      disposers.push(
-        mountButton(publishRow, { label: 'Publish to GitHub', variant: 'outline', size: 'sm', disabled: m.busy, onClick: callbacks.onPublish }).dispose,
-      );
-      quick.append(publishRow);
-    }
-
-    if (m.moves.length > 0) {
-      const moveRow = el('div', 'kb-actions kb-actions-start kb-quick-moves');
-      moveRow.setAttribute('role', 'group');
-      moveRow.setAttribute('aria-label', 'Move to');
-      moveRow.append(el('span', 'kb-actions-label', 'Move to'));
-      for (const { to, label } of m.moves) {
-        disposers.push(
-          mountButton(moveRow, { label, variant: 'outline', size: 'xs', disabled: m.busy, onClick: () => callbacks.onMove(to) }).dispose,
-        );
-        // Mod+N moves to Board column N (openTask.ts columnForDigit).
-        const n = COLUMNS.findIndex((c) => c.id === to) + 1;
-        if (n >= 1 && n <= 5) hintLastChild(moveRow, `task.state${n as 1 | 2 | 3 | 4 | 5}`, `Move to ${label}`);
+    // One row under the fields: "Move to" on the left, "Publish to GitHub" on the right, under Parent
+    // (taskPublish.ts canPublish).
+    if (m.moves.length > 0 || m.publish) {
+      const bottomRow = el('div', 'kb-quick-row');
+      if (m.moves.length > 0) {
+        const moveRow = el('div', 'kb-actions kb-actions-start kb-quick-moves');
+        moveRow.setAttribute('role', 'group');
+        moveRow.setAttribute('aria-label', 'Move to');
+        moveRow.append(el('span', 'kb-actions-label', 'Move to'));
+        for (const { to, label } of m.moves) {
+          disposers.push(
+            mountButton(moveRow, { label, variant: 'outline', size: 'xs', disabled: m.busy, onClick: () => callbacks.onMove(to) }).dispose,
+          );
+          // Mod+N moves to Board column N (openTask.ts columnForDigit).
+          const n = COLUMNS.findIndex((c) => c.id === to) + 1;
+          if (n >= 1 && n <= 5) hintLastChild(moveRow, `task.state${n as 1 | 2 | 3 | 4 | 5}`, `Move to ${label}`);
+        }
+        bottomRow.append(moveRow);
       }
-      quick.append(moveRow);
+      if (m.publish) {
+        const publishSlot = el('div', 'kb-quick-publish');
+        disposers.push(
+          mountButton(publishSlot, { label: 'Publish to GitHub', variant: 'outline', size: 'xs', disabled: m.busy, onClick: callbacks.onPublish }).dispose,
+        );
+        bottomRow.append(publishSlot);
+      }
+      quick.append(bottomRow);
     }
   };
 

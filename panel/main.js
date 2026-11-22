@@ -13032,26 +13032,30 @@ ${ref}`,
           }
         }).dispose
       );
-      if (m.publish) {
-        const publishRow = el5("div", "kb-actions kb-actions-start kb-quick-publish");
-        disposers2.push(
-          mountButton(publishRow, { label: "Publish to GitHub", variant: "outline", size: "sm", disabled: m.busy, onClick: callbacks.onPublish }).dispose
-        );
-        quick.append(publishRow);
-      }
-      if (m.moves.length > 0) {
-        const moveRow = el5("div", "kb-actions kb-actions-start kb-quick-moves");
-        moveRow.setAttribute("role", "group");
-        moveRow.setAttribute("aria-label", "Move to");
-        moveRow.append(el5("span", "kb-actions-label", "Move to"));
-        for (const { to, label } of m.moves) {
-          disposers2.push(
-            mountButton(moveRow, { label, variant: "outline", size: "xs", disabled: m.busy, onClick: () => callbacks.onMove(to) }).dispose
-          );
-          const n = COLUMNS.findIndex((c) => c.id === to) + 1;
-          if (n >= 1 && n <= 5) hintLastChild(moveRow, `task.state${n}`, `Move to ${label}`);
+      if (m.moves.length > 0 || m.publish) {
+        const bottomRow = el5("div", "kb-quick-row");
+        if (m.moves.length > 0) {
+          const moveRow = el5("div", "kb-actions kb-actions-start kb-quick-moves");
+          moveRow.setAttribute("role", "group");
+          moveRow.setAttribute("aria-label", "Move to");
+          moveRow.append(el5("span", "kb-actions-label", "Move to"));
+          for (const { to, label } of m.moves) {
+            disposers2.push(
+              mountButton(moveRow, { label, variant: "outline", size: "xs", disabled: m.busy, onClick: () => callbacks.onMove(to) }).dispose
+            );
+            const n = COLUMNS.findIndex((c) => c.id === to) + 1;
+            if (n >= 1 && n <= 5) hintLastChild(moveRow, `task.state${n}`, `Move to ${label}`);
+          }
+          bottomRow.append(moveRow);
         }
-        quick.append(moveRow);
+        if (m.publish) {
+          const publishSlot = el5("div", "kb-quick-publish");
+          disposers2.push(
+            mountButton(publishSlot, { label: "Publish to GitHub", variant: "outline", size: "xs", disabled: m.busy, onClick: callbacks.onPublish }).dispose
+          );
+          bottomRow.append(publishSlot);
+        }
+        quick.append(bottomRow);
       }
     };
     const drawSettings = (m) => {
@@ -15698,6 +15702,8 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
 .kb-quick-fields { display: flex; flex-wrap: wrap; gap: 0.5rem; }
 .kb-quick-fields > .kb-field { flex: 1 1 8.5rem; }
 .kb-quick-moves { gap: 0.375rem; }
+.kb-quick-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.5rem; }
+.kb-quick-publish { margin-left: auto; }
 .kb-section { border-bottom: 1px solid var(--oc-border); }
 .kb-section[hidden] { display: none; }
 .kb-section-head { cursor: pointer; font-weight: 600; font-size: 0.95em; padding: 0.75rem 0; user-select: none; }

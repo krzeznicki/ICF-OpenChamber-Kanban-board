@@ -117,6 +117,8 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
 .kb-quick-fields { display: flex; flex-wrap: wrap; gap: 0.5rem; }
 .kb-quick-fields > .kb-field { flex: 1 1 8.5rem; }
 .kb-quick-moves { gap: 0.375rem; }
+.kb-quick-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.5rem; }
+.kb-quick-publish { margin-left: auto; }
 .kb-section { border-bottom: 1px solid var(--oc-border); }
 .kb-section[hidden] { display: none; }
 .kb-section-head { cursor: pointer; font-weight: 600; font-size: 0.95em; padding: 0.75rem 0; user-select: none; }
