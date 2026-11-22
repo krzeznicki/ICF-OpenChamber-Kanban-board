@@ -15150,13 +15150,17 @@ ${listKey(projects)}`;
     const addSlot = div3("kb-add-button");
     const settingsSlot = div3("kb-settings-button");
     const refreshSlot = div3("kb-refresh");
-    toolbar.append(projectSlot, sourceSlot, switchSlot, searchSlot, spacer, addSlot, settingsSlot, refreshSlot);
+    const topRow = div3("kb-toolbar-row");
+    const viewRow = div3("kb-toolbar-row kb-toolbar-view");
+    topRow.append(projectSlot, spacer, addSlot, settingsSlot, refreshSlot);
+    viewRow.append(sourceSlot, searchSlot, switchSlot);
+    toolbar.append(topRow, viewRow);
     if (VARIANT === "test") {
       const badge2 = document.createElement("span");
       badge2.className = "kb-test-badge";
       badge2.textContent = "TEST";
       badge2.title = "Kanban TEST: the local development build, separate from the production Kanban Board";
-      toolbar.prepend(badge2);
+      topRow.prepend(badge2);
     }
     const status = div3("kb-status");
     const sessionNote = div3("kb-session-note");
@@ -15576,11 +15580,12 @@ ${listKey(projects)}`;
 html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg); font-family: var(--oc-font); }
 * { box-sizing: border-box; }
 .kb { display: flex; flex-direction: column; gap: 0.75rem; padding: 0.75rem; min-height: 100vh; }
-.kb-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 0.75rem; }
-.kb-project { flex: 1 1 12rem; min-width: 10rem; max-width: 22rem; }
+.kb-toolbar { display: flex; flex-direction: column; gap: 0.5rem; }
+.kb-toolbar-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 0.75rem; }
+.kb-project { flex: 1 1 12rem; min-width: 10rem; max-width: 28rem; }
 .kb-source { flex: 0 0 auto; }
 .kb-source[hidden] { display: none; }
-.kb-search { position: relative; flex: 1 1 12rem; min-width: 9rem; max-width: 20rem; }
+.kb-search { position: relative; flex: 1 1 16rem; min-width: 9rem; max-width: 36rem; }
 .kb-search-suggest { position: absolute; left: 0; right: 0; top: calc(100% + 0.25rem); z-index: 30; display: flex; flex-direction: column;
   padding: 0.25rem; max-height: 16rem; overflow-y: auto; background: var(--oc-elevated); color: var(--oc-elevated-fg);
   border: 1px solid var(--oc-border); border-radius: var(--oc-radius); box-shadow: 0 4px 16px rgb(0 0 0 / 0.18); }

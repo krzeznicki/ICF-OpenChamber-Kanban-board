@@ -5,11 +5,12 @@ const CSS = `
 html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg); font-family: var(--oc-font); }
 * { box-sizing: border-box; }
 .kb { display: flex; flex-direction: column; gap: 0.75rem; padding: 0.75rem; min-height: 100vh; }
-.kb-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 0.75rem; }
-.kb-project { flex: 1 1 12rem; min-width: 10rem; max-width: 22rem; }
+.kb-toolbar { display: flex; flex-direction: column; gap: 0.5rem; }
+.kb-toolbar-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 0.75rem; }
+.kb-project { flex: 1 1 12rem; min-width: 10rem; max-width: 28rem; }
 .kb-source { flex: 0 0 auto; }
 .kb-source[hidden] { display: none; }
-.kb-search { position: relative; flex: 1 1 12rem; min-width: 9rem; max-width: 20rem; }
+.kb-search { position: relative; flex: 1 1 16rem; min-width: 9rem; max-width: 36rem; }
 .kb-search-suggest { position: absolute; left: 0; right: 0; top: calc(100% + 0.25rem); z-index: 30; display: flex; flex-direction: column;
   padding: 0.25rem; max-height: 16rem; overflow-y: auto; background: var(--oc-elevated); color: var(--oc-elevated-fg);
   border: 1px solid var(--oc-border); border-radius: var(--oc-radius); box-shadow: 0 4px 16px rgb(0 0 0 / 0.18); }
