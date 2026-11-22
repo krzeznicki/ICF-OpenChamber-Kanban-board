@@ -5,8 +5,8 @@
 // the creates and the links. The service's error shows inside the modal; when the task was created
 // but some sub-tasks were not created or linked, the modal says which and offers only Close. With
 // suggestions on, Type and State start on "Let the model pick" (suggest.ts fills those in after
-// the create). With several sources the task goes to the switcher's source; in All a Source select
-// (starting on the primary) picks it, and parent, blockers and existing sub-tasks come only from it.
+// the create). With several sources a Source select picks where it goes, starting on the switcher's
+// source (in All, the primary), and parent, blockers and existing sub-tasks come only from it.
 import { mountBanner, mountButton, mountSelect, mountTextField } from '@openchamber/sdk/ui';
 import type { Task, TaskState } from '../../core/types.ts';
 import {
@@ -45,7 +45,7 @@ export type AddModalModel = {
   /** The project's primary source (a draft with no source chosen goes there). */
   primary: SourceId;
   types: string[];
-  /** Where the task goes and, in All, the Source select's options (addTask.ts addSource). */
+  /** Where the task goes and, with several sources, the Source select's options (addTask.ts addSource). */
   source: { source: SourceId; picker: Choice[] | null };
   /** The project's sources, for what each can do (capabilities); empty: everything. */
   sources: readonly SourceInfo[];

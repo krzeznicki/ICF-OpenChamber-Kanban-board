@@ -3255,9 +3255,10 @@ ${GUEST_UI_LOOK_CSS}`;
   });
   var isDirty = (draft, initial = emptyDraft()) => draft.title.trim() !== "" || draft.body.trim() !== "" || draft.subtasks.some((row) => row.trim() !== "") || draft.type !== initial.type || draft.source !== initial.source || draft.parentId !== initial.parentId || draft.state !== initial.state || draft.blockedBy.length > 0 || draft.existing.length > 0 || Object.values(draft.start).some((v2) => v2 !== void 0);
   var addSource = (view, sources, primary2) => {
-    if (view !== null && view !== "all") return { source: view, picker: null };
     const creatable = sources.filter((s) => s.capabilities.create);
-    const source2 = creatable.some((s) => s.id === primary2) ? primary2 : creatable[0]?.id ?? primary2;
+    const can = (id) => creatable.some((s) => s.id === id);
+    if (creatable.length === 0) return { source: view !== null && view !== "all" ? view : primary2, picker: null };
+    const source2 = can(view) ? view : can(primary2) ? primary2 : creatable[0].id;
     return { source: source2, picker: creatable.length > 1 ? creatable.map((s) => ({ id: s.id, label: s.label })) : null };
   };
   var sourceTasks = (tasks, source2) => tasks.filter((t) => t.source === source2);

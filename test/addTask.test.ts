@@ -361,9 +361,18 @@ const SOURCES: SourceInfo[] = [
   { id: 'github', label: 'GitHub Issues', capabilities: CAPS },
 ];
 
-test('addSource: a source picked in the switcher is where the task goes, with no picker', () => {
-  assert.deepEqual(addSource('github', SOURCES, 'local'), { source: 'github', picker: null });
-  assert.deepEqual(addSource('local', SOURCES, 'local'), { source: 'local', picker: null });
+test('addSource: with several sources the picker is always there, starting on the source the board shows', () => {
+  const picker = [
+    { id: 'local', label: 'Local files' },
+    { id: 'github', label: 'GitHub Issues' },
+  ];
+  assert.deepEqual(addSource('github', SOURCES, 'local'), { source: 'github', picker });
+  assert.deepEqual(addSource('local', SOURCES, 'github'), { source: 'local', picker });
+});
+
+test('addSource: a shown source that cannot create starts the picker on the primary', () => {
+  const sources: SourceInfo[] = [SOURCES[0]!, { ...SOURCES[1]!, capabilities: { ...CAPS, create: false } }, { id: 'local2' as never, label: 'Other', capabilities: CAPS }];
+  assert.equal(addSource('github', sources, 'local').source, 'local');
 });
 
 test('addSource: in All the form offers every source, starting on the primary', () => {

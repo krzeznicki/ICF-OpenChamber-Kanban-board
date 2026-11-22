@@ -68,18 +68,19 @@ export const isDirty = (draft: AddDraft, initial: AddDraft = emptyDraft()): bool
   Object.values(draft.start).some((v) => v !== undefined);
 
 /**
- * Where Add task creates (ADR 0001): the source picked in the switcher (`view`), with no picker. In
- * All the form shows a picker of the sources that can create, starting on the primary (or the first
- * one that can). One such source left: no picker. Null `view` (no config yet): the primary.
+ * Where Add task creates (ADR 0001): with several sources that can create, the form always shows a
+ * picker of them, starting on the source the board shows (`view`); in All, or when the shown source
+ * cannot create, on the primary (or the first one that can). One such source: no picker.
  */
 export const addSource = (
   view: SourceId | 'all' | null,
   sources: readonly SourceInfo[],
   primary: SourceId,
 ): { source: SourceId; picker: Choice[] | null } => {
-  if (view !== null && view !== 'all') return { source: view, picker: null };
   const creatable = sources.filter((s) => s.capabilities.create);
-  const source = creatable.some((s) => s.id === primary) ? primary : (creatable[0]?.id ?? primary);
+  const can = (id: SourceId | 'all' | null): id is SourceId => creatable.some((s) => s.id === id);
+  if (creatable.length === 0) return { source: view !== null && view !== 'all' ? view : primary, picker: null };
+  const source = can(view) ? view : can(primary) ? primary : creatable[0]!.id;
   return { source, picker: creatable.length > 1 ? creatable.map((s) => ({ id: s.id, label: s.label })) : null };
 };
 
