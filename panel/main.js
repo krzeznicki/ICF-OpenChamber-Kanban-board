@@ -6,6 +6,41 @@
       __defProp(target, name, { get: all[name], enumerable: true });
   };
 
+  // src/panel/optimistic.ts
+  var createPending = () => {
+    let next = 0;
+    const writes = /* @__PURE__ */ new Map();
+    return {
+      /** States a write is about to save; returns the key to settle it with. */
+      add: (states) => {
+        const key = next++;
+        writes.set(key, new Map(states));
+        return key;
+      },
+      /** The write and its reload are done (or it failed): its states are no longer drawn over the list. */
+      settle: (key) => {
+        writes.delete(key);
+      },
+      /** The listed tasks with every pending state drawn over them (the same list when none). */
+      apply: (tasks) => {
+        if (writes.size === 0) return tasks;
+        const states = /* @__PURE__ */ new Map();
+        for (const write of writes.values()) for (const [id, state2] of write) states.set(id, state2);
+        return tasks.map((t) => {
+          const state2 = states.get(t.id);
+          return state2 === void 0 || state2 === t.state ? t : { ...t, state: state2 };
+        });
+      }
+    };
+  };
+  var closingStates = (task, tasks, withChildren) => {
+    const states = /* @__PURE__ */ new Map([[task.id, "done"]]);
+    if (withChildren) {
+      for (const t of tasks) if (t.parentId === task.id && t.state !== "done") states.set(t.id, "done");
+    }
+    return states;
+  };
+
   // node_modules/@openchamber/sdk/dist/api-version.js
   var OPENCHAMBER_SDK_CHANNEL = "openchamber.sdk";
   var OPENCHAMBER_SDK_API_VERSION = 1;
@@ -59,9 +94,9 @@
         return;
       if (!target.hasAttribute("data-oc-scrolling"))
         target.setAttribute("data-oc-scrolling", "");
-      const pending = timers.get(target);
-      if (pending !== void 0)
-        clearTimeout(pending);
+      const pending2 = timers.get(target);
+      if (pending2 !== void 0)
+        clearTimeout(pending2);
       timers.set(target, setTimeout(() => {
         timers.delete(target);
         target.removeAttribute("data-oc-scrolling");
@@ -475,7 +510,7 @@
     let fileSnapshotHandler = null;
     let lastFile = null;
     let saveShortcutInstalled = false;
-    const pending = /* @__PURE__ */ new Map();
+    const pending2 = /* @__PURE__ */ new Map();
     const workspaceListeners = /* @__PURE__ */ new Map();
     const shellsListeners = /* @__PURE__ */ new Map();
     let disposed = false;
@@ -696,11 +731,11 @@
         });
         return;
       }
-      const waiter = pending.get(message2.id);
+      const waiter = pending2.get(message2.id);
       if (!waiter)
         return;
       clearTimeout(waiter.timer);
-      pending.delete(message2.id);
+      pending2.delete(message2.id);
       if (message2.ok) {
         waiter.resolve(message2.payload);
         return;
@@ -719,10 +754,10 @@
       }
       return new Promise((resolve, reject) => {
         const timer = setTimeout(() => {
-          pending.delete(message2.id);
+          pending2.delete(message2.id);
           reject(new HostRequestError("HOST_TIMEOUT", "Host did not answer in time."));
         }, timeoutMs);
-        pending.set(message2.id, { resolve, reject, timer });
+        pending2.set(message2.id, { resolve, reject, timer });
         post(message2);
       });
     };
@@ -1393,11 +1428,11 @@
         target.removeEventListener("pointerout", onPopoverPointerOut);
         target.removeEventListener("focus", onPopoverFocus);
         target.removeEventListener("blur", onPopoverBlur);
-        for (const waiter of pending.values()) {
+        for (const waiter of pending2.values()) {
           clearTimeout(waiter.timer);
           waiter.reject(new HostRequestError("HOST_UNAVAILABLE", "Host client was disposed."));
         }
-        pending.clear();
+        pending2.clear();
         readyListeners.clear();
         directoryListeners.clear();
         sessionListeners.clear();
@@ -2816,17 +2851,17 @@ ${GUEST_UI_LOOK_CSS}`;
     onWritten(next);
   };
   var createPendingMarks = () => {
-    const pending = /* @__PURE__ */ new Map();
+    const pending2 = /* @__PURE__ */ new Map();
     return {
       queue: (projectId, marks, removed, n) => {
-        const prev = pending.get(projectId);
+        const prev = pending2.get(projectId);
         const joined = prev === void 0 ? new Map(marks) : mergeArchived(marks, prev.marks, removed);
-        pending.set(projectId, { marks: joined, n });
+        pending2.set(projectId, { marks: joined, n });
         return joined;
       },
       written: (projectId, n) => {
-        const prev = pending.get(projectId);
-        if (prev !== void 0 && n >= prev.n) pending.delete(projectId);
+        const prev = pending2.get(projectId);
+        if (prev !== void 0 && n >= prev.n) pending2.delete(projectId);
       }
     };
   };
@@ -13797,6 +13832,15 @@ ${ref}`,
         refreshDetail();
       }
     };
+    const runShown = async (id, states, action) => {
+      if (deps.api() === null || moving.has(id)) return;
+      const key = deps.shown?.add(states);
+      try {
+        await run(id, action);
+      } finally {
+        if (key !== void 0) deps.shown.settle(key);
+      }
+    };
     const run = async (id, action) => {
       const api = deps.api();
       if (api === null || moving.has(id)) return;
@@ -13856,7 +13900,7 @@ ${ref}`,
         withChildren = answer === "all";
       }
       if (deps.beforeMove !== void 0 && !await deps.beforeMove(task)) return;
-      await run(task.id, (api) => api.close(task.id, withChildren));
+      await runShown(task.id, closingStates(task, deps.tasks(), withChildren), (api) => api.close(task.id, withChildren));
     };
     const apply = (task, from, move2) => {
       switch (move2.kind) {
@@ -13869,7 +13913,7 @@ ${ref}`,
         case "setState":
           void (async () => {
             if (deps.beforeMove !== void 0 && !await deps.beforeMove(task)) return;
-            await run(task.id, async (api) => {
+            await runShown(task.id, /* @__PURE__ */ new Map([[task.id, move2.state]]), async (api) => {
               await api.setState(task.id, move2.state);
               await deps.afterSetState?.(task, from);
             });
@@ -14007,7 +14051,7 @@ ${ref}`,
           const t = find(id);
           if (t === null) return;
           if (state2 === "done") void close(t, openChildren(t, deps.tasks()) > 0);
-          else void run(id, (api) => api.setState(id, state2));
+          else void runShown(id, /* @__PURE__ */ new Map([[id, state2]]), (api) => api.setState(id, state2));
           refreshDetail();
         },
         onType: (type) => void run(id, (api) => api.setType(id, type)),
@@ -14235,23 +14279,23 @@ ${ref}`,
       deps.isStarting.add(task.id);
       inFlight.add(task.id);
       let sessionId = null;
-      let pending = false;
+      let pending2 = false;
       try {
         const text3 = prompt ?? await deps.prompt(task, opts);
         const r = await deps.start(task, opts, text3);
         sessionId = r.sessionId;
-        pending = sessionId === null && r.pending === true;
+        pending2 = sessionId === null && r.pending === true;
       } catch (e) {
         deps.onError(task, e);
       } finally {
         inFlight.delete(task.id);
       }
-      if (sessionId === null && !pending) {
+      if (sessionId === null && !pending2) {
         deps.isStarting.delete(task.id);
         return "failed";
       }
       waiting.set(task.id, { sessionId, at: now() });
-      return pending ? "pending" : "started";
+      return pending2 ? "pending" : "started";
     };
     const settle = (known, taskKnown) => {
       let changed = false;
@@ -14692,9 +14736,9 @@ ${note}` : note;
         await enqueue(task, opts, ctx);
         return;
       }
-      const pending = launcher.launch(task, opts);
+      const pending2 = launcher.launch(task, opts);
       deps.draw();
-      report(task, await pending);
+      report(task, await pending2);
       deps.draw();
     };
     const leaveQueue = async (taskId) => {
@@ -16213,6 +16257,14 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     if (outcome.kind === "board") void load();
     else showNotice(outcome.notice);
   };
+  var listedTasks = null;
+  var pending = createPending();
+  var showPending = () => {
+    if (state.tasks === null || listedTasks === null) return;
+    state.tasks = pending.apply(listedTasks);
+    draw();
+    editor.refresh();
+  };
   var load = async () => {
     const p = project();
     const mine = ++generation;
@@ -16283,7 +16335,8 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
         if (pruned.length !== ranked.length && orderSync.trusts(orderToken)) setOrder(p.id, pruned);
       }
       state.config = result.config;
-      state.tasks = tasks;
+      listedTasks = tasks;
+      state.tasks = pending.apply(tasks);
       state.sourceErrors = errors2;
       state.view = "board";
       draw();
@@ -16832,6 +16885,17 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
       columnOf: (id) => state.columns.get(id) ?? null,
       reload: load,
       redraw: draw,
+      shown: {
+        add: (states) => {
+          const key = pending.add(states);
+          showPending();
+          return key;
+        },
+        settle: (key) => {
+          pending.settle(key);
+          showPending();
+        }
+      },
       onStart: (task) => void starter.onStart(task),
       lists,
       beforeMove: (task) => starter.leaveQueue(task.id),

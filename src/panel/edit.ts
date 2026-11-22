@@ -1,6 +1,7 @@
 // The board's write side, kept out of main.ts: drag and drop, the task modal, the Add task modal
 // and the in-panel confirms. Every write goes through `run`, which marks the card busy (further
-// drags of it are ignored), reports a failure in a toast and reloads the board afterwards.
+// drags of it are ignored), reports a failure in a toast and reloads the board afterwards. A state
+// change (a drop, Move to, the State select) is drawn at once (`runShown`, optimistic.ts).
 import type { HostClient } from '@openchamber/sdk';
 import { errorMessage, type NewTask, type SourceId, type Task, type TaskState } from '../core/types.ts';
 import {
@@ -22,6 +23,7 @@ import { resolveStart, type CardOptions, type Sections, type Settings } from './
 import { askedOf, type Suggester } from './suggest.ts';
 import { COLUMNS, type Column, type SessionLookup, type SessionTarget } from './columns.ts';
 import { openChildren, planMove, taskTypes, type Move } from './moves.ts';
+import { closingStates, type PendingStates } from './optimistic.ts';
 import { openAddModal, type AddModalHandle, type AddModalStart, type AddResult } from './ui/addModal.ts';
 import type { Board } from './ui/board.ts';
 import { askChoice } from './ui/confirm.ts';
@@ -54,6 +56,11 @@ export type EditorDeps = {
   reload: () => Promise<void>;
   /** Redraw from the current state (busy marks changed). */
   redraw: () => void;
+  /**
+   * Moves drawn before their write ends (optimistic.ts): `add` shows the new states at once and
+   * returns a key; `settle` stops drawing them once the write and its reload are done or failed.
+   */
+  shown?: { add: (states: PendingStates) => number; settle: (key: number) => void };
   /** Dropping on In Progress (also "Move to In Progress" in the detail): starts an agent. */
   onStart: (task: Task) => void;
   /** The model picker's list (loaded once per panel session). */
@@ -292,6 +299,20 @@ export const createEditor = (deps: EditorDeps) => {
     }
   };
 
+  /**
+   * A state change shown at once (the card sits in its new column while the write and the reload
+   * from the source run in the background); a failed write is a toast and the reload puts it back.
+   */
+  const runShown = async (id: string, states: PendingStates, action: (api: Api) => Promise<unknown>): Promise<void> => {
+    if (deps.api() === null || moving.has(id)) return;
+    const key = deps.shown?.add(states);
+    try {
+      await run(id, action);
+    } finally {
+      if (key !== undefined) deps.shown!.settle(key);
+    }
+  };
+
   /** A write whose failure is a toast. */
   const run = async (id: string, action: (api: Api) => Promise<unknown>): Promise<void> => {
     const api = deps.api();
@@ -379,7 +400,7 @@ export const createEditor = (deps: EditorDeps) => {
       withChildren = answer === 'all';
     }
     if (deps.beforeMove !== undefined && !(await deps.beforeMove(task))) return;
-    await run(task.id, (api) => api.close(task.id, withChildren));
+    await runShown(task.id, closingStates(task, deps.tasks(), withChildren), (api) => api.close(task.id, withChildren));
   };
 
   const apply = (task: Task, from: Column, move: Move): void => {
@@ -393,7 +414,7 @@ export const createEditor = (deps: EditorDeps) => {
       case 'setState':
         void (async () => {
           if (deps.beforeMove !== undefined && !(await deps.beforeMove(task))) return;
-          await run(task.id, async (api) => {
+          await runShown(task.id, new Map([[task.id, move.state]]), async (api) => {
             await api.setState(task.id, move.state);
             await deps.afterSetState?.(task, from);
           });
@@ -546,7 +567,7 @@ export const createEditor = (deps: EditorDeps) => {
         const t = find(id);
         if (t === null) return;
         if (state === 'done') void close(t, openChildren(t, deps.tasks()) > 0);
-        else void run(id, (api) => api.setState(id, state));
+        else void runShown(id, new Map([[id, state]]), (api) => api.setState(id, state));
         refreshDetail(); // the select snaps back until the reload shows the saved state
       },
       onType: (type) => void run(id, (api) => api.setType(id, type)),

@@ -8,6 +8,7 @@
 // (summaries.ts) are read or generated for the shown cards after each load. "Archive done"
 // (archive.ts) hides done tasks from the board through the extension's storage only, and so is
 // the manual card order (order.ts: a card dragged up or down its column).
+import { createPending } from './optimistic.ts';
 import { connectHost } from '@openchamber/sdk';
 import type { GuestProject, GuestSessionRecord, HostReadyContext } from '@openchamber/sdk';
 import { applyHostReady } from '@openchamber/sdk/ui';
@@ -525,6 +526,17 @@ const setup = async (api: Api, choice: TrackerChoice): Promise<void> => {
   else showNotice(outcome.notice);
 };
 
+/** The tasks as the sources last listed them; state.tasks is this with the pending moves over it. */
+let listedTasks: Task[] | null = null;
+const pending = createPending();
+/** Redraws with the pending moves over the last list (optimistic.ts): a move shows before its write ends. */
+const showPending = (): void => {
+  if (state.tasks === null || listedTasks === null) return;
+  state.tasks = pending.apply(listedTasks);
+  draw();
+  editor.refresh();
+};
+
 const load = async (): Promise<void> => {
   const p = project();
   const mine = ++generation;
@@ -608,7 +620,9 @@ const load = async (): Promise<void> => {
       if (pruned.length !== ranked.length && orderSync.trusts(orderToken)) setOrder(p.id, pruned);
     }
     state.config = result.config;
-    state.tasks = tasks;
+    listedTasks = tasks;
+    // A move whose write or reload is still in flight stays drawn where it was dropped (optimistic.ts).
+    state.tasks = pending.apply(tasks);
     state.sourceErrors = errors;
     state.view = 'board';
     draw();
@@ -1329,6 +1343,17 @@ const start = (ctx: HostReadyContext): void => {
     columnOf: (id) => state.columns.get(id) ?? null,
     reload: load,
     redraw: draw,
+    shown: {
+      add: (states) => {
+        const key = pending.add(states);
+        showPending();
+        return key;
+      },
+      settle: (key) => {
+        pending.settle(key);
+        showPending();
+      },
+    },
     onStart: (task) => void starter.onStart(task),
     lists,
     beforeMove: (task) => starter.leaveQueue(task.id),

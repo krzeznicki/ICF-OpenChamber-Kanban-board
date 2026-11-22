@@ -12,6 +12,7 @@
   - **Publish to GitHub** on a local task (in the task modal, on the right of the Move to row): creates the issue (sub-tasks as sub-issues, state label carried over), then closes the local files with a link to it. On a partial failure it names what was created and leaves the local files open.
   - The task modal links a GitHub task to its issue (**Open on GitHub ↗**) right under its title, instead of inside the collapsed Settings section.
   - A session started from a card gets the tracker instructions of that task's source. The `icf-kanban-*` skills describe `--source` and the parent's-source rule.
+- A move (a drop, Move to, the State select, closing) shows at once: the card sits in its new column while the write and the reload from the source (several `gh` calls for GitHub) run in the background (`optimistic.ts`). A reload landing meanwhile does not snap it back; a failed write is a toast and the card goes back.
 
 ## 0.4.2
 
