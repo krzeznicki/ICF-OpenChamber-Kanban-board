@@ -13032,6 +13032,7 @@ ${ref}`,
           }
         }).dispose
       );
+      quick.style.setProperty("--kb-quick-cols", String(fields.childElementCount));
       if (m.moves.length > 0 || m.publish) {
         const bottomRow = el5("div", "kb-quick-row");
         if (m.moves.length > 0) {
@@ -15702,8 +15703,16 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
 .kb-quick-fields { display: flex; flex-wrap: wrap; gap: 0.5rem; }
 .kb-quick-fields > .kb-field { flex: 1 1 8.5rem; }
 .kb-quick-moves { gap: 0.375rem; }
-.kb-quick-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.5rem; }
-.kb-quick-publish { margin-left: auto; }
+.kb-quick-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
+/* A panel wide enough for the fields side by side (a media query: container queries would make
+   .kb-quick the containing block of the selects' popovers): fields and the row below share their columns, so Publish
+   to GitHub (the last cell) starts exactly under Parent (the last field). Narrower, both wrap. */
+@media (min-width: 30rem) {
+  .kb-quick-fields, .kb-quick-row { display: grid; grid-template-columns: repeat(var(--kb-quick-cols, 3), minmax(0, 1fr)); gap: 0.5rem; }
+  .kb-quick-row > .kb-quick-moves { grid-column: 1 / -2; }
+  .kb-quick-row > .kb-quick-moves:only-child { grid-column: 1 / -1; }
+  .kb-quick-row > .kb-quick-publish { grid-column: -2 / -1; }
+}
 .kb-section { border-bottom: 1px solid var(--oc-border); }
 .kb-section[hidden] { display: none; }
 .kb-section-head { cursor: pointer; font-weight: 600; font-size: 0.95em; padding: 0.75rem 0; user-select: none; }

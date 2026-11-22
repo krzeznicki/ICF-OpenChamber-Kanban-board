@@ -567,6 +567,9 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
       }).dispose,
     );
 
+    // The fields and the row under them share one column grid (CSS), so "Publish to GitHub" starts
+    // exactly under Parent, the last field.
+    quick.style.setProperty('--kb-quick-cols', String(fields.childElementCount));
     // One row under the fields: "Move to" on the left, "Publish to GitHub" on the right, under Parent
     // (taskPublish.ts canPublish).
     if (m.moves.length > 0 || m.publish) {
