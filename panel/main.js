@@ -6,6 +6,41 @@
       __defProp(target, name, { get: all[name], enumerable: true });
   };
 
+  // src/panel/optimistic.ts
+  var createPending = () => {
+    let next = 0;
+    const writes = /* @__PURE__ */ new Map();
+    return {
+      /** States a write is about to save; returns the key to settle it with. */
+      add: (states) => {
+        const key = next++;
+        writes.set(key, new Map(states));
+        return key;
+      },
+      /** The write and its reload are done (or it failed): its states are no longer drawn over the list. */
+      settle: (key) => {
+        writes.delete(key);
+      },
+      /** The listed tasks with every pending state drawn over them (the same list when none). */
+      apply: (tasks) => {
+        if (writes.size === 0) return tasks;
+        const states = /* @__PURE__ */ new Map();
+        for (const write of writes.values()) for (const [id, state2] of write) states.set(id, state2);
+        return tasks.map((t) => {
+          const state2 = states.get(t.id);
+          return state2 === void 0 || state2 === t.state ? t : { ...t, state: state2 };
+        });
+      }
+    };
+  };
+  var closingStates = (task, tasks, withChildren) => {
+    const states = /* @__PURE__ */ new Map([[task.id, "done"]]);
+    if (withChildren) {
+      for (const t of tasks) if (t.parentId === task.id && t.state !== "done") states.set(t.id, "done");
+    }
+    return states;
+  };
+
   // node_modules/@openchamber/sdk/dist/api-version.js
   var OPENCHAMBER_SDK_CHANNEL = "openchamber.sdk";
   var OPENCHAMBER_SDK_API_VERSION = 1;
@@ -59,9 +94,9 @@
         return;
       if (!target.hasAttribute("data-oc-scrolling"))
         target.setAttribute("data-oc-scrolling", "");
-      const pending = timers.get(target);
-      if (pending !== void 0)
-        clearTimeout(pending);
+      const pending2 = timers.get(target);
+      if (pending2 !== void 0)
+        clearTimeout(pending2);
       timers.set(target, setTimeout(() => {
         timers.delete(target);
         target.removeAttribute("data-oc-scrolling");
@@ -475,7 +510,7 @@
     let fileSnapshotHandler = null;
     let lastFile = null;
     let saveShortcutInstalled = false;
-    const pending = /* @__PURE__ */ new Map();
+    const pending2 = /* @__PURE__ */ new Map();
     const workspaceListeners = /* @__PURE__ */ new Map();
     const shellsListeners = /* @__PURE__ */ new Map();
     let disposed = false;
@@ -696,11 +731,11 @@
         });
         return;
       }
-      const waiter = pending.get(message2.id);
+      const waiter = pending2.get(message2.id);
       if (!waiter)
         return;
       clearTimeout(waiter.timer);
-      pending.delete(message2.id);
+      pending2.delete(message2.id);
       if (message2.ok) {
         waiter.resolve(message2.payload);
         return;
@@ -719,10 +754,10 @@
       }
       return new Promise((resolve, reject) => {
         const timer = setTimeout(() => {
-          pending.delete(message2.id);
+          pending2.delete(message2.id);
           reject(new HostRequestError("HOST_TIMEOUT", "Host did not answer in time."));
         }, timeoutMs);
-        pending.set(message2.id, { resolve, reject, timer });
+        pending2.set(message2.id, { resolve, reject, timer });
         post(message2);
       });
     };
@@ -1393,11 +1428,11 @@
         target.removeEventListener("pointerout", onPopoverPointerOut);
         target.removeEventListener("focus", onPopoverFocus);
         target.removeEventListener("blur", onPopoverBlur);
-        for (const waiter of pending.values()) {
+        for (const waiter of pending2.values()) {
           clearTimeout(waiter.timer);
           waiter.reject(new HostRequestError("HOST_UNAVAILABLE", "Host client was disposed."));
         }
-        pending.clear();
+        pending2.clear();
         readyListeners.clear();
         directoryListeners.clear();
         sessionListeners.clear();
@@ -2743,6 +2778,12 @@ ${GUEST_UI_LOOK_CSS}`;
   var VARIANT = toVariant(false ? void 0 : "prod");
   var panelId = (variant) => variant === "test" ? "icf-kanban-test" : "icf-kanban";
 
+  // src/core/types.ts
+  var TASK_STATES = ["needs-triage", "needs-info", "ready-for-agent", "ready-for-human", "wontfix", "done"];
+  var SOURCE_IDS = ["local", "github"];
+  var isSourceId = (id) => SOURCE_IDS.includes(id);
+  var errorMessage = (e) => e instanceof Error ? e.message : String(e);
+
   // src/panel/archive.ts
   var ARCHIVE_MAX = 400;
   var record = (v2) => typeof v2 === "object" && v2 !== null && !Array.isArray(v2) ? v2 : null;
@@ -2771,9 +2812,9 @@ ${GUEST_UI_LOOK_CSS}`;
     next.delete(id);
     return next;
   };
-  var reconcileArchived = (marks, tasks) => {
+  var reconcileArchived = (marks, tasks, unlisted = () => false) => {
     const done = new Set(tasks.filter((t) => t.state === "done").map((t) => t.id));
-    const next = new Map([...marks].filter(([id]) => done.has(id)));
+    const next = new Map([...marks].filter(([id]) => done.has(id) || unlisted(id)));
     return { marks: next, changed: next.size !== marks.size };
   };
   var archivedShown = (tasks, marks) => tasks.filter((t) => t.state === "done" && marks.has(t.id)).length;
@@ -2805,29 +2846,40 @@ ${GUEST_UI_LOOK_CSS}`;
   var archiveWriteJob = (snap, io, onWritten) => async () => {
     const stored2 = await io.load().catch(() => null);
     const merged = stored2 === null ? new Map(snap.marks) : mergeArchived(snap.marks, stored2, snap.removed);
-    const next = snap.tasks === null ? merged : reconcileArchived(merged, snap.tasks).marks;
+    const next = snap.tasks === null ? merged : reconcileArchived(merged, snap.tasks, snap.unlisted).marks;
     await io.save(next);
     onWritten(next);
   };
   var createPendingMarks = () => {
-    const pending = /* @__PURE__ */ new Map();
+    const pending2 = /* @__PURE__ */ new Map();
     return {
       queue: (projectId, marks, removed, n) => {
-        const prev = pending.get(projectId);
+        const prev = pending2.get(projectId);
         const joined = prev === void 0 ? new Map(marks) : mergeArchived(marks, prev.marks, removed);
-        pending.set(projectId, { marks: joined, n });
+        pending2.set(projectId, { marks: joined, n });
         return joined;
       },
       written: (projectId, n) => {
-        const prev = pending.get(projectId);
-        if (prev !== void 0 && n >= prev.n) pending.delete(projectId);
+        const prev = pending2.get(projectId);
+        if (prev !== void 0 && n >= prev.n) pending2.delete(projectId);
       }
     };
   };
 
   // src/panel/clearArchive.ts
   var plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
-  var clearArchivePlan = (tracker, tasks, marks) => {
+  var clearArchivePlan = (primary2, tasks, marks) => {
+    const plan = { deletes: [], skipped: [], count: 0, sources: [] };
+    for (const kind of /* @__PURE__ */ new Set([primary2, ...tasks.map((t) => t.source)])) {
+      const part = planFor(kind, tasks.filter((t) => t.source === kind), marks);
+      plan.deletes.push(...part.deletes);
+      plan.skipped.push(...part.skipped);
+      plan.count += part.count;
+      if (part.deletes.length > 0) plan.sources.push(kind);
+    }
+    return plan;
+  };
+  var planFor = (tracker, tasks, marks) => {
     const archived2 = tasks.filter((t) => isArchived(t, marks));
     const ids = new Set(archived2.map((t) => t.id));
     const children = /* @__PURE__ */ new Map();
@@ -2846,9 +2898,13 @@ ${GUEST_UI_LOOK_CSS}`;
     const ordered = [...archived2.filter((t) => !hasChildren(t.id)), ...archived2.filter((t) => hasChildren(t.id))];
     return { deletes: ordered.map((t) => ({ id: t.id, withChildren: false })), skipped: [], count: archived2.length };
   };
-  var clearConfirm = (tracker, plan) => {
+  var WHAT_GOES = {
+    local: "Their files in .scratch/ are deleted; a feature goes with its whole folder, including done sub-tasks older than 30 days the board no longer lists.",
+    github: "Their issues are deleted on GitHub (only repository admins can delete issues); sub-issues not archived stay as top-level issues."
+  };
+  var clearConfirm = (plan) => {
     if (plan.deletes.length === 0) return null;
-    const where = tracker === "local" ? "Their files in .scratch/ are deleted; a feature goes with its whole folder, including done sub-tasks older than 30 days the board no longer lists." : "Their issues are deleted on GitHub (only repository admins can delete issues); sub-issues not archived stay as top-level issues.";
+    const where = plan.sources.map((source2) => WHAT_GOES[source2]).join(" ");
     const k = plan.skipped.length;
     const kept = k > 0 ? ` ${plural(k, "archived feature")} with sub-tasks still on the board stay${k === 1 ? "s" : ""}.` : "";
     return { title: `Delete ${plural(plan.count, "archived task")} for good?`, body: `${where}${kept} This cannot be undone from the board.` };
@@ -2908,9 +2964,18 @@ ${GUEST_UI_LOOK_CSS}`;
       directory,
       readConfig: () => call("POST", "/config/read"),
       initConfig: (tracker) => call("POST", "/config/init", { tracker }).then((r) => r.config),
+      /**
+       * Settings → Sources: adds or removes a source or makes one primary (rewrites issue-tracker.md).
+       * `{confirm}`: the change would replace a template edited by hand; send it again with `force`.
+       */
+      changeSources: (change, force) => call("POST", "/config/sources", { change, force }),
       /** The github.com remote of the project (origin first), or null. */
       detect: () => call("POST", "/config/detect").then((r) => r.remote),
-      list: () => call("POST", "/tasks/list").then((r) => r.tasks),
+      /**
+       * The tasks of every source that listed and the errors of those that failed (sourceBanner.ts's
+       * listedBoard tells which ids belong to a failed one). When every source fails the call fails.
+       */
+      list: () => call("POST", "/tasks/list"),
       get: (id) => call("POST", "/tasks/get", { id }).then((r) => r.task),
       create: (input) => call("POST", "/tasks/create", { input }).then((r) => r.task),
       setState: (id, state2) => call("POST", "/tasks/state", { id, state: state2 }).then((r) => r.task),
@@ -2926,6 +2991,11 @@ ${GUEST_UI_LOOK_CSS}`;
       remove: (id, withChildren = false) => call("POST", "/tasks/delete", { id, withChildren }).then((r) => r.deleted),
       /** Unlinks a sub-task from its parent; like setParent the returned task can have a new id (local: it became a feature). */
       removeParent: (id) => call("POST", "/tasks/unparent", { id }).then((r) => r.task),
+      /**
+       * Publishes a local task to GitHub (core/publish.ts): its issue and a feature's tickets as
+       * sub-issues; the local files are then closed. A half-done publish fails with what was created.
+       */
+      publish: (id) => call("POST", "/tasks/publish", { id, to: "github" }),
       close: (id, withChildren = false) => call("POST", "/tasks/close", { id, withChildren }).then((r) => r.tasks),
       /**
        * Which of `candidates` (project directories) the git worktree `directory` was made from, or
@@ -2954,6 +3024,29 @@ ${GUEST_UI_LOOK_CSS}`;
     };
   };
 
+  // src/panel/sourceBanner.ts
+  var sourceBanners = (errors2, sources, warnings = []) => [
+    ...errors2.map((e) => {
+      const label = sources.find((s) => s.id === e.source)?.label ?? e.source;
+      return e.availability === "needs-login" ? { source: e.source, tone: "warning", title: `${label} needs a login`, body: `Log in, then try again: ${e.message}`, action: "Try again" } : { source: e.source, tone: "warning", title: `${label} unavailable`, body: e.message, action: "Try again" };
+    }),
+    ...warnings.map((w) => ({ source: "", tone: "warning", title: "A source in issue-tracker.md was skipped", body: w, action: "Try again" }))
+  ];
+  var listedBoard = (r, seen = () => void 0) => {
+    const errors2 = r.errors ?? [];
+    const failed = new Set(errors2.map((e) => e.source));
+    const listed2 = new Set(r.tasks.map((t) => t.id));
+    return {
+      tasks: r.tasks,
+      errors: errors2,
+      unlisted: (id) => {
+        if (failed.size === 0 || listed2.has(id)) return false;
+        const source2 = seen(id);
+        return source2 === void 0 || failed.has(source2);
+      }
+    };
+  };
+
   // src/panel/order.ts
   var applyOrder = (tasks, order2) => {
     const rank = new Map(order2.map((id, i) => [id, i]));
@@ -2973,9 +3066,9 @@ ${GUEST_UI_LOOK_CSS}`;
   var ORDER_MAX = 500;
   var parseOrder = (raw) => Array.isArray(raw) ? [...new Set(raw.filter((id) => typeof id === "string" && id !== ""))].slice(0, ORDER_MAX) : [];
   var renameInOrder = (order2, from, to) => order2.includes(from) ? order2.filter((id) => id !== to).map((id) => id === from ? to : id) : [...order2];
-  var pruneOrder = (order2, tasks) => {
+  var pruneOrder = (order2, tasks, unlisted = () => false) => {
     const listed2 = new Set(tasks.map((t) => t.id));
-    return order2.filter((id) => listed2.has(id));
+    return order2.filter((id) => listed2.has(id) || unlisted(id));
   };
   var forgetInOrder = (order2, ids) => {
     const gone = new Set(ids);
@@ -3135,6 +3228,7 @@ ${GUEST_UI_LOOK_CSS}`;
   var canLinkUnder = (tracker, child, parent, tasks) => {
     if (child.id === parent.id || child.state === "done" || parent.state === "done") return false;
     if (child.parentId === parent.id) return false;
+    if (child.source !== parent.source) return false;
     if (tracker === "local") return parent.kind === "parent" && movableLocally(child, tasks);
     return !isOrAbove(child.id, parent.parentId, tasks);
   };
@@ -3191,9 +3285,30 @@ ${GUEST_UI_LOOK_CSS}`;
     body: "",
     subtasks: [],
     existing: [],
-    start: {}
+    start: {},
+    source: ""
   });
-  var isDirty = (draft, initial = emptyDraft()) => draft.title.trim() !== "" || draft.body.trim() !== "" || draft.subtasks.some((row) => row.trim() !== "") || draft.type !== initial.type || draft.parentId !== initial.parentId || draft.state !== initial.state || draft.blockedBy.length > 0 || draft.existing.length > 0 || Object.values(draft.start).some((v2) => v2 !== void 0);
+  var isDirty = (draft, initial = emptyDraft()) => draft.title.trim() !== "" || draft.body.trim() !== "" || draft.subtasks.some((row) => row.trim() !== "") || draft.type !== initial.type || draft.source !== initial.source || draft.parentId !== initial.parentId || draft.state !== initial.state || draft.blockedBy.length > 0 || draft.existing.length > 0 || Object.values(draft.start).some((v2) => v2 !== void 0);
+  var addSource = (view, sources, primary2) => {
+    const creatable = sources.filter((s) => s.capabilities.create);
+    const can = (id) => creatable.some((s) => s.id === id);
+    if (creatable.length === 0) return { source: view !== null && view !== "all" ? view : primary2, picker: null };
+    const source2 = can(view) ? view : can(primary2) ? primary2 : creatable[0].id;
+    return { source: source2, picker: creatable.length > 1 ? creatable.map((s) => ({ id: s.id, label: s.label })) : null };
+  };
+  var sourceTasks = (tasks, source2) => tasks.filter((t) => t.source === source2);
+  var withSource = (d, source2, tasks, capabilities) => {
+    const own2 = new Set(sourceTasks(tasks, source2).map((t) => t.id));
+    const subtasks = capabilities.subtasks;
+    return {
+      ...d,
+      source: source2,
+      parentId: subtasks && own2.has(d.parentId) ? d.parentId : "",
+      blockedBy: capabilities.blockedBy ? d.blockedBy.filter((id) => own2.has(id)) : [],
+      existing: subtasks ? d.existing.filter((id) => own2.has(id)) : [],
+      subtasks: subtasks ? d.subtasks : []
+    };
+  };
   var CREATE_STATES = ["needs-triage", "needs-info", "ready-for-agent", "ready-for-human"];
   var choice = (t) => ({ id: t.id, label: t.title, hint: t.id });
   var parentChoices = (tasks) => tasks.filter((t) => t.kind === "parent" && t.state !== "done").map(choice);
@@ -3228,11 +3343,10 @@ ${GUEST_UI_LOOK_CSS}`;
       state: d.state === MODEL_PICK ? "needs-triage" : d.state,
       ...type !== null ? { type } : {},
       ...body !== "" ? { body } : {},
-      ...d.parentId !== "" ? { parentId: d.parentId } : {},
+      ...d.parentId !== "" ? { parentId: d.parentId } : d.source !== "" ? { source: d.source } : {},
       ...blockers.length > 0 ? { blockedBy: [...blockers] } : {}
     };
   };
-  var messageOf = (e) => e instanceof Error ? e.message : String(e);
   var createWithSubtasks = async (create, input, subtasks, link2) => {
     const task = await create(input);
     const failed = [];
@@ -3240,14 +3354,14 @@ ${GUEST_UI_LOOK_CSS}`;
       try {
         await create({ title, state: "needs-triage", parentId: task.id });
       } catch (e) {
-        failed.push({ title, message: messageOf(e), kind: "create" });
+        failed.push({ title, message: errorMessage(e), kind: "create" });
       }
     }
     for (const c of link2?.existing ?? []) {
       try {
         await link2.setParent(c.id, task.id);
       } catch (e) {
-        failed.push({ title: c.label, message: messageOf(e), kind: "link" });
+        failed.push({ title: c.label, message: errorMessage(e), kind: "link" });
       }
     }
     return { task, failed };
@@ -4389,6 +4503,8 @@ ${ref}`,
     archivedTasks: (projectId) => fit(`archivedTasks:${projectId}`),
     /** Per project: the manual card order, task ids (order.ts). */
     taskOrder: (projectId) => fit(`taskOrder:${projectId}`),
+    /** Per project: the source switcher's choice, `all` or a source id (sourceView.ts currentSourceView checks it). */
+    sourceView: (projectId) => fit(`sourceView:${projectId}`),
     /** Which sections of the task modal are open (one entry for every task and project). */
     detailSections: "detail-sections",
     /** The project the board last showed by the host's directory or the user's pick (projectFollow.ts): a fresh board that cannot place its directory opens it. */
@@ -4487,6 +4603,12 @@ ${ref}`,
       saveArchivedTasks: (projectId, marks) => put(STORAGE_KEYS.archivedTasks(projectId), serializeArchived(marks), marks.size === 0),
       loadOrder: async (projectId) => parseOrder(await storage.get(STORAGE_KEYS.taskOrder(projectId))),
       saveOrder: (projectId, order2) => put(STORAGE_KEYS.taskOrder(projectId), order2.slice(0, ORDER_MAX), order2.length === 0),
+      /** The stored source switcher choice as text, or null; whether the project still has it is sourceView.ts's call. */
+      loadSourceView: async (projectId) => {
+        const v2 = await storage.get(STORAGE_KEYS.sourceView(projectId));
+        return typeof v2 === "string" && v2 !== "" ? v2 : null;
+      },
+      saveSourceView: (projectId, view) => storage.set(STORAGE_KEYS.sourceView(projectId), view),
       loadLastProject: async () => {
         const v2 = await storage.get(STORAGE_KEYS.lastProject);
         return typeof v2 === "string" && v2 !== "" ? v2 : null;
@@ -4754,6 +4876,9 @@ ${ref}`,
     for (const t of tasks) if (t.type !== null && t.type.trim() !== "" && !base2.includes(t.type)) used.add(t.type);
     return [...base2, ...[...used].sort()];
   };
+
+  // src/panel/sources.ts
+  var sourceOr = (source2, fallback) => isSourceId(source2) ? source2 : fallback;
 
   // src/panel/ui/closeButton.ts
   var mountCloseButton = (slot, onClick) => {
@@ -5073,6 +5198,22 @@ ${ref}`,
         layers.length = 0;
       }
     };
+  };
+
+  // src/panel/sourceSettings.ts
+  var sourcesView = (config2) => ({
+    rows: config2.sources.map((s) => {
+      const primary2 = s.id === config2.primary;
+      return { id: s.id, label: s.label, primary: primary2, canRemove: !primary2, canMakePrimary: !primary2 };
+    }),
+    addable: config2.known.filter((k) => !config2.sources.some((s) => s.id === k.id)).map((k) => ({ id: k.id, label: k.label }))
+  });
+  var changeSource = async (service, change, ask) => {
+    const first = await service.changeSources(change, false);
+    if ("config" in first) return first.config;
+    if (!await ask(first.confirm)) return null;
+    const forced = await service.changeSources(change, true);
+    return "config" in forced ? forced.config : null;
   };
 
   // src/panel/ui/startTarget.ts
@@ -5803,6 +5944,43 @@ ${ref}`,
       }).dispose
     );
   };
+  var drawSources = (body, disposers, config2, apply) => {
+    const view = sourcesView(config2);
+    const list2 = el2("section", "kb-settings-section");
+    list2.append(el2("h3", "kb-settings-heading", "Sources"));
+    list2.append(
+      el2(
+        "p",
+        "kb-settings-hint",
+        "Where the board reads tasks from. New tasks go to the primary source unless you pick another. Changes rewrite docs/agents/issue-tracker.md; removing a source only hides its tasks, its files or issues stay."
+      )
+    );
+    for (const r of view.rows) {
+      const row = el2("div", "kb-keys-row");
+      row.append(el2("span", "kb-keys-action", r.label));
+      row.append(el2("span", "kb-keys-key kb-muted", r.primary ? "Primary" : ""));
+      const actions = el2("span", "kb-keys-buttons");
+      row.append(actions);
+      if (r.canMakePrimary) {
+        disposers.push(mountButton(actions, { label: "Make primary", variant: "ghost", size: "xs", onClick: () => apply({ primary: r.id }) }).dispose);
+      }
+      if (r.canRemove) {
+        disposers.push(mountButton(actions, { label: "Remove", variant: "ghost", size: "xs", onClick: () => apply({ remove: r.id }) }).dispose);
+      }
+      list2.append(row);
+    }
+    body.append(list2);
+    if (view.addable.length === 0) return;
+    const add2 = el2("section", "kb-settings-section");
+    add2.append(el2("h3", "kb-settings-heading", "Add a source"));
+    const buttons = el2("div", "kb-keys-buttons");
+    buttons.style.justifyContent = "flex-start";
+    for (const a of view.addable) {
+      disposers.push(mountButton(buttons, { label: `Add ${a.label}`, variant: "outline", size: "xs", onClick: () => apply({ add: a.id }) }).dispose);
+    }
+    add2.append(buttons);
+    body.append(add2);
+  };
   var openSettings = (initial, callbacks) => {
     const backdrop = el2("div", "kb-backdrop");
     const sheet = el2("aside", "kb-sheet kb-settings");
@@ -5885,6 +6063,26 @@ ${ref}`,
             }
           });
         }
+      } else if (m.tab === "sources") {
+        const config2 = m.sources ?? null;
+        const onSources = callbacks.onSources;
+        if (config2 === null || onSources === void 0) {
+          disposers.push(mountEmpty(body, { title: "No project", body: "Open a project with a board to change its sources." }).dispose);
+        } else {
+          let busy = false;
+          drawSources(body, disposers, config2, (change) => {
+            if (busy) return;
+            busy = true;
+            body.setAttribute("aria-busy", "true");
+            void onSources(change).then((next) => {
+              busy = false;
+              body.removeAttribute("aria-busy");
+              if (next === null || m.tab !== "sources") return;
+              m.sources = next;
+              draw2();
+            });
+          });
+        }
       } else {
         const shown = m.editSet !== void 0 && m.editSet !== null && sets.some((x) => x.id === m.editSet) ? m.editSet : projectSet;
         drawPresets(
@@ -5904,7 +6102,8 @@ ${ref}`,
       items: [
         { id: "global", label: "Global" },
         { id: "project", label: "This project" },
-        { id: "presets", label: "Presets" }
+        { id: "presets", label: "Presets" },
+        { id: "sources", label: "Sources" }
       ],
       activeId: m.tab,
       onChange: (id) => {
@@ -6040,9 +6239,34 @@ ${ref}`,
     if (text3 !== void 0) node.textContent = text3;
     return node;
   };
+  var COPY = {
+    local: {
+      noParent: "None (new feature)",
+      noBlockersTopLevel: "A new feature has no blockers; pick a parent to choose tickets of that feature.",
+      noBlockers: "That feature has no open tickets.",
+      newSubtasks: "Created as tickets of the new feature, in this order.",
+      noExisting: "No open tickets or features without tickets to move.",
+      existingSubtasks: "Moved into the new feature as its tickets once it is created."
+    },
+    github: {
+      noParent: "None",
+      noBlockersTopLevel: "No open issues.",
+      noBlockers: "No open issues.",
+      newSubtasks: "Created as sub-issues of the new issue, in this order.",
+      noExisting: "No open issues.",
+      existingSubtasks: "Linked as sub-issues of the new issue once it is created."
+    }
+  };
   var openAddModal = (model, callbacks) => {
     const d = emptyDraft(model.suggest);
     if (!model.suggest) d.type = model.types.includes("enhancement") ? "enhancement" : NONE2;
+    d.source = model.source.source;
+    const ALL_CAPS = { create: true, subtasks: true, blockedBy: true, claim: true, delete: true };
+    const caps = () => model.sources.find((s) => s.id === d.source)?.capabilities ?? ALL_CAPS;
+    const kind = () => sourceOr(d.source, model.primary);
+    const tasks = () => sourceTasks(model.tasks, d.source);
+    const copy = () => COPY[kind()];
+    const parentOptions = () => [{ id: NONE2, label: copy().noParent }, ...parentChoices(tasks())];
     const types = model.types.filter((t) => t !== MODEL_PICK);
     const pick = model.suggest ? [{ id: MODEL_PICK, label: "Let the model pick", hint: "Small Model, after the task is created" }] : [];
     const initial = { ...d };
@@ -6090,7 +6314,9 @@ ${ref}`,
     const stateSlot = el3("div", "kb-field");
     row1.append(typeSlot, stateSlot);
     const parentSlot = part("kb-fields");
+    const sourceCell = el3("div", "kb-field");
     const parentCell = el3("div", "kb-field");
+    if (model.source.picker !== null) parentSlot.append(sourceCell);
     parentSlot.append(parentCell);
     const blockersBox = part("kb-sheet-part kb-add-group");
     const bodySlot = part("kb-add-body");
@@ -6134,11 +6360,25 @@ ${ref}`,
         stateSelect.update({ value: id });
       }
     });
+    const sourceSelect = model.source.picker === null ? null : mountSelect(sourceCell, {
+      label: "Source",
+      value: d.source,
+      options: model.source.picker,
+      onChange: (id) => {
+        Object.assign(d, withSource(d, id, model.tasks, model.sources.find((s) => s.id === id)?.capabilities ?? ALL_CAPS));
+        sourceSelect?.update({ value: id });
+        drawParent();
+        drawBlockers();
+        drawSubtasks();
+        drawExisting();
+        drawStart();
+      }
+    });
     const parentSelect = mountSelect(parentCell, {
       label: "Parent",
       value: d.parentId,
-      options: [{ id: NONE2, label: model.tracker === "local" ? "None (new feature)" : "None" }, ...model.parents],
-      searchable: model.parents.length > FILTER_OVER,
+      options: parentOptions(),
+      searchable: parentOptions().length - 1 > FILTER_OVER,
       onChange: (id) => {
         d.parentId = id;
         parentSelect.update({ value: id });
@@ -6159,18 +6399,26 @@ ${ref}`,
         bodyField.update({ value: v2 });
       }
     });
-    const fixed = [titleField, typeSelect, stateSelect, parentSelect, bodyField];
+    const drawParent = () => {
+      const options = parentOptions();
+      parentCell.hidden = !caps().subtasks;
+      parentSelect.update({ value: d.parentId, options, searchable: options.length - 1 > FILTER_OVER });
+    };
+    drawParent();
+    const fixed = [titleField, typeSelect, stateSelect, parentSelect, bodyField, ...sourceSelect === null ? [] : [sourceSelect]];
     let blockerDisposers = [];
     let blockerFilter = "";
     const drawBlockers = () => {
       for (const x of blockerDisposers) x();
       blockerDisposers = [];
       blockersBox.replaceChildren();
-      const offered = blockerChoices(model.tasks, model.tracker, d.parentId);
+      const offered = caps().blockedBy ? blockerChoices(tasks(), kind(), d.parentId) : [];
       d.blockedBy = keepOffered(d.blockedBy, offered);
+      blockersBox.hidden = !caps().blockedBy;
+      if (blockersBox.hidden) return;
       blockersBox.append(el3("h3", "kb-settings-heading", "Blocked by"));
       if (offered.length === 0) {
-        const why = model.tracker === "local" ? d.parentId === NONE2 ? "A new feature has no blockers; pick a parent to choose tickets of that feature." : "That feature has no open tickets." : "No open issues.";
+        const why = d.parentId === NONE2 ? copy().noBlockersTopLevel : copy().noBlockers;
         blockersBox.append(el3("p", "kb-muted", why));
         return;
       }
@@ -6191,8 +6439,10 @@ ${ref}`,
       for (const x of subDisposers) x();
       subDisposers = [];
       subBox.replaceChildren();
+      subBox.hidden = !caps().subtasks;
+      if (subBox.hidden) return;
       subBox.append(el3("h3", "kb-settings-heading", "Sub-tasks"));
-      if (!canHaveSubtasks(model.tracker, d.parentId)) {
+      if (!canHaveSubtasks(kind(), d.parentId)) {
         subBox.append(el3("p", "kb-muted", "A ticket of a feature cannot have sub-tasks here; choose no parent to create a feature with sub-tasks."));
         return;
       }
@@ -6200,7 +6450,7 @@ ${ref}`,
         el3(
           "p",
           "kb-muted",
-          model.tracker === "local" ? "Created as tickets of the new feature, in this order." : "Created as sub-issues of the new issue, in this order."
+          copy().newSubtasks
         )
       );
       d.subtasks.forEach((value, i) => {
@@ -6264,20 +6514,20 @@ ${ref}`,
       for (const x of existingDisposers) x();
       existingDisposers = [];
       existingBox.replaceChildren();
-      const offered = existingSubtaskChoices(model.tasks, model.tracker, d.parentId);
+      const offered = caps().subtasks ? existingSubtaskChoices(tasks(), kind(), d.parentId) : [];
       d.existing = keepOffered(d.existing, offered);
-      existingBox.hidden = !canHaveSubtasks(model.tracker, d.parentId);
+      existingBox.hidden = !caps().subtasks || !canHaveSubtasks(kind(), d.parentId);
       if (existingBox.hidden) return;
       existingBox.append(el3("h3", "kb-settings-heading", "Existing sub-tasks"));
       if (offered.length === 0) {
-        existingBox.append(el3("p", "kb-muted", model.tracker === "local" ? "No open tickets or features without tickets to move." : "No open issues."));
+        existingBox.append(el3("p", "kb-muted", copy().noExisting));
         return;
       }
       existingBox.append(
         el3(
           "p",
           "kb-muted",
-          model.tracker === "local" ? "Moved into the new feature as its tickets once it is created." : "Linked as sub-issues of the new issue once it is created."
+          copy().existingSubtasks
         )
       );
       existingDisposers = mountCheckList(existingBox, {
@@ -6302,7 +6552,7 @@ ${ref}`,
     };
     const drawStart = () => {
       const s = start2;
-      const inherited = s === null ? null : s.inherited(draftType(d), draftSubtasks(d, model.tracker));
+      const inherited = s === null ? null : s.inherited(draftType(d), draftSubtasks(d, kind()));
       const key = s === null ? "loading" : JSON.stringify([s.projectId, inherited, s.summaryLanguage, s.presets.map((p) => [p.id, p.name])]);
       lockStart();
       if (key === startKey) return;
@@ -12559,7 +12809,20 @@ ${ref}`,
       const { task } = m;
       const top = el5("div", "kb-sheet-head");
       const titles = el5("div", "kb-sheet-titles");
-      titles.append(el5("h2", "kb-sheet-title", task.title), el5("div", "kb-card-id", task.id));
+      const idRow = el5("div", "kb-sheet-id");
+      idRow.append(el5("span", "kb-card-id", task.id));
+      const url = task.url;
+      if (url !== null) {
+        const link2 = el5("a", "kb-sheet-link", "Open on GitHub \u2197");
+        link2.setAttribute("href", url);
+        link2.title = url;
+        link2.addEventListener("click", (event) => {
+          event.preventDefault();
+          callbacks.onOpenUrl(url);
+        });
+        idRow.append(link2);
+      }
+      titles.append(el5("h2", "kb-sheet-title", task.title), idRow);
       const closeSlot = el5("div", "kb-sheet-x");
       top.append(titles, closeSlot);
       disposers.push(mountCloseButton(closeSlot, dismiss));
@@ -12724,7 +12987,7 @@ ${ref}`,
     const drawQuick = (m) => {
       const { task } = m;
       if (parentError !== null && parentError.taskId !== task.id) parentError = null;
-      const key = JSON.stringify([task.id, task.state, task.type, m.types, m.labels, m.moves, m.busy, m.links.parent, m.links.parents, parentError]);
+      const key = JSON.stringify([task.id, task.state, task.type, m.types, m.labels, m.moves, m.busy, m.publish, m.links.parent, m.links.parents, parentError]);
       if (key === quickKey) return;
       quickKey = key;
       clearQuick();
@@ -12804,32 +13067,36 @@ ${ref}`,
           }
         }).dispose
       );
-      if (m.moves.length > 0) {
-        const moveRow = el5("div", "kb-actions kb-actions-start kb-quick-moves");
-        moveRow.setAttribute("role", "group");
-        moveRow.setAttribute("aria-label", "Move to");
-        moveRow.append(el5("span", "kb-actions-label", "Move to"));
-        for (const { to, label } of m.moves) {
-          disposers2.push(
-            mountButton(moveRow, { label, variant: "outline", size: "xs", disabled: m.busy, onClick: () => callbacks.onMove(to) }).dispose
-          );
-          const n = COLUMNS.findIndex((c) => c.id === to) + 1;
-          if (n >= 1 && n <= 5) hintLastChild(moveRow, `task.state${n}`, `Move to ${label}`);
+      quick.style.setProperty("--kb-quick-cols", String(fields.childElementCount));
+      if (m.moves.length > 0 || m.publish) {
+        const bottomRow = el5("div", "kb-quick-row");
+        if (m.moves.length > 0) {
+          const moveRow = el5("div", "kb-actions kb-actions-start kb-quick-moves");
+          moveRow.setAttribute("role", "group");
+          moveRow.setAttribute("aria-label", "Move to");
+          moveRow.append(el5("span", "kb-actions-label", "Move to"));
+          for (const { to, label } of m.moves) {
+            disposers2.push(
+              mountButton(moveRow, { label, variant: "outline", size: "xs", disabled: m.busy, onClick: () => callbacks.onMove(to) }).dispose
+            );
+            const n = COLUMNS.findIndex((c) => c.id === to) + 1;
+            if (n >= 1 && n <= 5) hintLastChild(moveRow, `task.state${n}`, `Move to ${label}`);
+          }
+          bottomRow.append(moveRow);
         }
-        quick.append(moveRow);
+        if (m.publish) {
+          const publishSlot = el5("div", "kb-quick-publish");
+          disposers2.push(
+            mountButton(publishSlot, { label: "Publish to GitHub", variant: "outline", size: "xs", disabled: m.busy, onClick: callbacks.onPublish }).dispose
+          );
+          bottomRow.append(publishSlot);
+        }
+        quick.append(bottomRow);
       }
     };
     const drawSettings = (m) => {
       const { task } = m;
-      settingsSec.box.hidden = task.url === null && m.start === null;
-      const url = task.url;
-      if (url !== null) {
-        const actions = el5("div", "kb-actions kb-actions-start");
-        disposers.push(
-          mountButton(actions, { label: "Open on GitHub", variant: "ghost", size: "sm", onClick: () => callbacks.onOpenUrl(url) }).dispose
-        );
-        settingsTop.append(actions);
-      }
+      settingsSec.box.hidden = m.start === null;
       drawStart(task.id, m.start);
     };
     let addKey = null;
@@ -13417,8 +13684,25 @@ ${ref}`,
     };
   };
 
+  // src/panel/taskPublish.ts
+  var canPublish = (task, sources) => task.source === "local" && task.state !== "done" && sources.includes("github");
+  var plural3 = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+  var publishConfirm = (task, tasks) => {
+    const n = task.kind === "parent" ? tasks.filter((t) => t.parentId === task.id).length : 0;
+    const what = n > 0 ? `an issue with ${plural3(n, "sub-issue")}` : "an issue";
+    const files = n > 0 ? "Its local files are" : "The local file is";
+    return {
+      title: `Publish \u201C${task.title}\u201D to GitHub?`,
+      body: `This creates ${what} in the project's GitHub Issues, visible to everyone who can see the repository. ${files} closed (Done) with a link to the issue. If GitHub fails half way, nothing local is closed.`,
+      label: "Publish"
+    };
+  };
+  var publishedMessage = (result) => {
+    const n = result.subIssues.length;
+    return n === 0 ? `Published as ${result.issue.id}` : `Published as ${result.issue.id} with ${plural3(n, "sub-issue")}`;
+  };
+
   // src/panel/edit.ts
-  var errorText2 = (e) => e instanceof Error ? e.message : String(e);
   var createEditor = (deps) => {
     const moving = /* @__PURE__ */ new Set();
     let detail = null;
@@ -13427,6 +13711,7 @@ ${ref}`,
     let card = null;
     let lookup = null;
     const find = (id) => deps.tasks().find((t) => t.id === id) ?? null;
+    const kindOf = (task) => task.source;
     const info2 = (message2) => void deps.host.toast({ kind: "info", message: message2 }).catch(() => {
     });
     const fail2 = (message2) => void deps.host.toast({ kind: "error", message: message2 }).catch(() => {
@@ -13493,18 +13778,19 @@ ${ref}`,
         },
         summary: deps.summary.model(task),
         session: sessionView(task),
+        publish: canPublish(task, deps.sources().sources.map((s) => s.id)),
         children: tasks.filter((t) => t.parentId === task.id).map((t) => ({ id: t.id, title: t.title, state: t.state })),
-        addSubtask: canAddSubtask(task, deps.tracker()),
+        addSubtask: canAddSubtask(task, kindOf(task)),
         archived: deps.archive.has(task),
         links: (() => {
           const parent = task.parentId === null ? null : find(task.parentId);
-          const offered = linkChoices(deps.tracker(), task, tasks);
+          const offered = linkChoices(kindOf(task), task, tasks);
           return {
             parent: task.parentId === null ? null : { id: task.parentId, label: parent?.title ?? task.parentId, hint: task.parentId },
             ...offered
           };
         })(),
-        text: editableText(deps.tracker(), task)
+        text: editableText(kindOf(task), task)
       };
     };
     const loadCard = (taskId) => {
@@ -13520,7 +13806,7 @@ ${ref}`,
         mine.options = options;
         mine.version++;
         refreshDetail();
-      }).catch((e) => fail2(`Could not read the card's start options: ${errorText2(e)}`));
+      }).catch((e) => fail2(`Could not read the card's start options: ${errorMessage(e)}`));
     };
     let followed = null;
     const refreshDetail = () => {
@@ -13546,14 +13832,23 @@ ${ref}`,
         refreshDetail();
       }
     };
+    const runShown = async (id, states, action) => {
+      if (deps.api() === null || moving.has(id)) return;
+      const key = deps.shown?.add(states);
+      try {
+        await run(id, action);
+      } finally {
+        if (key !== void 0) deps.shown.settle(key);
+      }
+    };
     const run = async (id, action) => {
       const api = deps.api();
       if (api === null || moving.has(id)) return;
-      await busyWhile(id, () => action(api).then(() => void 0, (e) => fail2(errorText2(e))));
+      await busyWhile(id, () => action(api).then(() => void 0, (e) => fail2(errorMessage(e))));
     };
     const attempt = (action) => action().then(
       () => null,
-      (e) => errorText2(e)
+      (e) => errorMessage(e)
     );
     const following = (op) => followingMove(
       op,
@@ -13563,7 +13858,7 @@ ${ref}`,
         const ctx = deps.start.context();
         if (ctx !== null) await deps.start.move(ctx.projectId, from, to);
       },
-      (from, to, e) => fail2(`${from} is now ${to}, but its start options could not follow: ${errorText2(e)}`)
+      (from, to, e) => fail2(`${from} is now ${to}, but its start options could not follow: ${errorMessage(e)}`)
     );
     const setParentOf = (api) => following(api.setParent);
     const linkTask = (childId, parentId) => relink(childId, async (api) => {
@@ -13605,7 +13900,7 @@ ${ref}`,
         withChildren = answer === "all";
       }
       if (deps.beforeMove !== void 0 && !await deps.beforeMove(task)) return;
-      await run(task.id, (api) => api.close(task.id, withChildren));
+      await runShown(task.id, closingStates(task, deps.tasks(), withChildren), (api) => api.close(task.id, withChildren));
     };
     const apply = (task, from, move2) => {
       switch (move2.kind) {
@@ -13618,7 +13913,7 @@ ${ref}`,
         case "setState":
           void (async () => {
             if (deps.beforeMove !== void 0 && !await deps.beforeMove(task)) return;
-            await run(task.id, async (api) => {
+            await runShown(task.id, /* @__PURE__ */ new Map([[task.id, move2.state]]), async (api) => {
               await api.setState(task.id, move2.state);
               await deps.afterSetState?.(task, from);
             });
@@ -13638,7 +13933,7 @@ ${ref}`,
       const child = find(id);
       const parent = find(parentId);
       if (child === null || parent === null || moving.has(id)) return;
-      const { title, body } = linkConfirm(deps.tracker(), child, parent);
+      const { title, body } = linkConfirm(kindOf(child), child, parent);
       if (await askChoice(title, body, [{ id: "link", label: "Make sub-task" }]) !== "link") return;
       const error2 = await linkTask(id, parentId);
       if (error2 !== null) fail2(error2);
@@ -13654,7 +13949,8 @@ ${ref}`,
       return busyWhile(
         id,
         () => attempt(async () => {
-          const conflict = editConflict(deps.tracker(), await api.get(id), from, changes);
+          const stored2 = await api.get(id);
+          const conflict = editConflict(kindOf(stored2), stored2, from, changes);
           if (conflict !== null) throw new Error(conflict);
           await api.edit(id, changes);
         })
@@ -13664,7 +13960,7 @@ ${ref}`,
       const task = find(id);
       const api = deps.api();
       if (task === null || api === null || moving.has(id)) return;
-      const { title, body, choices } = deleteConfirm(deps.tracker(), task, deps.tasks());
+      const { title, body, choices } = deleteConfirm(kindOf(task), task, deps.tasks());
       const answer = await askChoice(title, body, choices);
       if (answer === null) return;
       let deleted = [];
@@ -13676,8 +13972,15 @@ ${ref}`,
       deps.order.forget(deleted);
       const ctx = deps.start.context();
       if (ctx !== null) {
-        for (const d of deleted) await deps.start.forget(ctx.projectId, d).catch((e) => fail2(`Could not drop the start options of ${d}: ${errorText2(e)}`));
+        for (const d of deleted) await deps.start.forget(ctx.projectId, d).catch((e) => fail2(`Could not drop the start options of ${d}: ${errorMessage(e)}`));
       }
+    };
+    const publishTask = async (id) => {
+      const task = find(id);
+      if (task === null || deps.api() === null || moving.has(id)) return;
+      const { title, body, label } = publishConfirm(task, deps.tasks());
+      if (await askChoice(title, body, [{ id: "publish", label }]) !== "publish") return;
+      await run(id, async (a) => info2(publishedMessage(await a.publish(id))));
     };
     const closeDetail = () => {
       const d = detail;
@@ -13703,7 +14006,7 @@ ${ref}`,
             const created = await api.create(input);
             info2(`Created ${created.id}`);
           } catch (e) {
-            return errorText2(e);
+            return errorMessage(e);
           }
           await deps.reload();
           refreshDetail();
@@ -13712,13 +14015,14 @@ ${ref}`,
         onSetParent: (parentId) => linkTask(id, parentId),
         onEdit: (from, draft) => editTask(id, from, draft),
         onDelete: () => void deleteTask(id),
+        onPublish: () => void publishTask(id),
         onLinkChild: (childId) => linkTask(childId, id),
         onRemoveParent: () => unlinkTask(id),
         onUnlinkChild: async (childId) => {
           const child = find(childId);
           const parent = find(id);
           if (child === null || parent === null) return null;
-          const { title, body } = unlinkConfirm(deps.tracker(), child, parent.title);
+          const { title, body } = unlinkConfirm(kindOf(child), child, parent.title);
           if (await askChoice(title, body, [{ id: "unlink", label: "Unlink", variant: "destructive" }]) !== "unlink") return null;
           return unlinkTask(childId);
         },
@@ -13747,11 +14051,11 @@ ${ref}`,
           const t = find(id);
           if (t === null) return;
           if (state2 === "done") void close(t, openChildren(t, deps.tasks()) > 0);
-          else void run(id, (api) => api.setState(id, state2));
+          else void runShown(id, /* @__PURE__ */ new Map([[id, state2]]), (api) => api.setState(id, state2));
           refreshDetail();
         },
         onType: (type) => void run(id, (api) => api.setType(id, type)),
-        onOpenUrl: (url) => void deps.host.openUrl(url).catch((e) => fail2(errorText2(e))),
+        onOpenUrl: (url) => void deps.host.openUrl(url).catch((e) => fail2(errorMessage(e))),
         onDismiss: () => {
           closeDetail();
           deps.onOpenTaskClosed?.(id, "dismissed");
@@ -13769,16 +14073,16 @@ ${ref}`,
       const api = deps.api();
       if (api === null) return { kind: "error", message: "No project is open." };
       const ctx = deps.start.context();
-      const tracker = deps.tracker();
-      const subtasks = subtasksToCreate(draft, tracker);
-      const existing = existingToLink(draft, tracker, deps.tasks()).map((id) => ({ id, label: find(id)?.title ?? id }));
+      const source2 = sourceOr(draft.source, deps.primary());
+      const subtasks = subtasksToCreate(draft, source2);
+      const existing = existingToLink(draft, source2, sourceTasks(deps.tasks(), source2)).map((id) => ({ id, label: find(id)?.title ?? id }));
       const saveStart = (taskId) => {
         if (ctx === null || Object.keys(draft.start).length === 0) return;
         try {
           deps.start.save(ctx.projectId, taskId, draft.start);
           if (draft.start.summaryLanguage !== void 0) deps.summary.onLanguage(ctx.projectId, taskId, draft.start.summaryLanguage);
         } catch (e) {
-          fail2(`Could not save the start options of ${taskId}: ${errorText2(e)}`);
+          fail2(`Could not save the start options of ${taskId}: ${errorMessage(e)}`);
         }
       };
       let first = true;
@@ -13791,17 +14095,17 @@ ${ref}`,
               first = false;
               saveStart(task2.id);
               if (ctx !== null && draft.type === "") {
-                void deps.start.markNoType(ctx.projectId, task2.id).catch((e) => fail2(`Could not keep "No type" for ${task2.id}: ${errorText2(e)}`));
+                void deps.start.markNoType(ctx.projectId, task2.id).catch((e) => fail2(`Could not keep "No type" for ${task2.id}: ${errorMessage(e)}`));
               }
             }
             return task2;
           },
-          toNewTask(draft, tracker),
+          toNewTask(draft, source2),
           subtasks,
           { existing, setParent: setParentOf(api) }
         );
       } catch (e) {
-        return { kind: "error", message: errorText2(e) };
+        return { kind: "error", message: errorMessage(e) };
       }
       const { task, failed } = result;
       const asked = addOffer.suggest ? askedOf(draft, addOffer.types) : { type: false, state: false };
@@ -13838,12 +14142,14 @@ ${ref}`,
       const tasks = deps.tasks();
       const types = taskTypes(tasks, deps.baseTypes()).filter((t) => t !== MODEL_PICK);
       addOffer = { types, suggest: deps.suggest.enabled() && deps.suggest.suggester.available() };
+      const { view, sources } = deps.sources();
       addModal = openAddModal(
         {
-          tracker: deps.tracker(),
+          primary: deps.primary(),
           types,
           suggest: addOffer.suggest,
-          parents: parentChoices(tasks),
+          source: addSource(view, sources, deps.primary()),
+          sources,
           tasks,
           labels: deps.labels(),
           start: addStart(),
@@ -13858,7 +14164,7 @@ ${ref}`,
       canLink: (id, parentId) => {
         const child = find(id);
         const parent = find(parentId);
-        return child !== null && parent !== null && canLinkUnder(deps.tracker(), child, parent, deps.tasks());
+        return child !== null && parent !== null && canLinkUnder(kindOf(child), child, parent, deps.tasks());
       },
       onLink: (id, parentId) => void link2(id, parentId),
       onReorder: (id, column, before) => {
@@ -13936,7 +14242,7 @@ ${ref}`,
       const notice = initError === null ? loadNotice(read.error) : { ...loadNotice(initError), title: "Could not set up the board" };
       return { kind: "notice", notice };
     }
-    const tracker = read.config.tracker;
+    const tracker = read.config.primary;
     if (tracker !== choice2) {
       return {
         kind: "notice",
@@ -13973,23 +14279,23 @@ ${ref}`,
       deps.isStarting.add(task.id);
       inFlight.add(task.id);
       let sessionId = null;
-      let pending = false;
+      let pending2 = false;
       try {
         const text3 = prompt ?? await deps.prompt(task, opts);
         const r = await deps.start(task, opts, text3);
         sessionId = r.sessionId;
-        pending = sessionId === null && r.pending === true;
+        pending2 = sessionId === null && r.pending === true;
       } catch (e) {
         deps.onError(task, e);
       } finally {
         inFlight.delete(task.id);
       }
-      if (sessionId === null && !pending) {
+      if (sessionId === null && !pending2) {
         deps.isStarting.delete(task.id);
         return "failed";
       }
       waiting.set(task.id, { sessionId, at: now() });
-      return pending ? "pending" : "started";
+      return pending2 ? "pending" : "started";
     };
     const settle = (known, taskKnown) => {
       let changed = false;
@@ -14011,19 +14317,19 @@ ${ref}`,
     return { launch, settle, reset, starting };
   };
 
-  // src/core/types.ts
-  var TASK_STATES = ["needs-triage", "needs-info", "ready-for-agent", "ready-for-human", "wontfix", "done"];
-
   // src/panel/prompt.ts
   var PROMPT_MAX2 = GUEST_ATTACH_TEXT_MAX;
   var STATES2 = TASK_STATES.join(", ");
   var shellWord = (s) => /^[A-Za-z0-9_./:@%+=,-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`;
-  var isGithub = (task) => task.url !== null || /^#\d+$/.test(task.id);
+  var SOURCE_LINE = {
+    github: "This task is a GitHub issue of this repository.",
+    local: "This task is a local issue file under .scratch/ in this repository."
+  };
   var rootOf = (projectDir) => projectDir.replace(/\/+$/, "") || "/";
   var under = (projectDir, rel) => `${rootOf(projectDir).replace(/\/$/, "")}/${rel}`;
   var noteHow = (task, projectDir) => {
     const n = /^#(\d+)$/.exec(task.id)?.[1] ?? /\/issues\/(\d+)/.exec(task.url ?? "")?.[1];
-    if (isGithub(task) && n !== void 0) return `post it with \`gh issue comment ${n} --body-file -\``;
+    if (task.source === "github" && n !== void 0) return `post it with \`gh issue comment ${n} --body-file -\``;
     return `append it to the issue file \`${shellWord(under(projectDir, task.id))}\``;
   };
   var fillPreset = (text3, task, cli, projectDir) => text3.replace(/\{(cli|root|tracker|id|note)\}/g, (_, key) => {
@@ -14033,15 +14339,21 @@ ${ref}`,
     if (key === "id") return shellWord(task.id);
     return noteHow(task, projectDir);
   });
-  var buildPrompt2 = (task, preset, cliPath, projectDir, children) => {
+  var otherSourceLines = (task, cli, primary2) => primary2 === void 0 || task.source === primary2 ? [] : [
+    `This project's primary source is ${primary2}, and docs/agents/issue-tracker.md describes that one; this task is in ${task.source} (see its ## Additional sources section).`,
+    `Create new tasks for this work in ${task.source}: ${cli} create --source ${task.source} --title <title>`,
+    "A sub-task (--parent) goes to its parent's source by itself. Tasks of different sources are never linked: a parent or blocker in another source is refused."
+  ];
+  var buildPrompt2 = (task, preset, cliPath, projectDir, children, primary2) => {
     const cli = `node ${shellWord(cliPath)} --dir ${shellWord(projectDir)}`;
     const id = shellWord(task.id);
     const leads = children.length > 0 || task.kind === "parent";
     const head = [`# Task: ${task.title}`, `Id: ${task.id}`, ...task.url !== null ? [`URL: ${task.url}`] : []].join("\n");
     const tracker = [
       "## Tracker",
-      isGithub(task) ? "This task is a GitHub issue of this repository." : "This task is a local issue file under .scratch/ in this repository.",
+      SOURCE_LINE[task.source] ?? `This task is in the ${task.source} source of this project.`,
       `Move it with the task-board CLI: ${cli} state ${id} <state>`,
+      ...otherSourceLines(task, cli, primary2),
       "Always pass --dir exactly as shown (the project root), even in a worktree: without it the CLI misses the tracker or writes to a copy the board never reads.",
       `States: ${STATES2}. Set "done" only when the work is finished.`,
       ...leads ? [] : ["This task was started from the board; you don't need to claim it."]
@@ -14165,7 +14477,6 @@ ${note}` : note;
   var PENDING_RELOADS_MS = [1e4, 3e4];
   var NO_ANSWER = /* @__PURE__ */ new Set(["HOST_TIMEOUT", "REQUEST_FAILED"]);
   var LIVE = /* @__PURE__ */ new Set(["running", "retrying", "waiting-permission", "waiting-question"]);
-  var errorText3 = (e) => e instanceof Error ? e.message : String(e);
   var createStarter = (deps) => {
     const { host: host2 } = deps;
     const fail2 = (message2) => void host2.toast({ kind: "error", message: message2 }).catch(() => {
@@ -14269,7 +14580,7 @@ ${note}` : note;
       if (ctx === null) throw new Error("Settings are loading, try again in a moment");
       const preset = pickPreset(ctx.presets, opts.presetId);
       const children = (deps.tasks() ?? []).filter((t) => t.parentId === task.id);
-      return buildPrompt2(task, preset, await cliPath(p.directory), p.directory, children);
+      return buildPrompt2(task, preset, await cliPath(p.directory), p.directory, children, deps.primary() ?? void 0);
     };
     const isStarting = /* @__PURE__ */ new Set();
     const launcher = createLauncher({
@@ -14277,7 +14588,7 @@ ${note}` : note;
       hasLiveSession,
       start: startTask,
       prompt: buildFor,
-      onError: (task, e) => fail2(`Could not start \u201C${task.title}\u201D: ${errorText3(e)}`)
+      onError: (task, e) => fail2(`Could not start \u201C${task.title}\u201D: ${errorMessage(e)}`)
     });
     const report = (task, result) => {
       if (result === "already") info2(`\u201C${task.title}\u201D already has an agent working on it`);
@@ -14354,7 +14665,7 @@ ${note}` : note;
       try {
         prompt = await buildFor(task, opts);
       } catch (e) {
-        fail2(`Could not queue \u201C${task.title}\u201D: ${errorText3(e)}`);
+        fail2(`Could not queue \u201C${task.title}\u201D: ${errorMessage(e)}`);
         return;
       }
       const entry = {
@@ -14373,7 +14684,7 @@ ${note}` : note;
         queue = fresh;
         shown = p.id;
       } catch (e) {
-        fail2(`Could not queue \u201C${task.title}\u201D: ${errorText3(e)}`);
+        fail2(`Could not queue \u201C${task.title}\u201D: ${errorMessage(e)}`);
         return;
       }
       deps.draw();
@@ -14404,7 +14715,7 @@ ${note}` : note;
       try {
         card = await deps.loadCard(ctx.projectId, task.id);
       } catch (e) {
-        fail2(`Could not read the card's start options: ${errorText3(e)}`);
+        fail2(`Could not read the card's start options: ${errorMessage(e)}`);
         return;
       }
       const subtasks = (deps.tasks() ?? []).some((t) => t.parentId === task.id);
@@ -14425,9 +14736,9 @@ ${note}` : note;
         await enqueue(task, opts, ctx);
         return;
       }
-      const pending = launcher.launch(task, opts);
+      const pending2 = launcher.launch(task, opts);
       deps.draw();
-      report(task, await pending);
+      report(task, await pending2);
       deps.draw();
     };
     const leaveQueue = async (taskId) => {
@@ -14439,7 +14750,7 @@ ${note}` : note;
         deps.draw();
         return true;
       } catch (e) {
-        fail2(`Could not take the card out of the queue: ${errorText3(e)}`);
+        fail2(`Could not take the card out of the queue: ${errorMessage(e)}`);
         return false;
       }
     };
@@ -14482,7 +14793,7 @@ ${note}` : note;
   };
 
   // src/panel/search.ts
-  var FILTER_KEYS = ["type", "state", "status", "column"];
+  var FILTER_KEYS = ["type", "state", "status", "column", "source"];
   var FILTER = /^([a-z]+)[:=](.*)$/;
   var isFilterKey = (key) => FILTER_KEYS.includes(key);
   var parseQuery = (query) => {
@@ -14511,7 +14822,7 @@ ${note}` : note;
     return c === void 0 ? [] : [c.id, c.title];
   };
   var namesColumn = (wanted) => COLUMNS.some((c) => anyMatches(columnNames(c.id), wanted));
-  var typeFilter = { holds: (t, _c, w) => t.type !== null && valueMatches(t.type, w), offers: (types) => [...types] };
+  var typeFilter = { holds: (t, _c, w) => t.type !== null && valueMatches(t.type, w), offers: ({ types }) => [...types] };
   var stateFilter = { holds: (t, _c, w) => valueMatches(t.state, w), offers: () => [...TASK_STATES] };
   var columnFilter = { holds: (_t, c, w) => anyMatches(columnNames(c), w), offers: () => COLUMNS.map((c) => c.id) };
   var FILTERS = {
@@ -14520,25 +14831,26 @@ ${note}` : note;
     column: columnFilter,
     status: {
       holds: (t, c, w) => (namesColumn(w) ? columnFilter : stateFilter).holds(t, c, w),
-      offers: (types) => [.../* @__PURE__ */ new Set([...columnFilter.offers(types), ...stateFilter.offers(types)])]
-    }
+      offers: (board2) => [.../* @__PURE__ */ new Set([...columnFilter.offers(board2), ...stateFilter.offers(board2)])]
+    },
+    source: { holds: (t, _c, w) => valueMatches(t.source, w), offers: ({ sources }) => [...sources] }
   };
-  var matchesParsed = (task, q, tracker, column) => {
+  var matchesParsed = (task, q, column) => {
     for (const [key, wanted] of q.filters) if (!wanted.some((w) => FILTERS[key].holds(task, column, w))) return false;
     if (q.words.length === 0) return true;
-    const { title, body } = editableText(tracker, task);
+    const { title, body } = editableText(task.source, task);
     const text3 = foldText(`${title}
 ${body}`);
     return q.words.every((w) => text3.includes(w));
   };
-  var filterBoard = (board2, tasks, query, tracker) => {
+  var filterBoard = (board2, tasks, query) => {
     const q = parseQuery(query);
     if (isBlank(q)) return board2;
     const drawnIn = /* @__PURE__ */ new Map();
     for (const { id } of COLUMNS) for (const card of board2[id]) drawnIn.set(card.task.id, id);
     const keep = /* @__PURE__ */ new Set();
     for (const t of tasks) {
-      if (!matchesParsed(t, q, tracker, drawnIn.get(t.id) ?? null)) continue;
+      if (!matchesParsed(t, q, drawnIn.get(t.id) ?? null)) continue;
       keep.add(t.id);
       if (t.parentId !== null) keep.add(t.parentId);
     }
@@ -14546,7 +14858,7 @@ ${body}`);
     for (const { id: column } of COLUMNS) out[column] = board2[column].filter((c) => keep.has(c.task.id));
     return out;
   };
-  var searchSuggestions = (text3, caret, types) => {
+  var searchSuggestions = (text3, caret, types, sources = []) => {
     if (/^\S/.test(text3.slice(caret))) return [];
     const start2 = text3.slice(0, caret).search(/\S*$/);
     const word = text3.slice(start2, caret);
@@ -14560,14 +14872,35 @@ ${body}`);
     const m = /^([a-zA-Z]+)([:=])(.*)$/.exec(word);
     if (m === null) {
       const typed2 = foldText(word);
-      return FILTER_KEYS.filter((k) => k.startsWith(typed2)).map((k) => replace2(`${k}:`, false));
+      const keys = sources.length > 1 ? FILTER_KEYS : FILTER_KEYS.filter((k) => k !== "source");
+      return keys.filter((k) => k.startsWith(typed2)).map((k) => replace2(`${k}:`, false));
     }
     const key = foldText(m[1]);
     if (!isFilterKey(key)) return [];
     const typed = foldText(m[3]);
-    const values = FILTERS[key].offers(types).filter((v2) => typed === "" || valueMatches(v2, typed));
+    const values = FILTERS[key].offers({ types, sources }).filter((v2) => typed === "" || valueMatches(v2, typed));
     if (values.every((v2) => foldText(v2) === typed)) return [];
     return values.map((v2) => replace2(`${m[1]}${m[2]}${v2}`, true));
+  };
+
+  // src/panel/sourceView.ts
+  var MAX_SEGMENT_SOURCES = 3;
+  var sourceSwitcher = (sources) => {
+    if (sources.length < 2) return null;
+    return {
+      kind: sources.length > MAX_SEGMENT_SOURCES ? "dropdown" : "segments",
+      options: [{ value: "all", label: "All" }, ...sources.map((s) => ({ value: s.id, label: s.label }))]
+    };
+  };
+  var currentSourceView = (stored2, config2) => {
+    const several = config2.sources.length > 1;
+    if (stored2 === "all") return several ? "all" : config2.primary;
+    return config2.sources.some((s) => s.id === stored2) ? stored2 : config2.primary;
+  };
+  var tasksInView = (tasks, view) => view === "all" ? [...tasks] : tasks.filter((t) => t.source === view);
+  var sourceBadge = (task, view, sources) => {
+    if (view !== "all" || sources.length < 2) return null;
+    return sources.find((s) => s.id === task.source)?.label ?? task.source;
   };
 
   // src/panel/projectFollow.ts
@@ -14685,7 +15018,7 @@ ${listKey(projects)}`;
         return s.outcome === "failed" ? { label: "agent failed", tone: "error" } : s.outcome === "completed" ? { label: "agent finished", tone: "success" } : { label: "agent idle", tone: "neutral" };
     }
   };
-  var renderCard = (model, busy = false, summary = null) => {
+  var renderCard = (model, busy = false, summary = null, source2 = null) => {
     const { task } = model;
     const disposers = [];
     const node = document.createElement("article");
@@ -14726,6 +15059,7 @@ ${listKey(projects)}`;
     } else if (model.starting) {
       badge2("starting agent\u2026", "info");
     }
+    if (source2 !== null) badge2(source2, "info");
     if (model.archived) badge2("archived", "neutral");
     if (model.ledByOrchestrator) badge2("led by orchestrator", "primary");
     if (task.kind === "parent") badge2("parent", "primary");
@@ -14863,24 +15197,31 @@ ${listKey(projects)}`;
     const shell = div3("kb");
     const toolbar = div3("kb-toolbar");
     const projectSlot = div3("kb-project");
+    const sourceSlot = div3("kb-source");
+    sourceSlot.hidden = true;
     const switchSlot = div3("kb-hide");
     const searchSlot = div3("kb-search");
     const spacer = div3("kb-spacer");
     const addSlot = div3("kb-add-button");
     const settingsSlot = div3("kb-settings-button");
     const refreshSlot = div3("kb-refresh");
-    toolbar.append(projectSlot, switchSlot, searchSlot, spacer, addSlot, settingsSlot, refreshSlot);
+    const topRow = div3("kb-toolbar-row");
+    const viewRow = div3("kb-toolbar-row kb-toolbar-view");
+    topRow.append(projectSlot, spacer, addSlot, settingsSlot, refreshSlot);
+    viewRow.append(sourceSlot, searchSlot, switchSlot);
+    toolbar.append(topRow, viewRow);
     if (VARIANT === "test") {
       const badge2 = document.createElement("span");
       badge2.className = "kb-test-badge";
       badge2.textContent = "TEST";
       badge2.title = "Kanban TEST: the local development build, separate from the production Kanban Board";
-      toolbar.prepend(badge2);
+      topRow.prepend(badge2);
     }
     const status = div3("kb-status");
     const sessionNote = div3("kb-session-note");
+    const sourceNotes = div3("kb-source-notes");
     const columns = div3("kb-columns");
-    shell.append(toolbar, status, sessionNote, columns);
+    shell.append(toolbar, status, sourceNotes, sessionNote, columns);
     root.replaceChildren(shell);
     const project2 = mountSelect(projectSlot, {
       value: null,
@@ -14893,6 +15234,31 @@ ${listKey(projects)}`;
         callbacks.onProject(id);
       }
     });
+    let sourceControl = null;
+    const setSources = (switcher, view) => {
+      const key = switcher === null ? "" : JSON.stringify(switcher);
+      if (sourceControl?.key !== key) {
+        sourceControl?.dispose();
+        sourceControl = null;
+        sourceSlot.replaceChildren();
+        if (switcher !== null) {
+          const pick = (id) => {
+            sourceControl?.set(id);
+            callbacks.onSource(id);
+          };
+          const first = view ?? switcher.options[0].value;
+          if (switcher.kind === "segments") {
+            const tabs = mountTabs(sourceSlot, { items: switcher.options.map((o) => ({ id: o.value, label: o.label })), activeId: first, onChange: pick, trackBackground: true });
+            sourceControl = { key, set: (v2) => tabs.update({ activeId: v2 }), dispose: tabs.dispose };
+          } else {
+            const select = mountSelect(sourceSlot, { value: first, options: switcher.options.map((o) => ({ id: o.value, label: o.label })), onChange: pick });
+            sourceControl = { key, set: (v2) => select.update({ value: v2 }), dispose: select.dispose };
+          }
+        }
+      }
+      sourceSlot.hidden = sourceControl === null;
+      if (sourceControl !== null && view !== null) sourceControl.set(view);
+    };
     const hideSwitch = mountSwitch(switchSlot, {
       label: "Hide sub-tasks",
       checked: false,
@@ -14904,7 +15270,7 @@ ${listKey(projects)}`;
     const search = mountSearchField(searchSlot, {
       value: "",
       placeholder: "Search tasks, type:, status:\u2026",
-      label: "Search tasks by title or description, or filter with type:, state:, status: and column:",
+      label: "Search tasks by title or description, or filter with type:, state:, status:, column: and source:",
       onChange: (query) => setQuery(query)
     });
     const setQuery = (query) => {
@@ -14941,6 +15307,17 @@ ${listKey(projects)}`;
       if (text3 === null) return;
       sessionNoteDispose = mountBanner(sessionNote, { tone: "info", title: text3, action: { label: "Dismiss", onClick: () => setSessionNote(null) } }).dispose;
     };
+    let sourceNoteDisposers = [];
+    const setSourceBanners = (banners, onRetry) => {
+      for (const d of sourceNoteDisposers) d();
+      sourceNoteDisposers = [];
+      sourceNotes.replaceChildren();
+      for (const b of banners) {
+        const slot = div3("kb-source-note");
+        sourceNotes.append(slot);
+        sourceNoteDisposers.push(mountBanner(slot, { tone: b.tone, title: b.title, body: b.body, action: { label: b.action, onClick: onRetry } }).dispose);
+      }
+    };
     let cardDisposers = [];
     const doneTools = (done) => {
       const tools = div3("kb-column-tools");
@@ -14969,6 +15346,8 @@ ${listKey(projects)}`;
       setCanAdd: (enabled) => add2.update({ disabled: !enabled }),
       /** The "Hide sub-tasks" switch follows the project's settings when they load. */
       setHideSubtasks: (checked) => hideSwitch.update({ checked }),
+      /** The source switcher: null hides it (one source, or no board); `view` is the one shown. */
+      setSources,
       setProjects: (options, value) => {
         project2.update({
           options,
@@ -14979,6 +15358,8 @@ ${listKey(projects)}`;
       },
       /** A dismissible info banner above the columns (the rail panel's session note); null removes it. */
       setSessionNote,
+      /** The banners of the sources that failed to list, each with a retry; [] removes them. */
+      setSourceBanners,
       setBusy: (busy) => {
         refreshBusy = busy;
         refresh.update({ loading: busy, disabled: busy });
@@ -15024,7 +15405,7 @@ ${listKey(projects)}`;
         }
       },
       /** Draws the columns; null hides them (no project, no tracker, or an error). */
-      render: (board2, busy = /* @__PURE__ */ new Set(), summaryOf = () => null, done = NO_TOOLS) => {
+      render: (board2, busy = /* @__PURE__ */ new Set(), summaryOf = () => null, done = NO_TOOLS, sourceOf = () => null) => {
         for (const d of cardDisposers) d();
         cardDisposers = [];
         columns.replaceChildren();
@@ -15050,7 +15431,7 @@ ${listKey(projects)}`;
             list2.append(none);
           }
           for (const model of cards) {
-            const card = renderCard(model, busy.has(model.task.id), summaryOf(model.task));
+            const card = renderCard(model, busy.has(model.task.id), summaryOf(model.task), sourceOf(model.task));
             list2.append(card.node);
             cardDisposers.push(card.dispose);
           }
@@ -15254,9 +15635,12 @@ ${listKey(projects)}`;
 html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg); font-family: var(--oc-font); }
 * { box-sizing: border-box; }
 .kb { display: flex; flex-direction: column; gap: 0.75rem; padding: 0.75rem; min-height: 100vh; }
-.kb-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 0.75rem; }
-.kb-project { flex: 1 1 12rem; min-width: 10rem; max-width: 22rem; }
-.kb-search { position: relative; flex: 1 1 12rem; min-width: 9rem; max-width: 20rem; }
+.kb-toolbar { display: flex; flex-direction: column; gap: 0.5rem; }
+.kb-toolbar-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 0.75rem; }
+.kb-project { flex: 1 1 12rem; min-width: 10rem; max-width: 28rem; }
+.kb-source { flex: 0 0 auto; }
+.kb-source[hidden] { display: none; }
+.kb-search { position: relative; flex: 1 1 16rem; min-width: 9rem; max-width: 36rem; }
 .kb-search-suggest { position: absolute; left: 0; right: 0; top: calc(100% + 0.25rem); z-index: 30; display: flex; flex-direction: column;
   padding: 0.25rem; max-height: 16rem; overflow-y: auto; background: var(--oc-elevated); color: var(--oc-elevated-fg);
   border: 1px solid var(--oc-border); border-radius: var(--oc-radius); box-shadow: 0 4px 16px rgb(0 0 0 / 0.18); }
@@ -15268,6 +15652,8 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
   border: 1px solid var(--oc-warning, #d97706); color: var(--oc-warning-text, var(--oc-fg)); }
 .kb-status:empty { display: none; }
 .kb-session-note:empty { display: none; }
+.kb-source-notes { display: flex; flex-direction: column; gap: 0.5rem; }
+.kb-source-notes:empty { display: none; }
 /* Every column is as tall as the board (the longest column, at least the rest of the window): a card
    dragged sideways from anywhere in a long column is over the column beside it (ui/dnd.ts hit-tests the column). */
 .kb-columns { flex: 1 0 auto; display: flex; gap: 0.75rem; align-items: stretch; overflow-x: auto; padding-bottom: 0.25rem; }
@@ -15284,6 +15670,9 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
 .kb-card.is-child { margin-left: 0.75rem; }
 .kb-card-title { font-weight: 500; overflow-wrap: anywhere; }
 .kb-card-id { color: var(--oc-muted); font-family: var(--oc-mono); font-size: 0.8em; overflow-wrap: anywhere; }
+.kb-sheet-id { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.25rem 0.75rem; }
+.kb-sheet-link { font-size: 0.85em; color: var(--oc-primary, inherit); text-decoration: none; }
+.kb-sheet-link:hover { text-decoration: underline; }
 .kb-card-error { color: var(--oc-error-text, var(--oc-fg)); font-size: 0.8em; overflow-wrap: anywhere; }
 .kb-badges { display: flex; flex-wrap: wrap; gap: 0.25rem; }
 .kb-badges:empty { display: none; }
@@ -15358,6 +15747,16 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
 .kb-quick-fields { display: flex; flex-wrap: wrap; gap: 0.5rem; }
 .kb-quick-fields > .kb-field { flex: 1 1 8.5rem; }
 .kb-quick-moves { gap: 0.375rem; }
+.kb-quick-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
+/* A panel wide enough for the fields side by side (a media query: container queries would make
+   .kb-quick the containing block of the selects' popovers): fields and the row below share their columns, so Publish
+   to GitHub (the last cell) starts exactly under Parent (the last field). Narrower, both wrap. */
+@media (min-width: 30rem) {
+  .kb-quick-fields, .kb-quick-row { display: grid; grid-template-columns: repeat(var(--kb-quick-cols, 3), minmax(0, 1fr)); gap: 0.5rem; }
+  .kb-quick-row > .kb-quick-moves { grid-column: 1 / -2; }
+  .kb-quick-row > .kb-quick-moves:only-child { grid-column: 1 / -1; }
+  .kb-quick-row > .kb-quick-publish { grid-column: -2 / -1; }
+}
 .kb-section { border-bottom: 1px solid var(--oc-border); }
 .kb-section[hidden] { display: none; }
 .kb-section-head { cursor: pointer; font-weight: 600; font-size: 0.95em; padding: 0.75rem 0; user-select: none; }
@@ -15526,6 +15925,9 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     sessionsReady: false,
     config: null,
     tasks: null,
+    sourceErrors: [],
+    unlisted: () => false,
+    seenSources: /* @__PURE__ */ new Map(),
     hideSubtasks: false,
     lastLoad: 0,
     view: "none",
@@ -15544,7 +15946,9 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     showArchived: false,
     order: [],
     orderFor: null,
-    query: ""
+    query: "",
+    sourceView: null,
+    sourceViewFor: null
   };
   var store = createSettingsStore(host.storage);
   var fail = (message2) => void host.toast({ kind: "error", message: message2 }).catch(() => {
@@ -15557,12 +15961,28 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
   var archiveSync = createStorageSync();
   var order = () => state.orderFor === state.projectId ? state.order : [];
   var orderSync = createStorageSync();
+  var sourceView = () => {
+    if (state.config === null) return null;
+    return currentSourceView(state.sourceViewFor === state.projectId ? state.sourceView : null, state.config);
+  };
+  var viewTasks = () => {
+    const view = sourceView();
+    return state.tasks === null || view === null ? null : tasksInView(state.tasks, view);
+  };
+  var setSourceView = (view) => {
+    const id = state.projectId;
+    if (id === null) return;
+    state.sourceView = view;
+    state.sourceViewFor = id;
+    saver.save(STORAGE_KEYS.sourceView(id), () => store.saveSourceView(id, view));
+    draw();
+  };
   var unarchivedAt = /* @__PURE__ */ new Map();
   var removedFor = (projectId) => unarchivedAt.get(projectId) ?? /* @__PURE__ */ new Map();
   var pendingMarks = createPendingMarks();
   var saver = createLatestSaver(
     (_key, run) => run(),
-    (e) => fail(`Could not save settings: ${e instanceof Error ? e.message : String(e)}`)
+    (e) => fail(`Could not save settings: ${errorMessage(e)}`)
   );
   var settingsSheet = null;
   var globalLoaded = false;
@@ -15576,7 +15996,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
       applySettings();
       summariseShown();
     } catch (e) {
-      fail(`Could not read the settings: ${e instanceof Error ? e.message : String(e)}`);
+      fail(`Could not read the settings: ${errorMessage(e)}`);
     }
   };
   var badge = null;
@@ -15648,7 +16068,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
       state.projectSettings = {};
       state.skills = found;
       state.settingsFor = id;
-      fail(`Could not read the project settings: ${e instanceof Error ? e.message : String(e)}`);
+      fail(`Could not read the project settings: ${errorMessage(e)}`);
     }
     applySettings();
     summariseShown();
@@ -15679,7 +16099,8 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
         global: state.globalSettings,
         project: p !== null && id !== null ? { name: p.name, layer: state.projectSettings } : null,
         presets: state.presets,
-        skills: id !== null ? state.skills?.found ?? null : null
+        skills: id !== null ? state.skills?.found ?? null : null,
+        sources: p !== null ? state.config : null
       },
       {
         onGlobal: (layer) => {
@@ -15697,6 +16118,23 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
           saver.save("presets", () => store.savePresets(stored2));
           editor.refresh();
         },
+        onSources: async (change) => {
+          if (p === null) return null;
+          try {
+            const next = await changeSource(
+              createApi(host, p.directory),
+              change,
+              async (message2) => await askChoice("Replace the edited tracker instructions?", message2, [
+                { id: "replace", label: "Replace", variant: "destructive" }
+              ]) === "replace"
+            );
+            if (next !== null && project()?.id === p.id) void load();
+            return next;
+          } catch (e) {
+            fail(`Could not change the sources: ${errorMessage(e)}`);
+            return null;
+          }
+        },
         onDismiss: closeSettings,
         lists
       }
@@ -15709,16 +16147,24 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
   var draw = () => {
     board.setCanAdd(state.view === "board" && state.config !== null);
     state.columns = /* @__PURE__ */ new Map();
-    if (state.config === null || state.tasks === null) {
+    const view = sourceView();
+    const tasks = viewTasks();
+    if (state.config === null || tasks === null || view === null) {
+      board.setSources(null, null);
       setBadge(null);
+      board.setSourceBanners([], () => {
+      });
       board.render(null);
       return;
     }
+    const { sources } = state.config;
+    board.setSources(sourceSwitcher(sources), view);
+    board.setSourceBanners(sourceBanners(state.sourceErrors, sources, state.config.warnings ?? []), () => void load());
     const marks = archivedTasks();
-    const archivedCount = archivedShown(state.tasks, marks);
+    const archivedCount = archivedShown(tasks, marks);
     if (archivedCount === 0) state.showArchived = false;
     const model = groupTasks(
-      applyOrder(state.tasks, order()),
+      applyOrder(tasks, order()),
       state.sessions,
       starter.isStarting,
       state.hideSubtasks,
@@ -15730,24 +16176,27 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     );
     for (const [column, cards] of Object.entries(model)) for (const c of cards) state.columns.set(c.task.id, column);
     setBadge(model.review.length || null);
-    const tracker = state.config.tracker;
-    const shown = filterBoard(model, state.tasks, state.query, tracker);
+    const primary2 = state.config.primary;
+    const shown = filterBoard(model, tasks, state.query);
     selection2.beforeRender();
-    board.render(shown, editor.busy, (task) => summaries.get(task), {
-      archivable: archivableIds(state.tasks, marks).length,
-      archived: archivedCount,
-      showArchived: state.showArchived
-    });
+    board.render(
+      shown,
+      editor.busy,
+      (task) => summaries.get(task),
+      { archivable: archivableIds(tasks, marks).length, archived: archivedCount, showArchived: state.showArchived },
+      (task) => sourceBadge(task, view, sources)
+    );
     selection2.rendered(layoutOf(shown));
     auditLinks();
     focusSession();
-    if (state.tasks.length > 0 && state.query.trim() !== "" && Object.values(shown).every((cards) => cards.length === 0)) {
+    const emptyKind = view === "all" ? primary2 : view;
+    if (tasks.length > 0 && state.query.trim() !== "" && Object.values(shown).every((cards) => cards.length === 0)) {
       board.setStatus({ kind: "empty", title: "No tasks match", body: `No task on the board matches "${state.query.trim()}".` });
-    } else if (state.tasks.length === 0) {
+    } else if (tasks.length === 0) {
       board.setStatus({
         kind: "empty",
         title: "No tasks yet",
-        body: tracker === "github" ? "Open issues of this repository show up here. Create one on GitHub or with the task-board CLI, then press Refresh." : "Issues under .scratch/<feature>/issues/ show up here. Create one with the task-board CLI or an agent skill, then press Refresh."
+        body: emptyKind === "github" ? "Open issues of this repository show up here. Create one on GitHub or with the task-board CLI, then press Refresh." : "Issues under .scratch/<feature>/issues/ show up here. Create one with the task-board CLI or an agent skill, then press Refresh."
       });
     } else {
       board.setStatus({ kind: "none" });
@@ -15755,7 +16204,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
   };
   var failureOf = (e) => ({
     code: e instanceof ApiError ? e.code : "FAILED",
-    message: e instanceof Error ? e.message : String(e)
+    message: errorMessage(e)
   });
   var showNotice = (notice) => {
     editor.reset();
@@ -15808,6 +16257,14 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     if (outcome.kind === "board") void load();
     else showNotice(outcome.notice);
   };
+  var listedTasks = null;
+  var pending = createPending();
+  var showPending = () => {
+    if (state.tasks === null || listedTasks === null) return;
+    state.tasks = pending.apply(listedTasks);
+    draw();
+    editor.refresh();
+  };
   var load = async () => {
     const p = project();
     const mine = ++generation;
@@ -15838,15 +16295,24 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
       }
       const token = archiveSync.loadToken();
       const orderToken = orderSync.loadToken();
-      const [tasks, marks, gone, shelved, ranked] = await Promise.all([
+      const [listed2, marks, gone, shelved, ranked, pickedSource] = await Promise.all([
         api.list(),
         store.loadDetached(p.id).catch(() => null),
         store.loadArchived(p.id).catch(() => null),
         store.loadArchivedTasks(p.id).catch(() => null),
         store.loadOrder(p.id).catch(() => null),
+        // Read once per project: afterwards this frame's own pick stands.
+        state.sourceViewFor === p.id ? Promise.resolve(state.sourceView) : store.loadSourceView(p.id).catch(() => null),
         starter.refresh(p.id, p.directory)
       ]);
       if (mine !== generation) return;
+      if (state.sourceViewFor !== p.id) {
+        state.sourceView = pickedSource;
+        state.sourceViewFor = p.id;
+      }
+      const { tasks, errors: errors2, unlisted } = listedBoard(listed2, (id) => state.seenSources.get(id));
+      for (const t of tasks) state.seenSources.set(t.id, t.source);
+      state.unlisted = unlisted;
       if (marks !== null) {
         const merged = new Map(detached());
         for (const [taskId, at] of marks) if (at > (merged.get(taskId) ?? 0)) merged.set(taskId, at);
@@ -15858,18 +16324,20 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
         state.archivedFor = p.id;
       }
       const base2 = shelved === null ? archivedTasks() : archiveSync.trusts(token) ? shelved : mergeArchived(archivedTasks(), shelved, removedFor(p.id));
-      const fixed = reconcileArchived(base2, tasks);
+      const fixed = reconcileArchived(base2, tasks, unlisted);
       state.archivedTasks = fixed.marks;
       state.archivedTasksFor = p.id;
       if (fixed.changed) writeArchivedTasks(p.id, fixed.marks, tasks);
       if (ranked !== null && (orderSync.trusts(orderToken) || state.orderFor !== p.id)) {
-        const pruned = pruneOrder(ranked, tasks);
+        const pruned = pruneOrder(ranked, tasks, unlisted);
         state.order = pruned;
         state.orderFor = p.id;
         if (pruned.length !== ranked.length && orderSync.trusts(orderToken)) setOrder(p.id, pruned);
       }
       state.config = result.config;
-      state.tasks = tasks;
+      listedTasks = tasks;
+      state.tasks = pending.apply(tasks);
+      state.sourceErrors = errors2;
       state.view = "board";
       draw();
       editor.refresh();
@@ -15907,10 +16375,15 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     state.showArchived = false;
     state.order = [];
     state.orderFor = null;
+    state.sourceView = null;
+    state.sourceViewFor = null;
     audited.clear();
     starter.reset();
     state.config = null;
     state.tasks = null;
+    state.sourceErrors = [];
+    state.unlisted = () => false;
+    state.seenSources = /* @__PURE__ */ new Map();
     board.setProjects(projectOptions(), id);
     unsubscribeSessions?.();
     unsubscribeSessions = null;
@@ -16020,7 +16493,6 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
       summariseShown(false);
     }, SUMMARY_SETTLE_MS);
   };
-  var errorText4 = (e) => e instanceof Error ? e.message : String(e);
   var startContext = () => {
     const id = state.projectId;
     return id === null || !globalLoaded || state.settingsFor !== id ? null : { projectId: id, settings: settings(), presets: presets() };
@@ -16029,6 +16501,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     host,
     project,
     tasks: () => state.tasks,
+    primary: () => state.config?.primary ?? null,
     sessions: () => state.sessions,
     context: startContext,
     loadCard: (projectId, taskId) => store.loadCard(projectId, taskId),
@@ -16058,7 +16531,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     const id = state.projectId;
     if (id === null || state.tasks === null) return;
     const ids = [...state.columns].filter(([, c]) => c === column).map(([t]) => t);
-    const next = pruneOrder(reorder(order(), ids, taskId, before), state.tasks);
+    const next = pruneOrder(reorder(order(), ids, taskId, before), state.tasks, state.unlisted);
     setOrder(id, next);
     draw();
   };
@@ -16075,14 +16548,14 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     const removed = new Map(removedFor(projectId));
     const snapshot = pendingMarks.queue(projectId, marks, removed, n);
     const job = archiveWriteJob(
-      { marks: snapshot, removed, tasks },
+      { marks: snapshot, removed, tasks, unlisted: state.unlisted },
       { load: () => store.loadArchivedTasks(projectId), save: (next) => store.saveArchivedTasks(projectId, next) },
       (next) => {
         archiveSync.written(n);
         pendingMarks.written(projectId, n);
         if (state.archivedTasksFor !== projectId || state.tasks === null) return;
         const current2 = state.archivedTasks;
-        const shown = reconcileArchived(mergeArchived(current2, next, removedFor(projectId)), state.tasks).marks;
+        const shown = reconcileArchived(mergeArchived(current2, next, removedFor(projectId)), state.tasks, state.unlisted).marks;
         if (sameMarks(current2, shown)) return;
         state.archivedTasks = shown;
         draw();
@@ -16101,16 +16574,16 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
   };
   var archiveDone = async () => {
     const id = state.projectId;
-    if (id === null || state.tasks === null) return;
-    const n = archivableIds(state.tasks, archivedTasks()).length;
+    if (id === null || viewTasks() === null) return;
+    const n = archivableIds(viewTasks() ?? [], archivedTasks()).length;
     if (n === 0) return;
     const answer = await askChoice(
       `Archive ${n} done task${n === 1 ? "" : "s"}?`,
       "They leave the board. Nothing changes in the repository or on GitHub; \u201CShow archived\u201D brings them back, and a reopened task returns on its own.",
       [{ id: "archive", label: "Archive" }]
     );
-    if (answer === null || state.projectId !== id || state.tasks === null) return;
-    const ids = archivableIds(state.tasks, archivedTasks());
+    if (answer === null || state.projectId !== id || viewTasks() === null) return;
+    const ids = archivableIds(viewTasks() ?? [], archivedTasks());
     if (ids.length === 0) return;
     setArchivedTasks(id, archiveTasks(archivedTasks(), ids, Date.now()));
     info(`Archived ${ids.length} done task${ids.length === 1 ? "" : "s"}`);
@@ -16135,16 +16608,16 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     const id = state.projectId;
     const p = project();
     if (id === null || p === null || state.view !== "board" || state.config === null || state.tasks === null) return;
-    const tracker = state.config.tracker;
-    const plan = clearArchivePlan(tracker, state.tasks, archivedTasks());
-    const ask = clearConfirm(tracker, plan);
+    const primary2 = state.config.primary;
+    const plan = clearArchivePlan(primary2, viewTasks() ?? [], archivedTasks());
+    const ask = clearConfirm(plan);
     if (ask === null) {
       info("The archived features still have sub-tasks on the board; nothing to delete.");
       return;
     }
     const answer = await askChoice(ask.title, ask.body, [{ id: "clear", label: "Delete all", variant: "destructive" }]);
     if (answer === null || state.projectId !== id || state.tasks === null) return;
-    const fresh = clearArchivePlan(tracker, state.tasks, archivedTasks());
+    const fresh = clearArchivePlan(primary2, viewTasks() ?? [], archivedTasks());
     if (JSON.stringify(fresh) !== JSON.stringify(plan)) {
       info("The archive changed while you were asked; nothing was deleted. Try again.");
       return;
@@ -16155,9 +16628,9 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
       if (result.deleted.length > 0) {
         info(`Deleted ${result.deleted.length} archived task${result.deleted.length === 1 ? "" : "s"}`);
         if (state.projectId === id) forgetOrdered(result.deleted);
-        for (const d of result.deleted) await forgetStartOptions(id, d).catch((e) => fail(`Could not drop the start options of ${d}: ${errorText4(e)}`));
+        for (const d of result.deleted) await forgetStartOptions(id, d).catch((e) => fail(`Could not drop the start options of ${d}: ${errorMessage(e)}`));
       }
-      for (const f of result.failed) fail(`Could not delete ${f.id}: ${errorText4(f.error)}`);
+      for (const f of result.failed) fail(`Could not delete ${f.id}: ${errorMessage(f.error)}`);
     } finally {
       await load();
     }
@@ -16372,7 +16845,8 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
         state.query = query;
         draw();
       },
-      suggest: (text3, caret) => searchSuggestions(text3, caret, boardTypes()),
+      suggest: (text3, caret) => searchSuggestions(text3, caret, boardTypes(), state.config?.sources.map((s) => s.id) ?? []),
+      onSource: setSourceView,
       // Second Esc: focus back on the Selected card, or on the Board itself when there is none.
       onSearchExit: () => {
         const id = selection2.get();
@@ -16405,11 +16879,23 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
         return p === null || state.view !== "board" ? null : createApi(host, p.directory);
       },
       tasks: () => state.tasks ?? [],
-      tracker: () => state.config?.tracker ?? "local",
+      primary: () => state.config?.primary ?? "local",
+      sources: () => ({ view: sourceView(), sources: state.config?.sources ?? [] }),
       labels: () => state.config?.labels ?? {},
       columnOf: (id) => state.columns.get(id) ?? null,
       reload: load,
       redraw: draw,
+      shown: {
+        add: (states) => {
+          const key = pending.add(states);
+          showPending();
+          return key;
+        },
+        settle: (key) => {
+          pending.settle(key);
+          showPending();
+        }
+      },
       onStart: (task) => void starter.onStart(task),
       lists,
       beforeMove: (task) => starter.leaveQueue(task.id),
@@ -16417,7 +16903,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
       session: {
         target: (task) => sessionTarget(task.id, state.sessions, starter.links(), detached().get(task.id)),
         check: checkSession,
-        open: (id) => void host.openSession(id).catch((e) => fail(`Could not open the session: ${errorText4(e)}`))
+        open: (id) => void host.openSession(id).catch((e) => fail(`Could not open the session: ${errorMessage(e)}`))
       },
       sections: { get: () => sections, save: saveSections },
       // The Open task is the Selected card while it is drawn (a hidden sub-task is not), so a redraw
@@ -16479,7 +16965,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
         kind: "banner",
         tone: "error",
         title: "Projects are not available",
-        body: `${e instanceof Error ? e.message : String(e)}. Allow the \u201Csessions\u201D capability for Kanban Board in Settings \u2192 Extensions.`
+        body: `${errorMessage(e)}. Allow the \u201Csessions\u201D capability for Kanban Board in Settings \u2192 Extensions.`
       });
     });
     setInterval(() => {

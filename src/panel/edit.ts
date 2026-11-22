@@ -1,23 +1,38 @@
 // The board's write side, kept out of main.ts: drag and drop, the task modal, the Add task modal
 // and the in-panel confirms. Every write goes through `run`, which marks the card busy (further
-// drags of it are ignored), reports a failure in a toast and reloads the board afterwards.
+// drags of it are ignored), reports a failure in a toast and reloads the board afterwards. A state
+// change (a drop, Move to, the State select) is drawn at once (`runShown`, optimistic.ts).
 import type { HostClient } from '@openchamber/sdk';
-import type { NewTask, Task, TaskState } from '../core/types.ts';
-import { MODEL_PICK, type TrackerKind, canAddSubtask, createWithSubtasks, existingToLink, parentChoices, partialMessage, subtasksToCreate, toNewTask, type AddDraft } from './addTask.ts';
-import type { Api } from './api.ts';
+import { errorMessage, type NewTask, type SourceId, type Task, type TaskState } from '../core/types.ts';
+import {
+  MODEL_PICK,
+  addSource,
+  canAddSubtask,
+  createWithSubtasks,
+  existingToLink,
+  partialMessage,
+  sourceTasks,
+  subtasksToCreate,
+  toNewTask,
+  type AddDraft,
+} from './addTask.ts';
+import type { Api, SourceInfo } from './api.ts';
 import type { Preset } from './presets.ts';
 import type { StartLists } from './models.ts';
 import { resolveStart, type CardOptions, type Sections, type Settings } from './settings.ts';
 import { askedOf, type Suggester } from './suggest.ts';
 import { COLUMNS, type Column, type SessionLookup, type SessionTarget } from './columns.ts';
 import { openChildren, planMove, taskTypes, type Move } from './moves.ts';
+import { closingStates, type PendingStates } from './optimistic.ts';
 import { openAddModal, type AddModalHandle, type AddModalStart, type AddResult } from './ui/addModal.ts';
 import type { Board } from './ui/board.ts';
 import { askChoice } from './ui/confirm.ts';
 import { openDetail, type DetailHandle, type DetailModel, type OpenTaskShortcuts, type SessionView, type SummaryModel } from './ui/detail.ts';
 import { attachDrag } from './ui/dnd.ts';
 import { canLinkUnder, followingMove, linkChoices, linkConfirm, unlinkConfirm } from './link.ts';
+import { sourceOr } from './sources.ts';
 import { deleteConfirm } from './taskDelete.ts';
+import { canPublish, publishConfirm, publishedMessage } from './taskPublish.ts';
 import { editChanges, editConflict, editableText, type EditText } from './taskEdit.ts';
 
 export type EditorDeps = {
@@ -26,7 +41,14 @@ export type EditorDeps = {
   /** Null when no board is shown (no project, wizard, notice). */
   api: () => Api | null;
   tasks: () => Task[];
-  tracker: () => TrackerKind;
+  /** The primary source's kind (and id). A listed task goes by its own source (kindOf), a new one by Add task's source. */
+  /** The project's primary source. */
+  primary: () => SourceId;
+  /**
+   * Where Add task creates (addTask.ts addSource): the switcher's view (main.ts sourceView: a source
+   * id, `all`, or null without a config) and the project's sources with what each can do.
+   */
+  sources: () => { view: SourceId | 'all' | null; sources: SourceInfo[] };
   labels: () => Record<string, string>;
   /** Where a listed task is drawn now; null when hidden (e.g. "Hide sub-tasks"). */
   columnOf: (id: string) => Column | null;
@@ -34,6 +56,11 @@ export type EditorDeps = {
   reload: () => Promise<void>;
   /** Redraw from the current state (busy marks changed). */
   redraw: () => void;
+  /**
+   * Moves drawn before their write ends (optimistic.ts): `add` shows the new states at once and
+   * returns a key; `settle` stops drawing them once the write and its reload are done or failed.
+   */
+  shown?: { add: (states: PendingStates) => number; settle: (key: number) => void };
   /** Dropping on In Progress (also "Move to In Progress" in the detail): starts an agent. */
   onStart: (task: Task) => void;
   /** The model picker's list (loaded once per panel session). */
@@ -105,7 +132,6 @@ export type EditorDeps = {
   };
 };
 
-const errorText = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
 export const createEditor = (deps: EditorDeps) => {
   const moving = new Set<string>();
@@ -120,6 +146,8 @@ export const createEditor = (deps: EditorDeps) => {
   let lookup: { id: string; result: SessionLookup; inflight: boolean } | null = null;
 
   const find = (id: string): Task | null => deps.tasks().find((t) => t.id === id) ?? null;
+  /** How `task` is handled (wording, local file rules): by the source it lives in. */
+  const kindOf = (task: Task): SourceId => task.source;
   const info = (message: string): void => void deps.host.toast({ kind: 'info', message }).catch(() => {});
   const fail = (message: string): void => void deps.host.toast({ kind: 'error', message }).catch(() => {});
 
@@ -203,18 +231,19 @@ export const createEditor = (deps: EditorDeps) => {
             },
       summary: deps.summary.model(task),
       session: sessionView(task),
+      publish: canPublish(task, deps.sources().sources.map((s) => s.id)),
       children: tasks.filter((t) => t.parentId === task.id).map((t) => ({ id: t.id, title: t.title, state: t.state })),
-      addSubtask: canAddSubtask(task, deps.tracker()),
+      addSubtask: canAddSubtask(task, kindOf(task)),
       archived: deps.archive.has(task),
       links: (() => {
         const parent = task.parentId === null ? null : find(task.parentId);
-        const offered = linkChoices(deps.tracker(), task, tasks);
+        const offered = linkChoices(kindOf(task), task, tasks);
         return {
           parent: task.parentId === null ? null : { id: task.parentId, label: parent?.title ?? task.parentId, hint: task.parentId },
           ...offered,
         };
       })(),
-      text: editableText(deps.tracker(), task),
+      text: editableText(kindOf(task), task),
     };
   };
 
@@ -234,7 +263,7 @@ export const createEditor = (deps: EditorDeps) => {
         mine.version++;
         refreshDetail();
       })
-      .catch((e: unknown) => fail(`Could not read the card's start options: ${errorText(e)}`));
+      .catch((e: unknown) => fail(`Could not read the card's start options: ${errorMessage(e)}`));
   };
 
   /** The open task's new id after a link moved it, until the reload lists it under that id. */
@@ -270,18 +299,32 @@ export const createEditor = (deps: EditorDeps) => {
     }
   };
 
+  /**
+   * A state change shown at once (the card sits in its new column while the write and the reload
+   * from the source run in the background); a failed write is a toast and the reload puts it back.
+   */
+  const runShown = async (id: string, states: PendingStates, action: (api: Api) => Promise<unknown>): Promise<void> => {
+    if (deps.api() === null || moving.has(id)) return;
+    const key = deps.shown?.add(states);
+    try {
+      await run(id, action);
+    } finally {
+      if (key !== undefined) deps.shown!.settle(key);
+    }
+  };
+
   /** A write whose failure is a toast. */
   const run = async (id: string, action: (api: Api) => Promise<unknown>): Promise<void> => {
     const api = deps.api();
     if (api === null || moving.has(id)) return;
-    await busyWhile(id, () => action(api).then(() => undefined, (e: unknown) => fail(errorText(e))));
+    await busyWhile(id, () => action(api).then(() => undefined, (e: unknown) => fail(errorMessage(e))));
   };
 
   /** A write whose failure comes back as text for the caller to show (null: done). */
   const attempt = (action: () => Promise<unknown>): Promise<string | null> =>
     action().then(
       () => null,
-      (e: unknown) => errorText(e),
+      (e: unknown) => errorMessage(e),
     );
 
   /**
@@ -298,7 +341,7 @@ export const createEditor = (deps: EditorDeps) => {
         const ctx = deps.start.context();
         if (ctx !== null) await deps.start.move(ctx.projectId, from, to);
       },
-      (from, to, e) => fail(`${from} is now ${to}, but its start options could not follow: ${errorText(e)}`),
+      (from, to, e) => fail(`${from} is now ${to}, but its start options could not follow: ${errorMessage(e)}`),
     );
   const setParentOf = (api: Api) => following(api.setParent);
 
@@ -357,7 +400,7 @@ export const createEditor = (deps: EditorDeps) => {
       withChildren = answer === 'all';
     }
     if (deps.beforeMove !== undefined && !(await deps.beforeMove(task))) return;
-    await run(task.id, (api) => api.close(task.id, withChildren));
+    await runShown(task.id, closingStates(task, deps.tasks(), withChildren), (api) => api.close(task.id, withChildren));
   };
 
   const apply = (task: Task, from: Column, move: Move): void => {
@@ -371,7 +414,7 @@ export const createEditor = (deps: EditorDeps) => {
       case 'setState':
         void (async () => {
           if (deps.beforeMove !== undefined && !(await deps.beforeMove(task))) return;
-          await run(task.id, async (api) => {
+          await runShown(task.id, new Map([[task.id, move.state]]), async (api) => {
             await api.setState(task.id, move.state);
             await deps.afterSetState?.(task, from);
           });
@@ -395,7 +438,7 @@ export const createEditor = (deps: EditorDeps) => {
     const child = find(id);
     const parent = find(parentId);
     if (child === null || parent === null || moving.has(id)) return;
-    const { title, body } = linkConfirm(deps.tracker(), child, parent);
+    const { title, body } = linkConfirm(kindOf(child), child, parent);
     if ((await askChoice(title, body, [{ id: 'link', label: 'Make sub-task' }])) !== 'link') return;
     const error = await linkTask(id, parentId);
     if (error !== null) fail(error);
@@ -416,7 +459,8 @@ export const createEditor = (deps: EditorDeps) => {
     const changes = result.changes;
     return busyWhile(id, () =>
       attempt(async () => {
-        const conflict = editConflict(deps.tracker(), await api.get(id), from, changes);
+        const stored = await api.get(id);
+        const conflict = editConflict(kindOf(stored), stored, from, changes);
         if (conflict !== null) throw new Error(conflict);
         await api.edit(id, changes);
       }),
@@ -428,7 +472,7 @@ export const createEditor = (deps: EditorDeps) => {
     const task = find(id);
     const api = deps.api();
     if (task === null || api === null || moving.has(id)) return;
-    const { title, body, choices } = deleteConfirm(deps.tracker(), task, deps.tasks());
+    const { title, body, choices } = deleteConfirm(kindOf(task), task, deps.tasks());
     const answer = await askChoice(title, body, choices);
     if (answer === null) return;
     let deleted: string[] = [];
@@ -440,8 +484,17 @@ export const createEditor = (deps: EditorDeps) => {
     deps.order.forget(deleted);
     const ctx = deps.start.context();
     if (ctx !== null) {
-      for (const d of deleted) await deps.start.forget(ctx.projectId, d).catch((e: unknown) => fail(`Could not drop the start options of ${d}: ${errorText(e)}`));
+      for (const d of deleted) await deps.start.forget(ctx.projectId, d).catch((e: unknown) => fail(`Could not drop the start options of ${d}: ${errorMessage(e)}`));
     }
+  };
+
+  /** The modal's "Publish to GitHub": confirm, publish; a half-done publish shows what was created (run's error toast). */
+  const publishTask = async (id: string): Promise<void> => {
+    const task = find(id);
+    if (task === null || deps.api() === null || moving.has(id)) return;
+    const { title, body, label } = publishConfirm(task, deps.tasks());
+    if ((await askChoice(title, body, [{ id: 'publish', label }])) !== 'publish') return;
+    await run(id, async (a) => info(publishedMessage(await a.publish(id))));
   };
 
   const closeDetail = (): void => {
@@ -469,7 +522,7 @@ export const createEditor = (deps: EditorDeps) => {
           const created = await api.create(input);
           info(`Created ${created.id}`);
         } catch (e) {
-          return errorText(e);
+          return errorMessage(e);
         }
         await deps.reload();
         refreshDetail();
@@ -478,13 +531,14 @@ export const createEditor = (deps: EditorDeps) => {
       onSetParent: (parentId) => linkTask(id, parentId),
       onEdit: (from, draft) => editTask(id, from, draft),
       onDelete: () => void deleteTask(id),
+      onPublish: () => void publishTask(id),
       onLinkChild: (childId) => linkTask(childId, id),
       onRemoveParent: () => unlinkTask(id),
       onUnlinkChild: async (childId) => {
         const child = find(childId);
         const parent = find(id);
         if (child === null || parent === null) return null;
-        const { title, body } = unlinkConfirm(deps.tracker(), child, parent.title);
+        const { title, body } = unlinkConfirm(kindOf(child), child, parent.title);
         if ((await askChoice(title, body, [{ id: 'unlink', label: 'Unlink', variant: 'destructive' }])) !== 'unlink') return null;
         return unlinkTask(childId);
       },
@@ -513,11 +567,11 @@ export const createEditor = (deps: EditorDeps) => {
         const t = find(id);
         if (t === null) return;
         if (state === 'done') void close(t, openChildren(t, deps.tasks()) > 0);
-        else void run(id, (api) => api.setState(id, state));
+        else void runShown(id, new Map([[id, state]]), (api) => api.setState(id, state));
         refreshDetail(); // the select snaps back until the reload shows the saved state
       },
       onType: (type) => void run(id, (api) => api.setType(id, type)),
-      onOpenUrl: (url) => void deps.host.openUrl(url).catch((e: unknown) => fail(errorText(e))),
+      onOpenUrl: (url) => void deps.host.openUrl(url).catch((e: unknown) => fail(errorMessage(e))),
       onDismiss: () => {
         closeDetail();
         deps.onOpenTaskClosed?.(id, 'dismissed');
@@ -538,9 +592,10 @@ export const createEditor = (deps: EditorDeps) => {
     const api = deps.api();
     if (api === null) return { kind: 'error', message: 'No project is open.' };
     const ctx = deps.start.context();
-    const tracker = deps.tracker();
-    const subtasks = subtasksToCreate(draft, tracker);
-    const existing = existingToLink(draft, tracker, deps.tasks()).map((id) => ({ id, label: find(id)?.title ?? id }));
+    // The draft's source decides how it is handled; its parent and links are of that source only.
+    const source = sourceOr(draft.source, deps.primary());
+    const subtasks = subtasksToCreate(draft, source);
+    const existing = existingToLink(draft, source, sourceTasks(deps.tasks(), source)).map((id) => ({ id, label: find(id)?.title ?? id }));
     /** Never throws: the task exists by now, so a storage hiccup is a toast, not "could not create". */
     const saveStart = (taskId: string): void => {
       if (ctx === null || Object.keys(draft.start).length === 0) return;
@@ -548,7 +603,7 @@ export const createEditor = (deps: EditorDeps) => {
         deps.start.save(ctx.projectId, taskId, draft.start);
         if (draft.start.summaryLanguage !== undefined) deps.summary.onLanguage(ctx.projectId, taskId, draft.start.summaryLanguage);
       } catch (e) {
-        fail(`Could not save the start options of ${taskId}: ${errorText(e)}`);
+        fail(`Could not save the start options of ${taskId}: ${errorMessage(e)}`);
       }
     };
     let first = true;
@@ -562,17 +617,17 @@ export const createEditor = (deps: EditorDeps) => {
             first = false;
             saveStart(task.id);
             if (ctx !== null && draft.type === '') {
-              void deps.start.markNoType(ctx.projectId, task.id).catch((e: unknown) => fail(`Could not keep "No type" for ${task.id}: ${errorText(e)}`));
+              void deps.start.markNoType(ctx.projectId, task.id).catch((e: unknown) => fail(`Could not keep "No type" for ${task.id}: ${errorMessage(e)}`));
             }
           }
           return task;
         },
-        toNewTask(draft, tracker),
+        toNewTask(draft, source),
         subtasks,
         { existing, setParent: setParentOf(api) },
       );
     } catch (e) {
-      return { kind: 'error', message: errorText(e) };
+      return { kind: 'error', message: errorMessage(e) };
     }
     const { task, failed } = result;
     // Fields left on "Let the model pick": asked once the task (and its sub-tasks) exist. Only this
@@ -617,12 +672,14 @@ export const createEditor = (deps: EditorDeps) => {
     const tasks = deps.tasks();
     const types = taskTypes(tasks, deps.baseTypes()).filter((t) => t !== MODEL_PICK);
     addOffer = { types, suggest: deps.suggest.enabled() && deps.suggest.suggester.available() };
+    const { view, sources } = deps.sources();
     addModal = openAddModal(
       {
-        tracker: deps.tracker(),
+        primary: deps.primary(),
         types,
         suggest: addOffer.suggest,
-        parents: parentChoices(tasks),
+        source: addSource(view, sources, deps.primary()),
+        sources,
         tasks,
         labels: deps.labels(),
         start: addStart(),
@@ -638,7 +695,7 @@ export const createEditor = (deps: EditorDeps) => {
     canLink: (id, parentId) => {
       const child = find(id);
       const parent = find(parentId);
-      return child !== null && parent !== null && canLinkUnder(deps.tracker(), child, parent, deps.tasks());
+      return child !== null && parent !== null && canLinkUnder(kindOf(child), child, parent, deps.tasks());
     },
     onLink: (id, parentId) => void link(id, parentId),
     onReorder: (id, column, before) => {

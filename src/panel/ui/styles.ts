@@ -5,9 +5,12 @@ const CSS = `
 html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg); font-family: var(--oc-font); }
 * { box-sizing: border-box; }
 .kb { display: flex; flex-direction: column; gap: 0.75rem; padding: 0.75rem; min-height: 100vh; }
-.kb-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 0.75rem; }
-.kb-project { flex: 1 1 12rem; min-width: 10rem; max-width: 22rem; }
-.kb-search { position: relative; flex: 1 1 12rem; min-width: 9rem; max-width: 20rem; }
+.kb-toolbar { display: flex; flex-direction: column; gap: 0.5rem; }
+.kb-toolbar-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 0.75rem; }
+.kb-project { flex: 1 1 12rem; min-width: 10rem; max-width: 28rem; }
+.kb-source { flex: 0 0 auto; }
+.kb-source[hidden] { display: none; }
+.kb-search { position: relative; flex: 1 1 16rem; min-width: 9rem; max-width: 36rem; }
 .kb-search-suggest { position: absolute; left: 0; right: 0; top: calc(100% + 0.25rem); z-index: 30; display: flex; flex-direction: column;
   padding: 0.25rem; max-height: 16rem; overflow-y: auto; background: var(--oc-elevated); color: var(--oc-elevated-fg);
   border: 1px solid var(--oc-border); border-radius: var(--oc-radius); box-shadow: 0 4px 16px rgb(0 0 0 / 0.18); }
@@ -19,6 +22,8 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
   border: 1px solid var(--oc-warning, #d97706); color: var(--oc-warning-text, var(--oc-fg)); }
 .kb-status:empty { display: none; }
 .kb-session-note:empty { display: none; }
+.kb-source-notes { display: flex; flex-direction: column; gap: 0.5rem; }
+.kb-source-notes:empty { display: none; }
 /* Every column is as tall as the board (the longest column, at least the rest of the window): a card
    dragged sideways from anywhere in a long column is over the column beside it (ui/dnd.ts hit-tests the column). */
 .kb-columns { flex: 1 0 auto; display: flex; gap: 0.75rem; align-items: stretch; overflow-x: auto; padding-bottom: 0.25rem; }
@@ -35,6 +40,9 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
 .kb-card.is-child { margin-left: 0.75rem; }
 .kb-card-title { font-weight: 500; overflow-wrap: anywhere; }
 .kb-card-id { color: var(--oc-muted); font-family: var(--oc-mono); font-size: 0.8em; overflow-wrap: anywhere; }
+.kb-sheet-id { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.25rem 0.75rem; }
+.kb-sheet-link { font-size: 0.85em; color: var(--oc-primary, inherit); text-decoration: none; }
+.kb-sheet-link:hover { text-decoration: underline; }
 .kb-card-error { color: var(--oc-error-text, var(--oc-fg)); font-size: 0.8em; overflow-wrap: anywhere; }
 .kb-badges { display: flex; flex-wrap: wrap; gap: 0.25rem; }
 .kb-badges:empty { display: none; }
@@ -109,6 +117,16 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
 .kb-quick-fields { display: flex; flex-wrap: wrap; gap: 0.5rem; }
 .kb-quick-fields > .kb-field { flex: 1 1 8.5rem; }
 .kb-quick-moves { gap: 0.375rem; }
+.kb-quick-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
+/* A panel wide enough for the fields side by side (a media query: container queries would make
+   .kb-quick the containing block of the selects' popovers): fields and the row below share their columns, so Publish
+   to GitHub (the last cell) starts exactly under Parent (the last field). Narrower, both wrap. */
+@media (min-width: 30rem) {
+  .kb-quick-fields, .kb-quick-row { display: grid; grid-template-columns: repeat(var(--kb-quick-cols, 3), minmax(0, 1fr)); gap: 0.5rem; }
+  .kb-quick-row > .kb-quick-moves { grid-column: 1 / -2; }
+  .kb-quick-row > .kb-quick-moves:only-child { grid-column: 1 / -1; }
+  .kb-quick-row > .kb-quick-publish { grid-column: -2 / -1; }
+}
 .kb-section { border-bottom: 1px solid var(--oc-border); }
 .kb-section[hidden] { display: none; }
 .kb-section-head { cursor: pointer; font-weight: 600; font-size: 0.95em; padding: 0.75rem 0; user-select: none; }

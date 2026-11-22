@@ -11,6 +11,21 @@ export const TASK_STATES: readonly TaskState[] = ['needs-triage', 'needs-info', 
 
 export type TaskKind = 'parent' | 'ticket';
 
+/**
+ * A Source's id (ADR 0001): where a task lives. Today the same as the source's kind; a future source
+ * with colliding task ids prefixes them (`jira:ENG-12`).
+ */
+export type SourceId = 'local' | 'github';
+/** Every source ICF-kanban supports, in the order they are offered. */
+export const SOURCE_IDS: readonly SourceId[] = ['local', 'github'];
+
+/** True when `id` is a source ICF-kanban supports. */
+export const isSourceId = (id: unknown): id is SourceId => (SOURCE_IDS as readonly unknown[]).includes(id);
+
+/** The INVALID error for a source id that is not one of `known`. */
+export const unknownSource = (id: string, known: readonly string[] = SOURCE_IDS): TrackerError =>
+  new TrackerError('INVALID', `Unknown source "${id}": use ${known.join(' or ')}`);
+
 export type Task = {
   /** local: ".scratch/<feature>/issues/01-slug.md" or ".scratch/<feature>/spec.md"; github: "#42" */
   id: string;
@@ -34,6 +49,8 @@ export type Task = {
    * Only counts while the task is ready-for-agent and its parent's orchestrator session runs.
    */
   claimed: boolean;
+  /** The Source the task lives in; every id belongs to exactly one source. */
+  source: SourceId;
 };
 
 export type NewTask = {
@@ -43,6 +60,24 @@ export type NewTask = {
   state?: TaskState;
   parentId?: string;
   blockedBy?: string[];
+  /**
+   * The Source to create it in (combined tracker); default the primary source. With `parentId` the
+   * task goes to the parent's source, and a different `source` is INVALID. An id the project does
+   * not have (typed by a user) is INVALID too.
+   */
+  source?: SourceId;
+};
+
+/** What publishing a local task to GitHub did (core/publish.ts; the service's /tasks/publish answer). */
+export type Published = {
+  /** The local task's id. */
+  from: string;
+  /** The issue the task became. */
+  issue: Task;
+  /** A feature's tickets and the sub-issues they became, in the order they were created. */
+  subIssues: { from: string; task: Task }[];
+  /** The local tasks closed after publishing. */
+  closed: Task[];
 };
 
 /** What `Tracker.edit` changes; an omitted field stays as it is. */
@@ -108,6 +143,9 @@ export type TrackerErrorCode =
   | 'GH_OLD'
   | 'INVALID'
   | 'FAILED';
+
+/** The message of anything thrown: an Error's message, else the value as text. */
+export const errorMessage = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
 export class TrackerError extends Error {
   // Declared explicitly: Node's type stripping does not support constructor parameter properties.

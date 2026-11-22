@@ -16,6 +16,7 @@ const task = (state: TaskState, id = '.scratch/f/issues/01-a.md'): Task => ({
   url: null,
   updatedAt: 0,
   claimed: false,
+  source: id.startsWith('#') ? 'github' : 'local',
 });
 
 const info = (activity: SessionInfo['activity'], outcome: SessionInfo['outcome'] = null): SessionInfo => ({

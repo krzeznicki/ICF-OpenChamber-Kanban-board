@@ -1,8 +1,9 @@
 // The task modal, opened by a click on any card. A header (title, id, badges, Edit, Delete, ×, and
 // the task's session: "Open session" or why not; "Unarchive" for an archived task), a compact row
-// (State, Type, Parent with "No parent", Move to), then collapsible sections whose open state is
+// (State, Type, Parent with "No parent", Move to with Publish to GitHub on the right for a local task; a GitHub task links
+// to its issue under the title), then collapsible sections whose open state is
 // remembered: Summary, Task (the body as markdown, or the Edit form, ui/editForm.ts), Sub-tasks
-// (rows with Unlink; "Add sub-task" opens New task / Existing tasks) and Settings (Open on GitHub,
+// (rows with Unlink; "Add sub-task" opens New task / Existing tasks) and Settings (
 // start options, ui/startOptions.ts). It sits on the modal shell (ui/modal.ts), draws what it is
 // given and reports choices; the editor (edit.ts) runs them and asks to confirm.
 import { mountBadge, mountBanner, mountButton, mountList, mountSelect, mountSpinner, mountTabs, mountTextField } from '@openchamber/sdk/ui';
@@ -48,6 +49,8 @@ export type DetailModel = {
   summary: SummaryModel | null;
   /** What the header offers for the task's session (columns.ts sessionTarget, after any lookup). */
   session: SessionView;
+  /** Settings offers "Publish to GitHub" (taskPublish.ts canPublish: an open local task, a GitHub source). */
+  publish: boolean;
   /** A parent's listed sub-tasks, in board order; empty hides the section. */
   children: { id: string; title: string; state: TaskState }[];
   /** The Sub-tasks section offers "Add sub-task" (addTask.ts canAddSubtask); it then shows even without children. */
@@ -119,6 +122,8 @@ export type DetailCallbacks = {
   onEdit: (from: EditText, draft: EditText) => Promise<string | null>;
   /** The header's "Delete" (the editor confirms first). */
   onDelete: () => void;
+  /** Settings' "Publish to GitHub" (the editor confirms first). */
+  onPublish: () => void;
   /** "No parent" in the Parent picker: resolves to null on success, or the message to show under it. */
   onRemoveParent: () => Promise<string | null>;
   /** "Unlink" on a sub-task row (the caller confirms): resolves to null on success or cancel, or the message to show. */
@@ -274,7 +279,21 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
     const { task } = m;
     const top = el('div', 'kb-sheet-head');
     const titles = el('div', 'kb-sheet-titles');
-    titles.append(el('h2', 'kb-sheet-title', task.title), el('div', 'kb-card-id', task.id));
+    const idRow = el('div', 'kb-sheet-id');
+    idRow.append(el('span', 'kb-card-id', task.id));
+    // A GitHub task links to its issue right under the title (the host opens it in the browser).
+    const url = task.url;
+    if (url !== null) {
+      const link = el('a', 'kb-sheet-link', 'Open on GitHub ↗');
+      link.setAttribute('href', url);
+      link.title = url;
+      link.addEventListener('click', (event) => {
+        event.preventDefault();
+        callbacks.onOpenUrl(url);
+      });
+      idRow.append(link);
+    }
+    titles.append(el('h2', 'kb-sheet-title', task.title), idRow);
     const closeSlot = el('div', 'kb-sheet-x');
     top.append(titles, closeSlot);
     disposers.push(mountCloseButton(closeSlot, dismiss));
@@ -463,7 +482,7 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
   const drawQuick = (m: DetailModel): void => {
     const { task } = m;
     if (parentError !== null && parentError.taskId !== task.id) parentError = null;
-    const key = JSON.stringify([task.id, task.state, task.type, m.types, m.labels, m.moves, m.busy, m.links.parent, m.links.parents, parentError]);
+    const key = JSON.stringify([task.id, task.state, task.type, m.types, m.labels, m.moves, m.busy, m.publish, m.links.parent, m.links.parents, parentError]);
     if (key === quickKey) return;
     quickKey = key;
     clearQuick();
@@ -548,20 +567,36 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
       }).dispose,
     );
 
-    if (m.moves.length > 0) {
-      const moveRow = el('div', 'kb-actions kb-actions-start kb-quick-moves');
-      moveRow.setAttribute('role', 'group');
-      moveRow.setAttribute('aria-label', 'Move to');
-      moveRow.append(el('span', 'kb-actions-label', 'Move to'));
-      for (const { to, label } of m.moves) {
-        disposers.push(
-          mountButton(moveRow, { label, variant: 'outline', size: 'xs', disabled: m.busy, onClick: () => callbacks.onMove(to) }).dispose,
-        );
-        // Mod+N moves to Board column N (openTask.ts columnForDigit).
-        const n = COLUMNS.findIndex((c) => c.id === to) + 1;
-        if (n >= 1 && n <= 5) hintLastChild(moveRow, `task.state${n as 1 | 2 | 3 | 4 | 5}`, `Move to ${label}`);
+    // The fields and the row under them share one column grid (CSS), so "Publish to GitHub" starts
+    // exactly under Parent, the last field.
+    quick.style.setProperty('--kb-quick-cols', String(fields.childElementCount));
+    // One row under the fields: "Move to" on the left, "Publish to GitHub" on the right, under Parent
+    // (taskPublish.ts canPublish).
+    if (m.moves.length > 0 || m.publish) {
+      const bottomRow = el('div', 'kb-quick-row');
+      if (m.moves.length > 0) {
+        const moveRow = el('div', 'kb-actions kb-actions-start kb-quick-moves');
+        moveRow.setAttribute('role', 'group');
+        moveRow.setAttribute('aria-label', 'Move to');
+        moveRow.append(el('span', 'kb-actions-label', 'Move to'));
+        for (const { to, label } of m.moves) {
+          disposers.push(
+            mountButton(moveRow, { label, variant: 'outline', size: 'xs', disabled: m.busy, onClick: () => callbacks.onMove(to) }).dispose,
+          );
+          // Mod+N moves to Board column N (openTask.ts columnForDigit).
+          const n = COLUMNS.findIndex((c) => c.id === to) + 1;
+          if (n >= 1 && n <= 5) hintLastChild(moveRow, `task.state${n as 1 | 2 | 3 | 4 | 5}`, `Move to ${label}`);
+        }
+        bottomRow.append(moveRow);
       }
-      quick.append(moveRow);
+      if (m.publish) {
+        const publishSlot = el('div', 'kb-quick-publish');
+        disposers.push(
+          mountButton(publishSlot, { label: 'Publish to GitHub', variant: 'outline', size: 'xs', disabled: m.busy, onClick: callbacks.onPublish }).dispose,
+        );
+        bottomRow.append(publishSlot);
+      }
+      quick.append(bottomRow);
     }
   };
 
@@ -569,15 +604,7 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
     const { task } = m;
     // Left with nothing (a local task without start options, e.g. done), the section hides.
     // `start` is null for a done task or while no project settings are loaded (edit.ts detailModel).
-    settingsSec.box.hidden = task.url === null && m.start === null;
-    const url = task.url;
-    if (url !== null) {
-      const actions = el('div', 'kb-actions kb-actions-start');
-      disposers.push(
-        mountButton(actions, { label: 'Open on GitHub', variant: 'ghost', size: 'sm', onClick: () => callbacks.onOpenUrl(url) }).dispose,
-      );
-      settingsTop.append(actions);
-    }
+    settingsSec.box.hidden = m.start === null;
     drawStart(task.id, m.start);
   };
 

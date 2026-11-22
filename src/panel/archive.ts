@@ -52,11 +52,16 @@ export const unarchiveTask = (marks: ArchivedTasks, id: string): Map<string, num
 
 /**
  * After a load: marks of tasks the tracker no longer lists are pruned, and a task that left Done
- * (reopened) is unarchived. `changed` says whether the stored value needs a write.
+ * (reopened) is unarchived. `changed` says whether the stored value needs a write. `unlisted(id)`
+ * keeps the marks of a source that failed to list (sourceBanner.ts's listedBoard).
  */
-export const reconcileArchived = (marks: ArchivedTasks, tasks: readonly Task[]): { marks: Map<string, number>; changed: boolean } => {
+export const reconcileArchived = (
+  marks: ArchivedTasks,
+  tasks: readonly Task[],
+  unlisted: (id: string) => boolean = () => false,
+): { marks: Map<string, number>; changed: boolean } => {
   const done = new Set(tasks.filter((t) => t.state === 'done').map((t) => t.id));
-  const next = new Map([...marks].filter(([id]) => done.has(id)));
+  const next = new Map([...marks].filter(([id]) => done.has(id) || unlisted(id)));
   return { marks: next, changed: next.size !== marks.size };
 };
 
@@ -104,8 +109,11 @@ export const createStorageSync = () => {
   };
 };
 
-/** What a write of one project's marks takes along when it is queued. */
-export type ArchiveSnapshot = { marks: ArchivedTasks; removed: ArchivedTasks; tasks: readonly Task[] | null };
+/**
+ * What a write of one project's marks takes along when it is queued. `unlisted` keeps the marks of a
+ * source that failed to list (sourceBanner.ts's listedBoard); without it every unlisted id is pruned.
+ */
+export type ArchiveSnapshot = { marks: ArchivedTasks; removed: ArchivedTasks; tasks: readonly Task[] | null; unlisted?: (id: string) => boolean };
 
 /**
  * The job that writes one project's marks. Everything it writes is taken when it is queued, not when
@@ -124,7 +132,7 @@ export const archiveWriteJob =
   async (): Promise<void> => {
     const stored = await io.load().catch(() => null);
     const merged = stored === null ? new Map(snap.marks) : mergeArchived(snap.marks, stored, snap.removed);
-    const next = snap.tasks === null ? merged : reconcileArchived(merged, snap.tasks).marks;
+    const next = snap.tasks === null ? merged : reconcileArchived(merged, snap.tasks, snap.unlisted).marks;
     await io.save(next);
     onWritten(next);
   };

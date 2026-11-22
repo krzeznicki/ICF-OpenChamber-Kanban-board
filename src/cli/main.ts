@@ -3,11 +3,13 @@
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { parseArgs } from 'node:util';
-import { readConfig, writeConfig } from '../core/config.ts';
+import { changeSources, readConfig, writeConfig, type ProjectConfig, type SourceChange } from '../core/config.ts';
 import { realExec } from '../core/exec.ts';
 import { openTracker } from '../core/openTracker.ts';
-import type { Exec, Task, TaskState } from '../core/types.ts';
-import { TrackerError } from '../core/types.ts';
+import { publishTask } from '../core/publish.ts';
+import type { CombinedTracker } from '../core/sources.ts';
+import type { Exec, SourceId, Task, TaskState } from '../core/types.ts';
+import { isSourceId, TrackerError, unknownSource } from '../core/types.ts';
 
 export type CliIO = {
   stdout: (text: string) => void;
@@ -22,10 +24,15 @@ export type CliIO = {
 export const USAGE = `Usage: task-board <command> [options]
 
 Commands:
-  list [--state <state>] [--ready]      tasks, one per line
+  list [--state <state>] [--ready] [--source <id>]
+                                        tasks, one per line; with several sources each line
+                                        names its source (--json always has "source")
   show <id>                             one task with its body
   create --title <t> [--type <x>] [--body-file <f>|-] [--parent <id>] [--state <state>]
-         [--blocked-by <id>[,<id>...]]...   blockers: repeat the option or separate ids with commas
+         [--blocked-by <id>[,<id>...]]... [--source <id>]
+                                        blockers: repeat the option or separate ids with commas;
+                                        the task goes to the primary source, or to --source; with
+                                        --parent always to the parent's source
   state <id> <state>                    set the state ('done' closes)
   edit <id> [--title <t>] [--body-file <f>|-]
                                         change the title and/or the description (local: the
@@ -33,9 +40,26 @@ Commands:
   claim <id>                            take a sub-task before working on it (orchestrator)
   parent <id> <parentId>                make an existing task a sub-task of another (prints its id,
                                         which changes in a local tracker: the file moves)
-  next                                  first ready-for-agent ticket with no open blocker
+  next [--source <id>]                  first ready-for-agent ticket with no open blocker
   close <id> [--with-children]          close a task (and a feature's tickets)
-  init <local|github>                   write docs/agents/issue-tracker.md
+  delete <id> [--with-children]         delete a task for good (prints the deleted ids); a local
+                                        feature with tickets needs --with-children (its whole
+                                        folder goes); GitHub: repository admins only, without
+                                        --with-children sub-issues stay as top-level issues
+  publish <id> [--to github]            publish a local task to GitHub: an issue (a feature's
+                                        tickets become sub-issues), then the local files are closed
+                                        with a link; if GitHub fails half way nothing local closes
+  init <local|github>                   write docs/agents/issue-tracker.md (the primary source)
+  init --add <id> | --remove <id> | --primary <id> [--force]
+                                        add or remove a source, or make one primary; this
+                                        rewrites docs/agents/issue-tracker.md as Settings does.
+                                        Removing deletes nothing (its files or issues stay).
+                                        --force: replace a primary template edited by hand
+
+Sources: list and next read every source in docs/agents/issue-tracker.md (the primary one and
+any under ## Additional sources); --source local|github reads only that one. Commands on an id
+go to the source that owns it. A source that fails is reported on stderr; the others still list.
+Tasks of different sources are never linked: a parent or blocker in another source is INVALID.
 
 Options for every command:
   --dir <path>   project root (default: current directory)
@@ -61,6 +85,12 @@ const OPTIONS = {
   parent: { type: 'string' },
   'blocked-by': { type: 'string', multiple: true },
   'with-children': { type: 'boolean' },
+  source: { type: 'string' },
+  to: { type: 'string' },
+  add: { type: 'string' },
+  remove: { type: 'string' },
+  primary: { type: 'string' },
+  force: { type: 'boolean' },
 } as const;
 
 type Option = keyof typeof OPTIONS;
@@ -74,16 +104,18 @@ type Values = {
 
 /** Command -> its positional count and the options it accepts besides --dir, --json and --help. */
 const COMMANDS: Record<string, { positionals: number; options: Option[] }> = {
-  list: { positionals: 0, options: ['state', 'ready'] },
+  list: { positionals: 0, options: ['state', 'ready', 'source'] },
   show: { positionals: 1, options: [] },
-  create: { positionals: 0, options: ['title', 'type', 'body-file', 'parent', 'state', 'blocked-by'] },
+  create: { positionals: 0, options: ['title', 'type', 'body-file', 'parent', 'state', 'blocked-by', 'source'] },
   state: { positionals: 2, options: [] },
   edit: { positionals: 1, options: ['title', 'body-file'] },
   claim: { positionals: 1, options: [] },
   parent: { positionals: 2, options: [] },
-  next: { positionals: 0, options: [] },
+  next: { positionals: 0, options: ['source'] },
   close: { positionals: 1, options: ['with-children'] },
-  init: { positionals: 1, options: [] },
+  delete: { positionals: 1, options: ['with-children'] },
+  publish: { positionals: 1, options: ['to'] },
+  init: { positionals: 1, options: ['add', 'remove', 'primary', 'force'] },
 };
 const GLOBAL: Option[] = ['dir', 'json', 'help'];
 
@@ -108,7 +140,15 @@ const readyTickets = (tasks: Task[]): Task[] => {
     .sort(byId);
 };
 
-const line = (t: Task): string => `${t.id}  [${t.state}${t.claimed ? ', claimed' : ''}]  ${t.title}\n`;
+/** `withSource`: the project has several sources, so the line names the task's one after its id. */
+const line = (t: Task, withSource = false): string =>
+  `${t.id}  ${withSource ? `${t.source}  ` : ''}[${t.state}${t.claimed ? ', claimed' : ''}]  ${t.title}\n`;
+
+/** `local (primary), github`: the project's sources, the primary first. */
+const sourcesLine = (config: ProjectConfig): string =>
+  config.sources.map((id) => (id === config.primary ? `${id} (primary)` : id)).join(', ');
+
+const sourcesAnswer = (config: ProjectConfig) => ({ primary: config.primary, sources: config.sources });
 
 const readStdin = async (stdin: CliIO['stdin']): Promise<string> => {
   if (stdin === undefined) return '';
@@ -134,6 +174,17 @@ const parse = (argv: string[]): { command: string | null; args: string[]; values
   if (spec === undefined) return usage(`Unknown command "${command}"`);
   for (const key of Object.keys(values) as Option[]) {
     if (!GLOBAL.includes(key) && !spec.options.includes(key)) usage(`Option --${key} does not apply to ${command}`);
+  }
+  if (command === 'init') {
+    const changes = (['add', 'remove', 'primary'] as const).filter((k) => values[k] !== undefined);
+    if (changes.length > 1) usage('init takes one of --add, --remove and --primary');
+    if (values.force && values.primary === undefined) usage('--force applies to init --primary');
+    for (const k of changes) {
+      if (!isSourceId(values[k])) usage(unknownSource(values[k]!).message);
+    }
+    // With a source change init takes no tracker argument.
+    if (changes.length === 1 && args.length !== 0) usage('init takes a tracker or a source option, not both');
+    if (changes.length === 1) return { command, args, values };
   }
   if (args.length !== spec.positionals) {
     usage(`${command} takes ${spec.positionals} argument${spec.positionals === 1 ? '' : 's'}, got ${args.length}`);
@@ -172,15 +223,24 @@ export const main = async (argv: string[], io: CliIO): Promise<number> => {
     }
   };
 
+  /** The tasks of every source (or only `source`); each source that failed is reported on stderr. */
+  const listed = async (tracker: CombinedTracker, source: string | undefined): Promise<Task[]> => {
+    const { tasks, errors } = await tracker.listAll(source === undefined ? {} : { source });
+    for (const e of errors) io.stderr(`task-board: source ${e.source}: ${e.code}: ${e.message}\n`);
+    return tasks;
+  };
+
   try {
     switch (command) {
       case 'list': {
         const state = values.state === undefined ? undefined : toState(values.state, 'state');
-        const all = await (await openTracker(root, exec)).list();
+        const tracker = await openTracker(root, exec);
+        const all = await listed(tracker, values.source);
         // Readiness is judged on the full list, so a blocker hidden by --state still counts.
         const ready = values.ready ? new Set(readyTickets(all).map((t) => t.id)) : null;
         const tasks = all.filter((t) => (state === undefined || t.state === state) && (ready === null || ready.has(t.id)));
-        print(tasks, tasks.map(line).join(''));
+        const several = tracker.sources.length > 1;
+        print(tasks, tasks.map((t) => line(t, several)).join(''));
         return 0;
       }
       case 'show': {
@@ -195,15 +255,18 @@ export const main = async (argv: string[], io: CliIO): Promise<number> => {
         const blockedBy = (values['blocked-by'] ?? []).flatMap((v) => v.split(',')).map((v) => v.trim());
         if (blockedBy.some((id) => id === '')) usage('--blocked-by needs non-empty ids');
         const body = await bodyOf(values['body-file']);
-        const task = await (await openTracker(root, exec)).create({
+        const tracker = await openTracker(root, exec);
+        const task = await tracker.create({
           title: values.title!,
           ...(body === undefined ? {} : { body }),
           ...(values.type === undefined ? {} : { type: values.type }),
           ...(values.parent === undefined ? {} : { parentId: values.parent }),
           ...(blockedBy.length === 0 ? {} : { blockedBy }),
           ...(state === undefined ? {} : { state }),
+          // An id the project does not have is INVALID in the combined tracker, with the project's sources named.
+          ...(values.source === undefined ? {} : { source: values.source as SourceId }),
         });
-        print(task, line(task));
+        print(task, line(task, tracker.sources.length > 1));
         return 0;
       }
       case 'state': {
@@ -233,31 +296,58 @@ export const main = async (argv: string[], io: CliIO): Promise<number> => {
         return 0;
       }
       case 'next': {
-        const [task] = readyTickets(await (await openTracker(root, exec)).list());
+        const tracker = await openTracker(root, exec);
+        const [task] = readyTickets(await listed(tracker, values.source));
         if (task === undefined) {
           io.stderr('task-board: no ready ticket (ready-for-agent with no open blocker)\n');
           return 3;
         }
-        print(task, `${task.id}  ${task.title}\n`);
+        print(task, `${task.id}  ${tracker.sources.length > 1 ? `${task.source}  ` : ''}${task.title}\n`);
         return 0;
       }
       case 'close': {
         const closed = await (await openTracker(root, exec)).close(args[0]!, { withChildren: values['with-children'] === true });
-        print(closed, closed.map(line).join(''));
+        print(closed, closed.map((t) => line(t)).join(''));
+        return 0;
+      }
+      case 'delete': {
+        const deleted = await (await openTracker(root, exec)).remove(args[0]!, { withChildren: values['with-children'] === true });
+        print(deleted, deleted.map((id) => `${id}\n`).join(''));
+        return 0;
+      }
+      case 'publish': {
+        if (values.to !== undefined && values.to !== 'github') usage(`Cannot publish to "${values.to}": use --to github`);
+        const result = await publishTask(root, await openTracker(root, exec), args[0]!);
+        const pairs = [{ from: result.from, task: result.issue }, ...result.subIssues];
+        print(result, pairs.map((p) => `${p.from}  ->  ${p.task.id}${p.task.url ? `  ${p.task.url}` : ''}\n`).join(''));
         return 0;
       }
       case 'init': {
+        const change: SourceChange | null =
+          values.add !== undefined
+            ? { add: values.add as SourceId }
+            : values.remove !== undefined
+              ? { remove: values.remove as SourceId }
+              : values.primary !== undefined
+                ? { primary: values.primary as SourceId }
+                : null;
+        if (change !== null) {
+          const config = await changeSources(root, change, { force: values.force === true });
+          print(sourcesAnswer(config), `Sources: ${sourcesLine(config)} (docs/agents/issue-tracker.md)\n`);
+          return 0;
+        }
         const kind = args[0];
         if (kind !== 'local' && kind !== 'github') return usage(`Unknown tracker "${kind}": use local or github`);
         await writeConfig(root, kind);
         const config = await readConfig(root);
-        if (config.tracker !== kind) {
+        if (config.primary !== kind) {
           throw new TrackerError(
             'INVALID',
-            `docs/agents/issue-tracker.md already configures the ${config.tracker} tracker; it was left unchanged`,
+            `docs/agents/issue-tracker.md already configures the ${config.primary} tracker; it was left unchanged`,
           );
         }
-        print({ tracker: config.tracker }, `Tracker: ${config.tracker} (docs/agents/issue-tracker.md)\n`);
+        // `tracker` in --json: the output predates several sources.
+        print({ tracker: config.primary }, `Tracker: ${config.primary} (docs/agents/issue-tracker.md)\n`);
         return 0;
       }
       default:

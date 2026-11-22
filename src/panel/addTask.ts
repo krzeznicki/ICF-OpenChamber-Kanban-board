@@ -4,11 +4,11 @@
 // it; a ticket takes no sub-tasks, and blockers must be open tickets of the same feature (the
 // local tracker rejects any other). GitHub: any open issue may be a blocker, and any open issue can
 // take sub-tasks (it becomes a parent).
-import type { NewTask, Task, TaskState } from '../core/types.ts';
+import { errorMessage, type NewTask, type SourceId, type Task, type TaskState } from '../core/types.ts';
+import type { SourceInfo } from './api.ts';
 import { newChildCandidates } from './link.ts';
 import type { CardOptions } from './settings.ts';
 
-export type TrackerKind = 'local' | 'github';
 export type Choice = { id: string; label: string; hint?: string };
 
 /**
@@ -33,6 +33,8 @@ export type AddDraft = {
   existing: string[];
   /** The card's start options, saved under card:<projectId>:<taskId> once the task exists. */
   start: CardOptions;
+  /** The source the task is created in (addSource); '' = the primary. A parent's source wins. */
+  source: SourceId | '';
 };
 
 /** `suggest`: Type and State start on "Let the model pick" (the setting is on and a model may answer). */
@@ -46,6 +48,7 @@ export const emptyDraft = (suggest = false): AddDraft => ({
   subtasks: [],
   existing: [],
   start: {},
+  source: '',
 });
 
 /**
@@ -57,11 +60,50 @@ export const isDirty = (draft: AddDraft, initial: AddDraft = emptyDraft()): bool
   draft.body.trim() !== '' ||
   draft.subtasks.some((row) => row.trim() !== '') ||
   draft.type !== initial.type ||
+  draft.source !== initial.source ||
   draft.parentId !== initial.parentId ||
   draft.state !== initial.state ||
   draft.blockedBy.length > 0 ||
   draft.existing.length > 0 ||
   Object.values(draft.start).some((v) => v !== undefined);
+
+/**
+ * Where Add task creates (ADR 0001): with several sources that can create, the form always shows a
+ * picker of them, starting on the source the board shows (`view`); in All, or when the shown source
+ * cannot create, on the primary (or the first one that can). One such source: no picker.
+ */
+export const addSource = (
+  view: SourceId | 'all' | null,
+  sources: readonly SourceInfo[],
+  primary: SourceId,
+): { source: SourceId; picker: Choice[] | null } => {
+  const creatable = sources.filter((s) => s.capabilities.create);
+  const can = (id: SourceId | 'all' | null): id is SourceId => creatable.some((s) => s.id === id);
+  if (creatable.length === 0) return { source: view !== null && view !== 'all' ? view : primary, picker: null };
+  const source = can(view) ? view : can(primary) ? primary : creatable[0]!.id;
+  return { source, picker: creatable.length > 1 ? creatable.map((s) => ({ id: s.id, label: s.label })) : null };
+};
+
+/** The tasks of `source`: Add task offers parents, blockers and existing sub-tasks only from it. */
+export const sourceTasks = (tasks: readonly Task[], source: SourceId | ''): Task[] => tasks.filter((t) => t.source === source);
+
+/**
+ * The draft once `source` is chosen: a parent, blockers and existing sub-tasks of another source go
+ * (tasks of different sources are never linked), and so does what `capabilities` say the source
+ * cannot do (a parent and sub-tasks without `subtasks`, blockers without `blockedBy`).
+ */
+export const withSource = (d: AddDraft, source: SourceId, tasks: readonly Task[], capabilities: SourceInfo['capabilities']): AddDraft => {
+  const own = new Set(sourceTasks(tasks, source).map((t) => t.id));
+  const subtasks = capabilities.subtasks;
+  return {
+    ...d,
+    source,
+    parentId: subtasks && own.has(d.parentId) ? d.parentId : '',
+    blockedBy: capabilities.blockedBy ? d.blockedBy.filter((id) => own.has(id)) : [],
+    existing: subtasks ? d.existing.filter((id) => own.has(id)) : [],
+    subtasks: subtasks ? d.subtasks : [],
+  };
+};
 
 /** States a new task may start in: the open ones (done and wontfix are reached by moving it). */
 export const CREATE_STATES: readonly TaskState[] = ['needs-triage', 'needs-info', 'ready-for-agent', 'ready-for-human'];
@@ -73,7 +115,7 @@ export const parentChoices = (tasks: readonly Task[]): Choice[] =>
   tasks.filter((t) => t.kind === 'parent' && t.state !== 'done').map(choice);
 
 /** Open tasks the new task may be blocked by, given the chosen parent ('' = none). */
-export const blockerChoices = (tasks: readonly Task[], tracker: TrackerKind, parentId: string): Choice[] => {
+export const blockerChoices = (tasks: readonly Task[], tracker: SourceId, parentId: string): Choice[] => {
   // A sub-issue blocked by its own parent would never be unblocked: the parent waits for it.
   if (tracker === 'github') return tasks.filter((t) => t.state !== 'done' && t.id !== parentId).map(choice);
   if (parentId === '') return [];
@@ -87,10 +129,10 @@ export const keepOffered = (selected: readonly string[], offered: readonly Choic
 };
 
 /** Whether the new task may list sub-tasks to create under it. */
-export const canHaveSubtasks = (tracker: TrackerKind, parentId: string): boolean => tracker === 'github' || parentId === '';
+export const canHaveSubtasks = (tracker: SourceId, parentId: string): boolean => tracker === 'github' || parentId === '';
 
 /** Whether the task modal offers "Add sub-task" for this task. */
-export const canAddSubtask = (task: Task, tracker: TrackerKind): boolean =>
+export const canAddSubtask = (task: Task, tracker: SourceId): boolean =>
   task.state !== 'done' && (tracker === 'github' || task.kind === 'parent');
 
 export type SubtaskMode = 'new' | 'existing';
@@ -107,25 +149,25 @@ export const subtaskModes = (canAdd: boolean, existing: number): SubtaskMode[] =
 export const subtaskTitles = (rows: readonly string[]): string[] => rows.map((r) => r.trim()).filter((r) => r !== '');
 
 /** The sub-task titles to create under the new task: none when it may not have any (rows hidden, not cleared). */
-export const subtasksToCreate = (d: AddDraft, tracker: TrackerKind): string[] =>
+export const subtasksToCreate = (d: AddDraft, tracker: SourceId): string[] =>
   canHaveSubtasks(tracker, d.parentId) ? subtaskTitles(d.subtasks) : [];
 
 /** Open existing tasks the new task may take as sub-tasks, given the chosen parent ('' = none). */
-export const existingSubtaskChoices = (tasks: readonly Task[], tracker: TrackerKind, parentId: string): Choice[] =>
+export const existingSubtaskChoices = (tasks: readonly Task[], tracker: SourceId, parentId: string): Choice[] =>
   canHaveSubtasks(tracker, parentId) ? newChildCandidates(tracker, parentId === '' ? null : parentId, tasks).map(choice) : [];
 
 /**
  * The picked existing tasks to link under the new task, re-checked against what is offered now
  * (a pick that went stale, e.g. done since, is dropped): none when it may not have sub-tasks.
  */
-export const existingToLink = (d: AddDraft, tracker: TrackerKind, tasks: readonly Task[]): string[] =>
+export const existingToLink = (d: AddDraft, tracker: SourceId, tasks: readonly Task[]): string[] =>
   keepOffered(d.existing, existingSubtaskChoices(tasks, tracker, d.parentId));
 
 /**
  * Whether the new task will have sub-tasks, so its inherited start preset can be shown
  * (orchestrate with sub-tasks, else its type's). A local sub-task cannot have sub-tasks.
  */
-export const draftSubtasks = (d: AddDraft, tracker: TrackerKind): boolean =>
+export const draftSubtasks = (d: AddDraft, tracker: SourceId): boolean =>
   !(tracker === 'local' && d.parentId !== '') && (subtaskTitles(d.subtasks).length > 0 || d.existing.length > 0);
 
 /** The type the task is created with: none for "No type" and for "Let the model pick". */
@@ -133,7 +175,7 @@ export const draftType = (d: Pick<AddDraft, 'type'>): string | null => (d.type =
 
 export const validateDraft = (d: AddDraft): { title?: string } => (d.title.trim() === '' ? { title: 'A title is required' } : {});
 
-export const toNewTask = (d: AddDraft, tracker: TrackerKind): NewTask => {
+export const toNewTask = (d: AddDraft, tracker: SourceId): NewTask => {
   const body = d.body.trim();
   const blockers = tracker === 'local' && d.parentId === '' ? [] : d.blockedBy;
   const type = draftType(d);
@@ -142,7 +184,7 @@ export const toNewTask = (d: AddDraft, tracker: TrackerKind): NewTask => {
     state: d.state === MODEL_PICK ? 'needs-triage' : d.state,
     ...(type !== null ? { type } : {}),
     ...(body !== '' ? { body } : {}),
-    ...(d.parentId !== '' ? { parentId: d.parentId } : {}),
+    ...(d.parentId !== '' ? { parentId: d.parentId } : d.source !== '' ? { source: d.source } : {}),
     ...(blockers.length > 0 ? { blockedBy: [...blockers] } : {}),
   };
 };
@@ -150,7 +192,6 @@ export const toNewTask = (d: AddDraft, tracker: TrackerKind): NewTask => {
 /** `create`: a sub-task not created; `link`: an existing task that could not be linked under the new one. */
 export type SubtaskFailure = { title: string; message: string; kind: 'create' | 'link' };
 
-const messageOf = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
 /** Existing tasks to link under the new task, and the tracker operation that does it. */
 export type LinkExisting = {
@@ -175,14 +216,14 @@ export const createWithSubtasks = async (
     try {
       await create({ title, state: 'needs-triage', parentId: task.id });
     } catch (e) {
-      failed.push({ title, message: messageOf(e), kind: 'create' });
+      failed.push({ title, message: errorMessage(e), kind: 'create' });
     }
   }
   for (const c of link?.existing ?? []) {
     try {
       await link!.setParent(c.id, task.id);
     } catch (e) {
-      failed.push({ title: c.label, message: messageOf(e), kind: 'link' });
+      failed.push({ title: c.label, message: errorMessage(e), kind: 'link' });
     }
   }
   return { task, failed };

@@ -16,6 +16,7 @@ const t = (id: string, state: TaskState = 'needs-triage', parentId: string | nul
   url: null,
   updatedAt: 0,
   claimed: false,
+  source: id.startsWith('#') ? 'github' : 'local',
 });
 
 const backlog = (tasks: Task[]): string[] => groupTasks(tasks, [], new Set(), false).backlog.map((c) => c.task.id);

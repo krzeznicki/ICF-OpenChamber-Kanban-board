@@ -5,11 +5,23 @@ import { realpath, stat } from 'node:fs/promises';
 import { basename, dirname, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readSessionEventRequest, SESSION_EVENTS_PATH, type GuestSessionEventRequest } from '@openchamber/sdk';
-import { readConfig, readLabels, writeConfig, type ProjectConfig } from '../core/config.ts';
+import {
+  changeSources,
+  EditedTemplateError,
+  readConfig,
+  readLabels,
+  SOURCE_IDS,
+  writeConfig,
+  type ProjectConfig,
+  type SourceChange,
+  type SourceId,
+} from '../core/config.ts';
 import { createGithubTracker } from '../core/githubTracker.ts';
 import { openTracker } from '../core/openTracker.ts';
-import type { Exec, NewTask, Task, TaskEdit, TaskState, Tracker } from '../core/types.ts';
-import { TrackerError } from '../core/types.ts';
+import { publishTask } from '../core/publish.ts';
+import { type CombinedTracker, knownSources, sourceInfo } from '../core/sources.ts';
+import type { Exec, NewTask, Task, TaskEdit, TaskState } from '../core/types.ts';
+import { errorMessage, TrackerError } from '../core/types.ts';
 import type { QueueEntry } from '../core/queue.ts';
 import { createAgentList, createModelList, type AgentList, type ModelList } from './models.ts';
 import { createSkillDetector, type SkillDetector } from './skills.ts';
@@ -117,6 +129,9 @@ const newTask = (v: unknown): NewTask => {
   if (v.type !== undefined) task.type = str(v, 'type');
   if (v.state !== undefined) task.state = state(v.state, 'input.state');
   if (v.parentId !== undefined) task.parentId = str(v, 'parentId');
+  // The Source to create it in; default the primary one, and with parentId the parent's one.
+  // An id the project does not have is INVALID in the combined tracker, with the project's sources named.
+  if (v.source !== undefined) task.source = str(v, 'source') as SourceId;
   if (v.blockedBy !== undefined) {
     const b = v.blockedBy;
     task.blockedBy =
@@ -187,14 +202,13 @@ const start = async (dir: string, input: Omit<Parameters<typeof startSession>[0]
 /** Where background failures go: `deps.log`, else stderr. */
 const logOf = (deps: Deps): ((message: string) => void) => deps.log ?? ((m: string) => console.error(m));
 
-const errorText = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
 /** Runs a cleanup after a change that already happened: a failure is logged as `message: why`, never thrown. */
 const bestEffort = async (deps: Deps, message: string, action: () => Promise<unknown>): Promise<void> => {
   try {
     await action();
   } catch (e) {
-    logOf(deps)(`${message}: ${errorText(e)}`);
+    logOf(deps)(`${message}: ${errorMessage(e)}`);
   }
 };
 
@@ -218,10 +232,10 @@ export const drainProject = async (dir: string, deps: Deps): Promise<void> => {
         await start(dir, { taskId: e.taskId, title: e.title, prompt: e.prompt, model: e.model, agent: e.agent, variant: e.variant ?? null, location: e.location }, deps);
         forgetRemoval(queueFile(deps), dir, e.taskId);
       } catch (err) {
-        const why = (err instanceof Error ? err.message : String(err)).slice(0, ERROR_MAX);
+        const why = errorMessage(err).slice(0, ERROR_MAX);
         log(`icf-kanban: could not start the queued task ${e.taskId}: ${why}`);
         await requeueFailed(queueFile(deps), dir, e, why).catch((w: unknown) =>
-          log(`icf-kanban: could not put ${e.taskId} back in the queue: ${w instanceof Error ? w.message : String(w)}`),
+          log(`icf-kanban: could not put ${e.taskId} back in the queue: ${errorMessage(w)}`),
         );
       }
     }),
@@ -274,7 +288,13 @@ const agentList = (deps: Deps): AgentList => {
 let defaultSkills: SkillDetector | null = null;
 const skillDetector = (deps: Deps): SkillDetector => deps.skills ?? (defaultSkills ??= createSkillDetector());
 
-const tracker = (dir: string, deps: Deps): Promise<Tracker> => openTracker(dir, deps.exec);
+const tracker = (dir: string, deps: Deps): Promise<CombinedTracker> => openTracker(dir, deps.exec);
+
+/**
+ * The config as the panel gets it: each source with its label and capabilities, the primary first,
+ * and every source ICF-kanban supports (`known`), so the panel keeps no list of its own.
+ */
+const configAnswer = (config: ProjectConfig) => ({ ...config, sources: config.sources.map(sourceInfo), known: knownSources() });
 
 /**
  * A task that got a new id (local: its file moved) takes its session links and queue entry along.
@@ -286,6 +306,20 @@ const followMove = async (id: string, task: Task, dir: string, deps: Deps): Prom
     bestEffort(deps, `icf-kanban: ${id} is now ${task.id}, but its ${what} could not follow`, action);
   await rekey('session links', () => renameLinks(linksFile(deps), dir, id, task.id));
   await rekey('queue entry', () => renameInQueue(queueFile(deps), dir, id, task.id));
+};
+
+/** `body.change` of /config/sources: exactly one of add, remove and primary, naming a known source. */
+const sourceChange = (value: unknown): SourceChange => {
+  const keys = typeof value === 'object' && value !== null && !Array.isArray(value) ? Object.keys(value) : [];
+  const key = keys[0];
+  if (keys.length !== 1 || (key !== 'add' && key !== 'remove' && key !== 'primary')) {
+    return invalid('"change" must be one of {add}, {remove} and {primary} with a source id');
+  }
+  const id = (value as Record<string, unknown>)[key];
+  if (typeof id !== 'string' || !(SOURCE_IDS as readonly string[]).includes(id)) {
+    return invalid(`"change.${key}" must be ${SOURCE_IDS.map((s) => `"${s}"`).join(' or ')}`);
+  }
+  return { [key]: id as SourceId } as SourceChange;
 };
 
 /** The config already in `dir`, or null when it has none (an unsupported one throws). */
@@ -371,7 +405,7 @@ const POST: Record<string, Route> = {
   },
   '/config/read': async (_body, dir) => {
     try {
-      return { config: await readConfig(dir) };
+      return { config: configAnswer(await readConfig(dir)) };
     } catch (e) {
       // The panel branches on these: an unconfigured project shows the tracker picker.
       if (e instanceof TrackerError && (e.code === 'NOT_CONFIGURED' || e.code === 'UNSUPPORTED')) {
@@ -390,7 +424,7 @@ const POST: Record<string, Route> = {
       );
     };
     const existing = await existingConfig(dir);
-    if (existing !== null && existing.tracker !== kind) alreadySetUp(existing.tracker);
+    if (existing !== null && existing.primary !== kind) alreadySetUp(existing.primary);
     // GitHub needs a github.com remote (gh works on it); without one nothing is written.
     if (kind === 'github' && (await detectRemote(dir, deps.exec)) === null) {
       throw new TrackerError('INVALID', 'This folder has no GitHub remote; add one or choose Local');
@@ -401,12 +435,44 @@ const POST: Record<string, Route> = {
     await gh?.preflight();
     await writeConfig(dir, kind);
     const config = await readConfig(dir);
-    if (config.tracker !== kind) alreadySetUp(config.tracker);
+    if (config.primary !== kind) alreadySetUp(config.primary);
     await gh?.setupLabels();
-    return { config };
+    return { config: configAnswer(config) };
+  },
+  /**
+   * Settings → Sources: `change` is `{add}`, `{remove}` or `{primary}` with a source id; the same file
+   * as `task-board init --add/--remove/--primary`. A primary change over a template edited by hand
+   * answers `{confirm: message}` and writes nothing; the panel asks and sends it again with `force`.
+   * A newly added GitHub source is checked (remote, gh) first and gets its labels, as in /config/init.
+   */
+  '/config/sources': async (body, dir, deps) => {
+    const change = sourceChange(body.change);
+    const force = body.force === true;
+    const config = await readConfig(dir);
+    const id = 'add' in change ? change.add : 'primary' in change ? change.primary : null;
+    const gh = id === 'github' && !config.sources.includes('github') ? createGithubTracker(dir, deps.exec, config.labels) : null;
+    if (gh !== null) {
+      if ((await detectRemote(dir, deps.exec)) === null) throw new TrackerError('INVALID', 'This folder has no GitHub remote; add one first');
+      await gh.preflight();
+    }
+    let changed: ProjectConfig;
+    try {
+      changed = await changeSources(dir, change, { force });
+    } catch (e) {
+      if (e instanceof EditedTemplateError) {
+        const label = (id: SourceId): string => sourceInfo(id).label;
+        return {
+          confirm: `The ${label(e.primary)} instructions in docs/agents/issue-tracker.md were edited by hand. Making ${label((change as { primary: SourceId }).primary)} the primary source replaces them with its template, and those edits are lost. Sections added after them are kept.`,
+        };
+      }
+      throw e;
+    }
+    await gh?.setupLabels();
+    return { config: configAnswer(changed) };
   },
   '/config/detect': async (_body, dir, deps) => ({ remote: await detectRemote(dir, deps.exec) }),
-  '/tasks/list': async (_body, dir, deps) => ({ tasks: await (await tracker(dir, deps)).list() }),
+  /** `errors`: one per source that failed (SourceError); the other sources' tasks are still listed. */
+  '/tasks/list': async (_body, dir, deps) => await (await tracker(dir, deps)).listAll(),
   '/tasks/get': async (body, dir, deps) => {
     const id = str(body, 'id');
     return { task: await (await tracker(dir, deps)).get(id) };
@@ -454,6 +520,15 @@ const POST: Record<string, Route> = {
     const task = await (await tracker(dir, deps)).removeParent(id);
     await followMove(id, task, dir, deps);
     return { task };
+  },
+  /**
+   * Publishes a local task to GitHub (`to`, optional, is "github"): an issue, its tickets as sub-issues,
+   * then the local files closed with a link. Half done on GitHub: 422 FAILED naming the created issues.
+   */
+  '/tasks/publish': async (body, dir, deps) => {
+    const id = str(body, 'id');
+    if (body.to !== undefined && body.to !== 'github') return invalid('"to" must be "github"');
+    return await publishTask(dir, await tracker(dir, deps), id);
   },
   '/tasks/close': async (body, dir, deps) => {
     const id = str(body, 'id');
@@ -552,6 +627,6 @@ export const handle = async (method: string, path: string, body: unknown, deps: 
   } catch (e) {
     if (e instanceof InvalidRequest) return error(400, 'INVALID', e.message);
     if (e instanceof TrackerError) return error(422, e.code, e.message);
-    return error(500, 'FAILED', errorText(e));
+    return error(500, 'FAILED', errorMessage(e));
   }
 };

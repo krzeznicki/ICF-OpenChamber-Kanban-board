@@ -2,14 +2,36 @@
 // through host.serviceRequest, and every POST body carries the project's absolute `directory`.
 import type { HostClient } from '@openchamber/sdk';
 import type { LinkStatus, QueueEntry } from '../core/queue.ts';
-import type { NewTask, Task, TaskEdit, TaskState } from '../core/types.ts';
+import type { NewTask, Published, SourceId, Task, TaskEdit, TaskState } from '../core/types.ts';
 import type { AgentsAnswer, ModelsAnswer } from './models.ts';
+import type { SourceChange, SourcesAnswer } from './sourceSettings.ts';
 
 /** `/links/list` reports a failed status lookup as `unknown`. */
 export type LinkRecord = { taskId: string; sessionId: string; directory: string; createdAt: number; status: Exclude<LinkStatus, 'error'> };
 
-/** Mirrors core/config.ts's ProjectConfig without pulling Node code into the page's type graph. */
-export type ProjectConfig = { tracker: 'local' | 'github'; labels: Record<string, string> };
+/** Mirrors core/sources.ts's SourceInfo (what the board knows about a source without opening it). */
+export type SourceInfo = {
+  id: SourceId;
+  label: string;
+  capabilities: { create: boolean; subtasks: boolean; blockedBy: boolean; claim: boolean; delete: boolean };
+};
+
+/**
+ * Mirrors the service's answer for core/config.ts's ProjectConfig without pulling Node code into the
+ * page's type graph: `sources` every source of the project with the primary first, `known` every
+ * source ICF-kanban supports (Settings → Sources offers the ones not added yet).
+ */
+export type ProjectConfig = {
+  primary: SourceId;
+  sources: SourceInfo[];
+  known: SourceInfo[];
+  labels: Record<string, string>;
+  /** Problems that do not stop the board (an unknown source under Additional sources, skipped). */
+  warnings?: string[];
+};
+
+/** Mirrors core/sources.ts's SourceError: a source that failed while listing; the others still listed. */
+export type SourceError = { source: SourceId; code: string; message: string; availability: 'needs-login' | 'unavailable' };
 
 export type ConfigResult = { config: ProjectConfig } | { error: { code: string; message: string } };
 
@@ -60,11 +82,20 @@ export const createApi = (host: HostClient, directory: string) => {
   return {
     directory,
     readConfig: () => call<ConfigResult>('POST', '/config/read'),
-    initConfig: (tracker: 'local' | 'github') =>
+    initConfig: (tracker: SourceId) =>
       call<{ config: ProjectConfig }>('POST', '/config/init', { tracker }).then((r) => r.config),
+    /**
+     * Settings → Sources: adds or removes a source or makes one primary (rewrites issue-tracker.md).
+     * `{confirm}`: the change would replace a template edited by hand; send it again with `force`.
+     */
+    changeSources: (change: SourceChange, force: boolean) => call<SourcesAnswer>('POST', '/config/sources', { change, force }),
     /** The github.com remote of the project (origin first), or null. */
     detect: () => call<{ remote: string | null }>('POST', '/config/detect').then((r) => r.remote),
-    list: () => call<{ tasks: Task[] }>('POST', '/tasks/list').then((r) => r.tasks),
+    /**
+     * The tasks of every source that listed and the errors of those that failed (sourceBanner.ts's
+     * listedBoard tells which ids belong to a failed one). When every source fails the call fails.
+     */
+    list: () => call<{ tasks: Task[]; errors?: SourceError[] }>('POST', '/tasks/list'),
     get: (id: string) => call<{ task: Task }>('POST', '/tasks/get', { id }).then((r) => r.task),
     create: (input: NewTask) => call<{ task: Task }>('POST', '/tasks/create', { input }).then((r) => r.task),
     setState: (id: string, state: TaskState) =>
@@ -83,6 +114,12 @@ export const createApi = (host: HostClient, directory: string) => {
       call<{ deleted: string[] }>('POST', '/tasks/delete', { id, withChildren }).then((r) => r.deleted),
     /** Unlinks a sub-task from its parent; like setParent the returned task can have a new id (local: it became a feature). */
     removeParent: (id: string) => call<{ task: Task }>('POST', '/tasks/unparent', { id }).then((r) => r.task),
+    /**
+     * Publishes a local task to GitHub (core/publish.ts): its issue and a feature's tickets as
+     * sub-issues; the local files are then closed. A half-done publish fails with what was created.
+     */
+    publish: (id: string) =>
+      call<Published>('POST', '/tasks/publish', { id, to: 'github' }),
     close: (id: string, withChildren = false) =>
       call<{ tasks: Task[] }>('POST', '/tasks/close', { id, withChildren }).then((r) => r.tasks),
     /**

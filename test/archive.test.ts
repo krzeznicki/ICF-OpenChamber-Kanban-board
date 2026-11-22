@@ -31,6 +31,7 @@ const task = (id: string, state: TaskState, extra: Partial<Task> = {}): Task => 
   url: null,
   updatedAt: 0,
   claimed: false,
+  source: id.startsWith('#') ? 'github' : 'local',
   ...extra,
 });
 

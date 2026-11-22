@@ -304,7 +304,7 @@ var instructionsText = (cliPath, variant = VARIANT) => {
   const test = variant === "test";
   const intro = test ? "Kanban TEST development build (a local test copy of the ICF-kanban board, separate from the production Kanban Board): use it only when the user asks for the TEST board. " : "";
   const skills = test ? "kanban-test-create/status/next/start" : "icf-kanban-create/status/next/start";
-  return intro + `Task board (ICF-kanban${test ? " TEST" : ""}): in projects with docs/agents/issue-tracker.md, tasks are managed with \`${tb}\`; always pass --dir <the project root, i.e. the main checkout, not a worktree>. \`list --ready\` or \`next\` for ready tickets, \`show <id>\`, \`claim <id>\` (claim applies to sub-tasks you take from \`list --ready\`/\`next\`; skip lines marked claimed), \`state <id> <state>\` (done closes), \`create --title <t> [--type bug|enhancement] [--parent <id>]\`; --json for data. Skills ${skills} describe the steps. The ICF-kanban ${test ? "TEST board" : "board"} in OpenChamber shows the same tasks.`;
+  return intro + `Task board (ICF-kanban${test ? " TEST" : ""}): in projects with docs/agents/issue-tracker.md, tasks are managed with \`${tb}\`; always pass --dir <the project root, i.e. the main checkout, not a worktree>. \`list --ready\` or \`next\` for ready tickets, \`show <id>\`, \`claim <id>\` (claim applies to sub-tasks you take from \`list --ready\`/\`next\`; skip lines marked claimed), \`state <id> <state>\` (done closes), \`create --title <t> [--type bug|enhancement] [--parent <id>] [--source <id>]\`; --json for data. Skills ${skills} describe the steps. The ICF-kanban ${test ? "TEST board" : "board"} in OpenChamber shows the same tasks.`;
 };
 var publishInstructions = async (host2, cliPath, log = console.error) => {
   log("icf-kanban: setting agent instructions");
@@ -334,6 +334,10 @@ var TEMPLATES = {
 };
 
 // src/core/types.ts
+var SOURCE_IDS = ["local", "github"];
+var isSourceId = (id) => SOURCE_IDS.includes(id);
+var unknownSource = (id, known = SOURCE_IDS) => new TrackerError("INVALID", `Unknown source "${id}": use ${known.join(" or ")}`);
+var errorMessage = (e) => e instanceof Error ? e.message : String(e);
 var TrackerError = class extends Error {
   // Declared explicitly: Node's type stripping does not support constructor parameter properties.
   code;
@@ -365,6 +369,89 @@ var firstHeading = (text) => {
     if (m) return m[1];
   }
   return null;
+};
+var ADDITIONAL = "Additional sources";
+var ADDITIONAL_HEADING = /^ {0,3}##\s+additional sources\s*#*\s*$/i;
+var SECTION_END = /^ {0,3}#{1,2}\s/;
+var SOURCE_ITEM = /^\s*[-*+]\s+(?:`([A-Za-z][\w.-]*)`(?=[\s:.,;]|$)|([A-Za-z][\w.-]*)\s*$)/;
+var sourceItem = (line) => {
+  const m = SOURCE_ITEM.exec(line);
+  return m === null ? null : (m[1] ?? m[2]).toLowerCase();
+};
+var additionalRange = (lines) => {
+  const start2 = lines.findIndex((l) => ADDITIONAL_HEADING.test(l));
+  if (start2 === -1) return null;
+  let end = start2 + 1;
+  while (end < lines.length && !SECTION_END.test(lines[end])) end++;
+  return { start: start2, end };
+};
+var unknownSourceWarning = (id) => `Unknown source "${id}" under ## ${ADDITIONAL} in ${ISSUE_TRACKER} is skipped: ICF-kanban supports ${SOURCE_IDS.join(" and ")}`;
+var additionalSources = (text) => {
+  const lines = text.split(/\r?\n/);
+  const range = additionalRange(lines);
+  const ids = [];
+  const warnings = [];
+  if (range === null) return { ids, warnings };
+  for (const line of lines.slice(range.start + 1, range.end)) {
+    const id = sourceItem(line);
+    if (id === null) continue;
+    if (!isSourceId(id)) warnings.push(unknownSourceWarning(id));
+    else if (!ids.includes(id)) ids.push(id);
+  }
+  return { ids, warnings };
+};
+var SOURCE_TEXT = {
+  local: "markdown files under `.scratch/` in this repository (private: they stay with the repository checkout; ids look like `.scratch/<feature>/spec.md`)",
+  github: "this repository's GitHub Issues (shared with the team; ids look like `#42`)"
+};
+var additionalSourcesSection = (ids) => [
+  `## ${ADDITIONAL}`,
+  "",
+  "The Kanban board also shows tasks from the sources below. Everything above describes the primary source: a new task goes there unless you name another source.",
+  "",
+  ...ids.map((id) => `- \`${id}\`: ${SOURCE_TEXT[id]}. Publish there with \`task-board create --source ${id} --title <title> ...\`.`),
+  "",
+  "A sub-task (`task-board create --parent <id>`) always goes to its parent's source; naming another source is refused. Tasks of different sources are never linked: no parent or blocker across sources.",
+  "Every other command (`show`, `state`, `edit`, `claim`, `parent`, `close`, `delete`) works on an id from any source. `list` and `next` read every source and name each task's source; `--source <id>` reads only that one.",
+  ""
+].join("\n");
+var GENERATED = new Set(
+  additionalSourcesSection(SOURCE_IDS).split("\n").filter((l) => l.trim() !== "" && sourceItem(l) === null)
+);
+var splitAdditional = (text) => {
+  const lines = text.split("\n");
+  const range = additionalRange(lines);
+  if (range === null) return { before: text, after: "", notes: "" };
+  const kept = lines.slice(range.start + 1, range.end).filter((l) => {
+    const id = sourceItem(l);
+    return !GENERATED.has(l) && (id === null || !isSourceId(id));
+  });
+  return {
+    before: lines.slice(0, range.start).join("\n"),
+    after: lines.slice(range.end).join("\n"),
+    notes: kept.join("\n").replace(/\n{3,}/g, "\n\n").trim()
+  };
+};
+var assemble = (head, after, ids, notes) => {
+  let out = `${head.replace(/\s+$/, "")}
+`;
+  const rest = after.replace(/\s+$/, "");
+  if (rest.trim() !== "") out += `
+${rest.replace(/^\n+/, "")}
+`;
+  if (ids.length > 0) out += `
+${additionalSourcesSection(ids)}`;
+  else if (notes !== "") out += `
+## ${ADDITIONAL}
+`;
+  if (notes !== "") out += `
+${notes}
+`;
+  return out;
+};
+var withAdditionalSources = (text, ids) => {
+  const { before, after, notes } = splitAdditional(text);
+  return assemble(before, after, ids, notes);
 };
 var detect = (text) => {
   const heading = firstHeading(text);
@@ -399,7 +486,10 @@ var readConfig = async (root) => {
   if (tracker2 === null) {
     throw new TrackerError("NOT_CONFIGURED", `No ${ISSUE_TRACKER}: choose a tracker (Local Markdown or GitHub) first`);
   }
-  return { tracker: detect(tracker2), labels: await readLabels(root) };
+  const primary = detect(tracker2);
+  const additional = additionalSources(tracker2);
+  const sources = [primary, ...additional.ids.filter((id) => id !== primary)];
+  return { primary, sources, labels: await readLabels(root), warnings: additional.warnings };
 };
 var writeNew = async (path, text) => {
   try {
@@ -414,6 +504,59 @@ var writeConfig = async (root, tracker2) => {
   }
   await mkdir(join(root, DIR), { recursive: true });
   await writeNew(join(root, ISSUE_TRACKER), tracker2 === "local" ? TEMPLATES.local : TEMPLATES.github);
+};
+var EditedTemplateError = class extends TrackerError {
+  /** The primary source whose edited template would be replaced. */
+  primary;
+  constructor(primary) {
+    super(
+      "INVALID",
+      `The ${primary} template in ${ISSUE_TRACKER} was edited by hand; changing the primary source replaces that template (its own sections) with the new one, and the edits in it are lost. The sections added after it are kept, and so is ## ${ADDITIONAL}. Run it again with force (--force) to go ahead.`
+    );
+    this.name = "EditedTemplateError";
+    this.primary = primary;
+  }
+};
+var sourceOf = (change) => "add" in change ? change.add : "remove" in change ? change.remove : change.primary;
+var changedText = (text, config, change, force) => {
+  const others = config.sources.filter((id) => id !== config.primary);
+  if ("add" in change) return withAdditionalSources(text, others.includes(change.add) || change.add === config.primary ? others : [...others, change.add]);
+  if ("remove" in change) {
+    if (change.remove === config.primary) {
+      throw new TrackerError("INVALID", `${change.remove} is the primary source; make another source primary before removing it`);
+    }
+    return withAdditionalSources(text, others.filter((id) => id !== change.remove));
+  }
+  const primary = change.primary;
+  if (primary === config.primary) return text;
+  const rest = [config.primary, ...others].filter((id) => id !== primary);
+  const { before, after, notes } = splitAdditional(text);
+  const base = assemble(before, after, [], "");
+  const old = TEMPLATES[config.primary];
+  if (!base.startsWith(old) && !force) throw new EditedTemplateError(config.primary);
+  const kept = base.startsWith(old) ? base.slice(old.length) : `
+${base.slice(templateEnd(base, old))}`;
+  return assemble(`${TEMPLATES[primary]}${kept}`, "", rest, notes);
+};
+var sectionTitles = (text) => new Set(text.split("\n").flatMap((l) => SECTION_END.test(l) ? [HEADING.exec(l)?.[1] ?? l] : []));
+var templateEnd = (text, template) => {
+  const own = sectionTitles(template);
+  let at = 0;
+  for (const line of text.split("\n")) {
+    if (at > 0 && SECTION_END.test(line) && !own.has(HEADING.exec(line)?.[1] ?? line)) return at;
+    at += line.length + 1;
+  }
+  return text.length;
+};
+var changeSources = async (root, change, opts = {}) => {
+  const id = sourceOf(change);
+  if (!isSourceId(id)) throw unknownSource(String(id));
+  const config = await readConfig(root);
+  const path = join(root, ISSUE_TRACKER);
+  const text = await readFile(path, "utf8");
+  const next = changedText(text, config, change, opts.force === true);
+  if (next !== text) await writeFile(path, next);
+  return readConfig(root);
 };
 
 // src/core/githubTracker.ts
@@ -563,7 +706,8 @@ var createGithubTracker = (root, exec, labels) => {
     blockedBy: (rel.blockedBy ?? bodyBlockers(issue.body)).map(idOf),
     url: issue.url,
     updatedAt: Date.parse(issue.updatedAt) || 0,
-    claimed: issue.assignees.length > 0
+    claimed: issue.assignees.length > 0,
+    source: "github"
   });
   const load = async (n) => {
     const g = (await graph([n], true)).get(n) ?? null;
@@ -681,7 +825,13 @@ var createGithubTracker = (root, exec, labels) => {
       const m = /\/issues\/(\d+)\s*$/.exec(r.stdout.trim());
       if (m === null) throw new TrackerError("FAILED", `gh issue create printed no issue URL: ${r.stdout.trim()}`);
       const n = Number(m[1]);
-      if (input.state === "done") await run(["issue", "close", String(n)]);
+      if (input.state === "done") {
+        try {
+          await run(["issue", "close", String(n)]);
+        } catch (e) {
+          throw new TrackerError("FAILED", `${idOf(n)} was created (${r.stdout.trim()}), but it could not be closed: ${errorMessage(e)}`);
+        }
+      }
       return get(idOf(n));
     },
     setState,
@@ -1001,6 +1151,7 @@ var splitParts = (text) => {
     tail: tailAt < lines.length ? lines.slice(tailAt).join("\n").replace(/\s+$/, "") : null
   };
 };
+var issueDescription = (text) => splitParts(text).description;
 var withDescription = (text, description) => {
   const p = splitParts(text);
   const { lead, rest } = splitLead(normalizeBody(description));
@@ -1012,6 +1163,33 @@ var withDescription = (text, description) => {
   if (p.tail !== null) parts.push(p.tail);
   const out = parts.join("\n\n") + "\n";
   return text.includes("\r\n") ? out.replace(/\n/g, "\r\n") : out;
+};
+var withComment = (text, comment) => {
+  const crlf = text.includes("\r\n");
+  const lines = splitLines(text.replace(/\r\n/g, "\n"));
+  const plain = plainLines(lines, false);
+  const at = plain.find(([, c]) => /^## Comments\s*$/i.test(c))?.[0];
+  const body = comment.replace(/\r\n/g, "\n").trim();
+  let out;
+  if (at === void 0) {
+    out = `${text.replace(/\r\n/g, "\n").replace(/\s+$/, "")}
+
+## Comments
+
+${body}
+`;
+  } else {
+    const end = plain.find(([i, c]) => i > at && SECTION.test(c))?.[0] ?? lines.length;
+    const before = lines.slice(0, end).join("\n").replace(/\s+$/, "");
+    const after = lines.slice(end).join("\n").replace(/\s+$/, "");
+    out = `${before}
+
+${body}
+${after === "" ? "" : `
+${after}
+`}`;
+  }
+  return crlf ? out.replace(/\n/g, "\r\n") : out;
 };
 var fieldsTight = (text) => {
   const f = headerFields(splitLines(text));
@@ -1103,7 +1281,8 @@ var createLocalTracker = (root) => {
         blockedBy: [],
         url: null,
         updatedAt: s.mtimeMs,
-        claimed: false
+        claimed: false,
+        source: "local"
       };
     }
     const p = parseSpec(file.text, feature);
@@ -1118,7 +1297,8 @@ var createLocalTracker = (root) => {
       blockedBy: [],
       url: null,
       updatedAt: file.mtime,
-      claimed: false
+      claimed: false,
+      source: "local"
     };
   };
   const resolveBlockers = (feature, numbers, files) => {
@@ -1149,7 +1329,8 @@ var createLocalTracker = (root) => {
       blockedBy: resolveBlockers(feature, p.blockedBy, siblings),
       url: null,
       updatedAt: data.mtime,
-      claimed: p.claimed
+      claimed: p.claimed,
+      source: "local"
     };
   };
   const get = async (id) => {
@@ -1415,11 +1596,247 @@ var createLocalTracker = (root) => {
   };
 };
 
+// src/core/sources.ts
+var ALL = { create: true, subtasks: true, blockedBy: true, claim: true, delete: true };
+var SOURCES = {
+  local: { label: "Local", capabilities: ALL },
+  github: { label: "GitHub", capabilities: ALL }
+};
+var sourceInfo = (id) => ({ id, ...SOURCES[id] });
+var knownSources = () => SOURCE_IDS.map(sourceInfo);
+var availabilityOf = (e) => {
+  return { status: e instanceof TrackerError && e.code === "GH_AUTH" ? "needs-login" : "unavailable", message: errorMessage(e) };
+};
+var sourceError = async (source, e) => {
+  const fromError = availabilityOf(e).status;
+  const asked = fromError === "needs-login" ? null : await source.availability().catch(() => null);
+  return {
+    source: source.id,
+    code: e instanceof TrackerError ? e.code : "FAILED",
+    message: errorMessage(e),
+    availability: asked?.status === "needs-login" ? "needs-login" : fromError
+  };
+};
+var createLocalSource = (root) => ({
+  ...createLocalTracker(root),
+  ...sourceInfo("local"),
+  owns: (id) => id.startsWith(".scratch/"),
+  availability: async () => ({ status: "ok" })
+});
+var createGithubSource = (root, exec, labels) => {
+  const tracker2 = createGithubTracker(root, exec, labels);
+  return {
+    ...tracker2,
+    ...sourceInfo("github"),
+    // `42` is accepted as well as `#42`, as the GitHub tracker always did.
+    owns: (id) => /^\s*#?\d+\s*$/.test(id),
+    availability: async () => {
+      try {
+        await tracker2.preflight();
+        return { status: "ok" };
+      } catch (e) {
+        return availabilityOf(e);
+      }
+    }
+  };
+};
+var createCombinedTracker = (primary, sources) => {
+  const sourceOf2 = (id) => {
+    const owner = sources.find((s) => s.owns(id));
+    if (owner !== void 0) return owner;
+    if (sources.length === 1) return sources[0];
+    throw new TrackerError("NOT_FOUND", `No source of this project has a task "${id}" (sources: ${known()})`);
+  };
+  const primarySource = sources.find((s) => s.id === primary) ?? sources[0];
+  const ids = () => sources.map((s) => s.id);
+  const known = () => ids().join(", ");
+  const named2 = (id) => {
+    const source = sources.find((s) => s.id === id);
+    if (source === void 0) throw unknownSource(id, ids());
+    return source;
+  };
+  const NO_LINKS = "tasks of different sources are never linked";
+  const targetOf = (input) => {
+    const asked = input.source === void 0 ? void 0 : named2(input.source);
+    if (input.parentId === void 0) return asked ?? primarySource;
+    const parent = sourceOf2(input.parentId);
+    if (asked !== void 0 && asked !== parent) {
+      throw new TrackerError(
+        "INVALID",
+        `A sub-task goes to its parent's source: ${input.parentId} is in ${parent.id}, not ${asked.id}; drop --source or pick a parent in ${asked.id}`
+      );
+    }
+    return parent;
+  };
+  const create = async (input) => {
+    const target = targetOf(input);
+    for (const b of input.blockedBy ?? []) {
+      const owner = sources.find((s) => s.owns(b));
+      if (owner !== void 0 && owner !== target) {
+        throw new TrackerError("INVALID", `Blocker ${b} is in ${owner.id}, but the new task goes to ${target.id}: ${NO_LINKS}`);
+      }
+    }
+    const { source: _source, ...rest } = input;
+    return target.create(rest);
+  };
+  const setParent = async (id, parentId) => {
+    const child = sourceOf2(id);
+    const parent = sourceOf2(parentId);
+    if (child !== parent) {
+      throw new TrackerError("INVALID", `${id} (${child.id}) and ${parentId} (${parent.id}) are in different sources: ${NO_LINKS}`);
+    }
+    return child.setParent(id, parentId);
+  };
+  const listAll = async (opts = {}) => {
+    const asked = opts.source === void 0 ? sources : sources.filter((s) => s.id === opts.source);
+    if (asked.length === 0) {
+      throw unknownSource(String(opts.source), ids());
+    }
+    const results = await Promise.allSettled(asked.map((s) => s.list()));
+    const failed = results.flatMap((r) => r.status === "rejected" ? [r.reason] : []);
+    if (failed.length === asked.length) throw failed[0];
+    const tasks = [];
+    const errors = [];
+    for (const [i, r] of results.entries()) {
+      if (r.status === "fulfilled") tasks.push(...r.value);
+      else errors.push(await sourceError(asked[i], r.reason));
+    }
+    return { tasks, errors };
+  };
+  return {
+    primary: primarySource.id,
+    sources,
+    sourceOf: sourceOf2,
+    listAll,
+    list: async () => (await listAll()).tasks,
+    get: async (id) => sourceOf2(id).get(id),
+    create,
+    setState: async (id, state2) => sourceOf2(id).setState(id, state2),
+    setType: async (id, type) => sourceOf2(id).setType(id, type),
+    edit: async (id, changes) => sourceOf2(id).edit(id, changes),
+    claim: async (id) => sourceOf2(id).claim(id),
+    setParent,
+    removeParent: async (id) => sourceOf2(id).removeParent(id),
+    close: async (id, opts) => sourceOf2(id).close(id, opts),
+    remove: async (id, opts) => sourceOf2(id).remove(id, opts)
+  };
+};
+
 // src/core/openTracker.ts
 var openTracker = async (root, exec) => {
   const config = await readConfig(root);
-  if (config.tracker === "local") return createLocalTracker(root);
-  return createGithubTracker(root, exec, config.labels);
+  const sources = config.sources.map(
+    (id) => id === "local" ? createLocalSource(root) : createGithubSource(root, exec, config.labels)
+  );
+  return createCombinedTracker(config.primary, sources);
+};
+
+// src/core/publish.ts
+import { existsSync } from "node:fs";
+import { readFile as readFile3, writeFile as writeFile3 } from "node:fs/promises";
+import { join as join3 } from "node:path";
+var publishedComment = (url) => `Published to GitHub: ${url}`;
+var named = (t) => `${t.id} (${t.title})`;
+var blockersFirst = (tickets) => {
+  const ids = new Set(tickets.map((t) => t.id));
+  const done = /* @__PURE__ */ new Set();
+  const out = [];
+  const rest = [...tickets];
+  while (rest.length > 0) {
+    const i = Math.max(0, rest.findIndex((t) => t.blockedBy.every((b) => !ids.has(b) || done.has(b))));
+    const [next] = rest.splice(i, 1);
+    out.push(next);
+    done.add(next.id);
+  }
+  return out;
+};
+var publishTask = async (root, tracker2, id) => {
+  if (!tracker2.sources.some((s) => s.id === "github")) {
+    throw new TrackerError("INVALID", "This project has no GitHub source; add one in Settings \u2192 Sources first");
+  }
+  const task = await tracker2.get(id);
+  if (task.source !== "local") {
+    throw new TrackerError("INVALID", `Only a local task can be published to GitHub; ${task.id} is in ${task.source}`);
+  }
+  if (task.state === "done") {
+    throw new TrackerError("INVALID", `${task.id} is done (already published?); reopen it to publish it`);
+  }
+  const tickets = task.kind === "parent" ? blockersFirst(
+    (await tracker2.listAll({ source: "local" })).tasks.filter((t) => t.parentId === task.id).sort((a, b) => a.id.localeCompare(b.id, void 0, { numeric: true }))
+  ) : [];
+  const created = [];
+  const issueOf = /* @__PURE__ */ new Map();
+  const localOf = /* @__PURE__ */ new Map();
+  const publishOne = async (t, parentId) => {
+    const blockedBy = t.blockedBy.flatMap((b) => {
+      const to = issueOf.get(b);
+      return to === void 0 ? [] : [to.id];
+    });
+    const made = await tracker2.create({
+      title: t.title,
+      body: issueDescription(t.body),
+      ...t.state !== "done" ? { state: t.state } : {},
+      ...t.type !== null ? { type: t.type } : {},
+      ...parentId !== void 0 ? { parentId } : {},
+      ...blockedBy.length > 0 ? { blockedBy } : {},
+      source: parentId === void 0 ? "github" : void 0
+    });
+    created.push(made);
+    issueOf.set(t.id, made);
+    localOf.set(t.id, t);
+    return t.state === "done" ? tracker2.setState(made.id, "done") : made;
+  };
+  let issue;
+  const subIssues = [];
+  let at = task;
+  try {
+    issue = await publishOne(task);
+    for (const ticket of tickets) {
+      at = ticket;
+      subIssues.push({ from: ticket.id, task: await publishOne(ticket, issue.id) });
+    }
+  } catch (e) {
+    if (created.length === 0) throw e;
+    throw new TrackerError(
+      "FAILED",
+      `Publishing stopped at ${named(at)}: ${errorMessage(e)}. Created on GitHub: ${created.map(named).join(", ")}. The local task was left open; delete those issues or finish the rest by hand before publishing again`
+    );
+  }
+  const closed = [];
+  const published = `Published to GitHub as ${created.map(named).join(", ")}`;
+  for (const [from, to] of issueOf) {
+    const path = join3(root, ...from.split("/"));
+    const comment = async () => {
+      try {
+        await writeFile3(path, withComment(await readFile3(path, "utf8"), publishedComment(to.url ?? to.id)));
+      } catch (e) {
+        throw new TrackerError("FAILED", `${published}, but the link comment could not be written to ${from}: ${errorMessage(e)}. ${progress(closed, issueOf, from)}`);
+      }
+    };
+    const close = async () => {
+      const local = localOf.get(from);
+      if (local.state === "done") return;
+      try {
+        closed.push(await tracker2.setState(from, "done"));
+      } catch (e) {
+        throw new TrackerError("FAILED", `${published}, but ${from} could not be closed: ${errorMessage(e)}. ${progress(closed, issueOf, from)}`);
+      }
+    };
+    if (existsSync(path)) {
+      await comment();
+      await close();
+    } else {
+      await close();
+      await comment();
+    }
+  }
+  return { from: task.id, issue, subIssues, closed };
+};
+var progress = (closed, issueOf, at) => {
+  const ids = [...issueOf.keys()];
+  const left = ids.slice(ids.indexOf(at));
+  const done = closed.length === 0 ? "No local file was closed" : `Closed with their link: ${closed.map((t) => t.id).join(", ")}`;
+  return `${done}; still open: ${left.join(", ")}. Close them by hand with a comment linking their issue`;
 };
 
 // src/service/models.ts
@@ -1557,7 +1974,7 @@ var createAgentList = (exec, now = Date.now) => {
 // src/service/skills.ts
 import { readdir as readdir2, stat as stat2 } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join as join3 } from "node:path";
+import { join as join4 } from "node:path";
 
 // src/core/skills.ts
 var MATT_SKILLS = [
@@ -1588,11 +2005,11 @@ var KNOWN_SKILLS = [...MATT_SKILLS, ...SUPERPOWERS_SKILLS];
 // src/service/skills.ts
 var SKILLS_TTL_MS = 5 * 60 * 1e3;
 var skillRoots = (home, project) => [
-  join3(home, ".config", "opencode", "skills"),
-  join3(home, ".claude", "skills"),
-  join3(home, ".agents", "skills"),
-  join3(project, ".opencode", "skills"),
-  join3(project, ".claude", "skills")
+  join4(home, ".config", "opencode", "skills"),
+  join4(home, ".claude", "skills"),
+  join4(home, ".agents", "skills"),
+  join4(project, ".opencode", "skills"),
+  join4(project, ".claude", "skills")
 ];
 var isFile = async (path) => {
   try {
@@ -1616,10 +2033,10 @@ var dirs = async (path) => {
   }
 };
 var pluginSkillRoots = async (home) => {
-  const npm = join3(home, ".cache", "opencode", "npm");
+  const npm = join4(home, ".cache", "opencode", "npm");
   const candidates = [];
   for (const plugin of await dirs(npm))
-    for (const version of await dirs(join3(npm, plugin))) candidates.push(join3(npm, plugin, version, "node_modules", "superpowers", "skills"));
+    for (const version of await dirs(join4(npm, plugin))) candidates.push(join4(npm, plugin, version, "node_modules", "superpowers", "skills"));
   const ok = await Promise.all(candidates.map(isDir));
   return candidates.filter((_, i) => ok[i]).sort((a, b) => a < b ? 1 : a > b ? -1 : 0);
 };
@@ -1627,7 +2044,7 @@ var detectSkills = async (home, project, names = KNOWN_SKILLS) => {
   const roots = [...skillRoots(home, project), ...await pluginSkillRoots(home)];
   const hits = await Promise.all(
     names.map(async (name) => {
-      const files = roots.map((r) => join3(r, name, "SKILL.md"));
+      const files = roots.map((r) => join4(r, name, "SKILL.md"));
       const ok = await Promise.all(files.map(isFile));
       return files.find((_, i) => ok[i]);
     })
@@ -1651,7 +2068,7 @@ var createSkillDetector = (home = homedir(), now = Date.now) => {
 
 // src/service/queue.ts
 import { homedir as homedir3 } from "node:os";
-import { join as join5 } from "node:path";
+import { join as join6 } from "node:path";
 
 // src/core/queue.ts
 var MAX_START_FAILURES = 3;
@@ -1659,15 +2076,15 @@ var nextToStart = (queued, running, maxParallel) => queued.slice(0, Math.max(0, 
 
 // src/service/store.ts
 import { randomBytes } from "node:crypto";
-import { mkdir as mkdir3, readFile as readFile3, rename, writeFile as writeFile3 } from "node:fs/promises";
+import { mkdir as mkdir3, readFile as readFile4, rename, writeFile as writeFile4 } from "node:fs/promises";
 import { homedir as homedir2 } from "node:os";
-import { dirname, join as join4 } from "node:path";
-var dataDir = (variant = VARIANT, home = homedir2()) => join4(home, dataDirName(variant));
+import { dirname, join as join5 } from "node:path";
+var dataDir = (variant = VARIANT, home = homedir2()) => join5(home, dataDirName(variant));
 var code = (e) => e?.code;
 var readJson = async (file, now = Date.now) => {
   let text;
   try {
-    text = await readFile3(file, "utf8");
+    text = await readFile4(file, "utf8");
   } catch (e) {
     if (code(e) === "ENOENT") return null;
     throw e;
@@ -1686,7 +2103,7 @@ var readJson = async (file, now = Date.now) => {
 var writeJson = async (file, data) => {
   await mkdir3(dirname(file), { recursive: true });
   const tmp = `${file}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
-  await writeFile3(tmp, `${JSON.stringify(data, null, 2)}
+  await writeFile4(tmp, `${JSON.stringify(data, null, 2)}
 `, "utf8");
   await rename(tmp, file);
 };
@@ -1703,7 +2120,7 @@ var serial = (file, fn) => {
 };
 
 // src/service/queue.ts
-var defaultQueueFile = (variant = VARIANT, home = homedir3()) => join5(dataDir(variant, home), "queue.json");
+var defaultQueueFile = (variant = VARIANT, home = homedir3()) => join6(dataDir(variant, home), "queue.json");
 var DEFAULT_MAX_PARALLEL = 3;
 var MAX_PARALLEL_LIMIT = 10;
 var RESERVE_MS = 18e4;
@@ -1834,9 +2251,9 @@ var takeFromQueue = (file, dir, input) => update(file, dir, async (q) => {
 // src/service/sessions.ts
 import { randomBytes as randomBytes2 } from "node:crypto";
 import { homedir as homedir4 } from "node:os";
-import { basename, dirname as dirname2, join as join6, sep } from "node:path";
+import { basename, dirname as dirname2, join as join7, sep } from "node:path";
 var LINKS_PER_PROJECT = 500;
-var defaultLinksFile = (variant = VARIANT, home = homedir4()) => join6(dataDir(variant, home), "links.json");
+var defaultLinksFile = (variant = VARIANT, home = homedir4()) => join7(dataDir(variant, home), "links.json");
 var worktreeBranch = (slug, variant = VARIANT) => `${branchPrefix(variant)}${slug}`;
 var isLink = (v) => {
   const l = v;
@@ -1917,7 +2334,7 @@ var worktreeSlug = (taskId, title, suffix = randomBytes2(3).toString("hex")) => 
   const name = base(title) || base(taskId.replace(/^.*\//, "").replace(/\.md$/, "")) || "task";
   return `${name}-${suffix}`;
 };
-var worktreesRoot = (directory) => join6(dirname2(directory), `${basename(directory)}-worktrees`);
+var worktreesRoot = (directory) => join7(dirname2(directory), `${basename(directory)}-worktrees`);
 var message2 = (e) => e instanceof Error ? e.message : String(e);
 var START_RETRY_MS = [1e3, 3e3, 6e3];
 var notReadyYet = (e) => e?.status === 503;
@@ -1955,7 +2372,7 @@ var startSession = async (input, deps2) => {
   let branch = "";
   if (input.location === "worktree") {
     const slug = worktreeSlug(input.taskId, input.title, deps2.suffix?.());
-    const path = join6(worktreesRoot(input.directory), slug);
+    const path = join7(worktreesRoot(input.directory), slug);
     branch = worktreeBranch(slug);
     const r = await deps2.exec("git", ["-C", input.directory, "worktree", "add", "-b", branch, path], { cwd: input.directory });
     if (r.code !== 0) {
@@ -2026,6 +2443,7 @@ var newTask = (v) => {
   if (v.type !== void 0) task.type = str(v, "type");
   if (v.state !== void 0) task.state = state(v.state, "input.state");
   if (v.parentId !== void 0) task.parentId = str(v, "parentId");
+  if (v.source !== void 0) task.source = str(v, "source");
   if (v.blockedBy !== void 0) {
     const b = v.blockedBy;
     task.blockedBy = Array.isArray(b) && b.every((id) => typeof id === "string" && id.trim() !== "") ? b : invalid('"input.blockedBy" must be an array of task ids');
@@ -2080,12 +2498,11 @@ var start = async (dir, input, deps2) => {
   }
 };
 var logOf = (deps2) => deps2.log ?? ((m) => console.error(m));
-var errorText = (e) => e instanceof Error ? e.message : String(e);
 var bestEffort = async (deps2, message3, action) => {
   try {
     await action();
   } catch (e) {
-    logOf(deps2)(`${message3}: ${errorText(e)}`);
+    logOf(deps2)(`${message3}: ${errorMessage(e)}`);
   }
 };
 var liveLinks = async (dir, deps2) => withStatus(await listLinks(linksFile(deps2), dir), deps2.sessions);
@@ -2099,10 +2516,10 @@ var drainProject = async (dir, deps2) => {
         await start(dir, { taskId: e.taskId, title: e.title, prompt: e.prompt, model: e.model, agent: e.agent, variant: e.variant ?? null, location: e.location }, deps2);
         forgetRemoval(queueFile(deps2), dir, e.taskId);
       } catch (err) {
-        const why = (err instanceof Error ? err.message : String(err)).slice(0, ERROR_MAX2);
+        const why = errorMessage(err).slice(0, ERROR_MAX2);
         log(`icf-kanban: could not start the queued task ${e.taskId}: ${why}`);
         await requeueFailed(queueFile(deps2), dir, e, why).catch(
-          (w) => log(`icf-kanban: could not put ${e.taskId} back in the queue: ${w instanceof Error ? w.message : String(w)}`)
+          (w) => log(`icf-kanban: could not put ${e.taskId} back in the queue: ${errorMessage(w)}`)
         );
       }
     })
@@ -2142,11 +2559,24 @@ var agentList = (deps2) => {
 var defaultSkills = null;
 var skillDetector = (deps2) => deps2.skills ?? (defaultSkills ??= createSkillDetector());
 var tracker = (dir, deps2) => openTracker(dir, deps2.exec);
+var configAnswer = (config) => ({ ...config, sources: config.sources.map(sourceInfo), known: knownSources() });
 var followMove = async (id, task, dir, deps2) => {
   if (task.id === id) return;
   const rekey = (what, action) => bestEffort(deps2, `icf-kanban: ${id} is now ${task.id}, but its ${what} could not follow`, action);
   await rekey("session links", () => renameLinks(linksFile(deps2), dir, id, task.id));
   await rekey("queue entry", () => renameInQueue(queueFile(deps2), dir, id, task.id));
+};
+var sourceChange = (value) => {
+  const keys = typeof value === "object" && value !== null && !Array.isArray(value) ? Object.keys(value) : [];
+  const key = keys[0];
+  if (keys.length !== 1 || key !== "add" && key !== "remove" && key !== "primary") {
+    return invalid('"change" must be one of {add}, {remove} and {primary} with a source id');
+  }
+  const id = value[key];
+  if (typeof id !== "string" || !SOURCE_IDS.includes(id)) {
+    return invalid(`"change.${key}" must be ${SOURCE_IDS.map((s) => `"${s}"`).join(" or ")}`);
+  }
+  return { [key]: id };
 };
 var existingConfig = async (dir) => {
   try {
@@ -2206,7 +2636,7 @@ var POST = {
   },
   "/config/read": async (_body, dir) => {
     try {
-      return { config: await readConfig(dir) };
+      return { config: configAnswer(await readConfig(dir)) };
     } catch (e) {
       if (e instanceof TrackerError && (e.code === "NOT_CONFIGURED" || e.code === "UNSUPPORTED")) {
         return { error: { code: e.code, message: e.message } };
@@ -2224,7 +2654,7 @@ var POST = {
       );
     };
     const existing = await existingConfig(dir);
-    if (existing !== null && existing.tracker !== kind) alreadySetUp(existing.tracker);
+    if (existing !== null && existing.primary !== kind) alreadySetUp(existing.primary);
     if (kind === "github" && await detectRemote(dir, deps2.exec) === null) {
       throw new TrackerError("INVALID", "This folder has no GitHub remote; add one or choose Local");
     }
@@ -2232,12 +2662,44 @@ var POST = {
     await gh?.preflight();
     await writeConfig(dir, kind);
     const config = await readConfig(dir);
-    if (config.tracker !== kind) alreadySetUp(config.tracker);
+    if (config.primary !== kind) alreadySetUp(config.primary);
     await gh?.setupLabels();
-    return { config };
+    return { config: configAnswer(config) };
+  },
+  /**
+   * Settings → Sources: `change` is `{add}`, `{remove}` or `{primary}` with a source id; the same file
+   * as `task-board init --add/--remove/--primary`. A primary change over a template edited by hand
+   * answers `{confirm: message}` and writes nothing; the panel asks and sends it again with `force`.
+   * A newly added GitHub source is checked (remote, gh) first and gets its labels, as in /config/init.
+   */
+  "/config/sources": async (body, dir, deps2) => {
+    const change = sourceChange(body.change);
+    const force = body.force === true;
+    const config = await readConfig(dir);
+    const id = "add" in change ? change.add : "primary" in change ? change.primary : null;
+    const gh = id === "github" && !config.sources.includes("github") ? createGithubTracker(dir, deps2.exec, config.labels) : null;
+    if (gh !== null) {
+      if (await detectRemote(dir, deps2.exec) === null) throw new TrackerError("INVALID", "This folder has no GitHub remote; add one first");
+      await gh.preflight();
+    }
+    let changed;
+    try {
+      changed = await changeSources(dir, change, { force });
+    } catch (e) {
+      if (e instanceof EditedTemplateError) {
+        const label = (id2) => sourceInfo(id2).label;
+        return {
+          confirm: `The ${label(e.primary)} instructions in docs/agents/issue-tracker.md were edited by hand. Making ${label(change.primary)} the primary source replaces them with its template, and those edits are lost. Sections added after them are kept.`
+        };
+      }
+      throw e;
+    }
+    await gh?.setupLabels();
+    return { config: configAnswer(changed) };
   },
   "/config/detect": async (_body, dir, deps2) => ({ remote: await detectRemote(dir, deps2.exec) }),
-  "/tasks/list": async (_body, dir, deps2) => ({ tasks: await (await tracker(dir, deps2)).list() }),
+  /** `errors`: one per source that failed (SourceError); the other sources' tasks are still listed. */
+  "/tasks/list": async (_body, dir, deps2) => await (await tracker(dir, deps2)).listAll(),
   "/tasks/get": async (body, dir, deps2) => {
     const id = str(body, "id");
     return { task: await (await tracker(dir, deps2)).get(id) };
@@ -2285,6 +2747,15 @@ var POST = {
     const task = await (await tracker(dir, deps2)).removeParent(id);
     await followMove(id, task, dir, deps2);
     return { task };
+  },
+  /**
+   * Publishes a local task to GitHub (`to`, optional, is "github"): an issue, its tickets as sub-issues,
+   * then the local files closed with a link. Half done on GitHub: 422 FAILED naming the created issues.
+   */
+  "/tasks/publish": async (body, dir, deps2) => {
+    const id = str(body, "id");
+    if (body.to !== void 0 && body.to !== "github") return invalid('"to" must be "github"');
+    return await publishTask(dir, await tracker(dir, deps2), id);
   },
   "/tasks/close": async (body, dir, deps2) => {
     const id = str(body, "id");
@@ -2377,7 +2848,7 @@ var handle = async (method, path, body, deps2) => {
   } catch (e) {
     if (e instanceof InvalidRequest) return error(400, "INVALID", e.message);
     if (e instanceof TrackerError) return error(422, e.code, e.message);
-    return error(500, "FAILED", errorText(e));
+    return error(500, "FAILED", errorMessage(e));
   }
 };
 

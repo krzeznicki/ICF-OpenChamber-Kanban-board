@@ -4,7 +4,10 @@ import type { ConfigResult } from '../src/panel/api.ts';
 import { defaultChoice, githubChoice, loadNotice, setupOutcome } from '../src/panel/setup.ts';
 
 const labels = {};
-const configured = (tracker: 'local' | 'github'): ConfigResult => ({ config: { tracker, labels } });
+const ALL = { create: true, subtasks: true, blockedBy: true, claim: true, delete: true };
+const configured = (tracker: 'local' | 'github'): ConfigResult => ({
+  config: { primary: tracker, sources: [{ id: tracker, label: tracker, capabilities: ALL }], known: [], labels },
+});
 const notConfigured: ConfigResult = { error: { code: 'NOT_CONFIGURED', message: 'No docs/agents/issue-tracker.md' } };
 
 test('GitHub is preselected only when a github.com remote was detected', () => {

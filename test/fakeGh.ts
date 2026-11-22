@@ -27,6 +27,10 @@ export type FakeGhOptions = {
   remote?: string | null;
   /** The user is not a repo admin: `gh issue delete` fails the way GitHub refuses it. */
   notAdmin?: boolean;
+  /** `gh issue create` fails for the titles this returns true for (a publish that stops half way). */
+  failCreate?: (title: string) => boolean;
+  /** `gh issue close` fails for the issue numbers this returns true for. */
+  failClose?: (n: number) => boolean;
 };
 
 const URL = 'https://github.com/o/r/issues/';
@@ -121,6 +125,7 @@ export const fakeGh = (seed: FakeIssue[], options: FakeGhOptions = {}) => {
     if (a === 'issue' && b === 'create') {
       const missing = flagValues(args, '--label').find((l) => !labels.has(l));
       if (missing !== undefined) return fail(`could not add label: '${missing}' not found\n`);
+      if (options.failCreate?.(flag(args, '--title') ?? '')) return fail('HTTP 502: Bad Gateway\n');
       const number = Math.max(0, ...issues.map((i) => i.number)) + 1;
       const parent = flag(args, '--parent');
       issues.push({
@@ -167,6 +172,7 @@ export const fakeGh = (seed: FakeIssue[], options: FakeGhOptions = {}) => {
       return ok(`${URL}${issue!.number}\n`);
     }
     if (a === 'issue' && b === 'close') {
+      if (options.failClose?.(issue!.number)) return fail('HTTP 502: Bad Gateway\n');
       issue!.state = 'CLOSED';
       issue!.closedAt = NOW;
       touch(issue!);

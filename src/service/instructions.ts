@@ -18,7 +18,7 @@ export const instructionsText = (cliPath: string, variant: Variant = VARIANT): s
     `Task board (ICF-kanban${test ? ' TEST' : ''}): in projects with docs/agents/issue-tracker.md, tasks are managed with \`${tb}\`; ` +
     'always pass --dir <the project root, i.e. the main checkout, not a worktree>. ' +
     '`list --ready` or `next` for ready tickets, `show <id>`, `claim <id>` (claim applies to sub-tasks you take from `list --ready`/`next`; skip lines marked claimed), ' +
-    '`state <id> <state>` (done closes), `create --title <t> [--type bug|enhancement] [--parent <id>]`; ' +
+    '`state <id> <state>` (done closes), `create --title <t> [--type bug|enhancement] [--parent <id>] [--source <id>]`; ' +
     `--json for data. Skills ${skills} describe the steps. ` +
     `The ICF-kanban ${test ? 'TEST board' : 'board'} in OpenChamber shows the same tasks.`
   );

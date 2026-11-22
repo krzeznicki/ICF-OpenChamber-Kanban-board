@@ -8,14 +8,16 @@
 // (summaries.ts) are read or generated for the shown cards after each load. "Archive done"
 // (archive.ts) hides done tasks from the board through the extension's storage only, and so is
 // the manual card order (order.ts: a card dragged up or down its column).
+import { createPending } from './optimistic.ts';
 import { connectHost } from '@openchamber/sdk';
 import type { GuestProject, GuestSessionRecord, HostReadyContext } from '@openchamber/sdk';
 import { applyHostReady } from '@openchamber/sdk/ui';
 import { VARIANT, panelId } from '../core/variant.ts';
-import type { Task } from '../core/types.ts';
+import { errorMessage, type SourceId, type Task } from '../core/types.ts';
 import { archivableIds, archivedShown, archiveTasks, archiveWriteJob, createStorageSync, createPendingMarks, isArchived, mergeArchived, reconcileArchived, unarchiveTask } from './archive.ts';
 import { clearArchivePlan, clearConfirm, runClearArchive } from './clearArchive.ts';
-import { ApiError, createApi, type Api, type ConfigResult, type ProjectConfig } from './api.ts';
+import { ApiError, createApi, type Api, type ConfigResult, type ProjectConfig, type SourceError } from './api.ts';
+import { listedBoard, sourceBanners } from './sourceBanner.ts';
 import { applyOrder, forgetInOrder, pruneOrder, renameInOrder, reorder } from './order.ts';
 import { COLUMNS, groupTasks, pruneArchived, resolveSession, sessionForTask, sessionTarget, type Column, type SessionLookup } from './columns.ts';
 import { createEditor, type Editor } from './edit.ts';
@@ -41,11 +43,13 @@ import { createSuggester, createTypeClassifier } from './suggest.ts';
 import { taskTypes } from './moves.ts';
 import { MODEL_PICK } from './addTask.ts';
 import { filterBoard, searchSuggestions } from './search.ts';
+import { currentSourceView, sourceBadge, sourceSwitcher, tasksInView, type SourceView } from './sourceView.ts';
 import { createSummaries } from './summaries.ts';
 import { createProjectFollow } from './projectFollow.ts';
 import { createSessionFocus } from './sessionFocus.ts';
 import { createBoard, type Board } from './ui/board.ts';
 import { askChoice } from './ui/confirm.ts';
+import { changeSource } from './sourceSettings.ts';
 import { mountNotice } from './ui/notice.ts';
 import { stateTone, type OpenTaskShortcuts } from './ui/detail.ts';
 import { openSessionTasks } from './ui/sessionTasks.ts';
@@ -78,6 +82,12 @@ type State = {
   sessionsReady: boolean;
   config: ProjectConfig | null;
   tasks: Task[] | null;
+  /** The sources that failed to list in the last load (a banner each); the board shows the others. */
+  sourceErrors: SourceError[];
+  /** True for an id of a source that failed to list: pruning the archive marks and order keeps it. */
+  unlisted: (id: string) => boolean;
+  /** The source of every task the shown project listed since it was opened (listedBoard's `seen`). */
+  seenSources: Map<string, SourceId>;
   hideSubtasks: boolean;
   /** When the last load was attempted, successful or not. */
   lastLoad: number;
@@ -109,6 +119,9 @@ type State = {
   orderFor: string | null;
   /** The toolbar's search text (search.ts); this panel session only, kept across project switches. */
   query: string;
+  /** The source switcher's choice (sourceView.ts), stored per project; `sourceViewFor` is its project. */
+  sourceView: SourceView | null;
+  sourceViewFor: string | null;
 };
 
 const state: State = {
@@ -120,6 +133,9 @@ const state: State = {
   sessionsReady: false,
   config: null,
   tasks: null,
+  sourceErrors: [],
+  unlisted: () => false,
+  seenSources: new Map(),
   hideSubtasks: false,
   lastLoad: 0,
   view: 'none',
@@ -139,6 +155,8 @@ const state: State = {
   order: [],
   orderFor: null,
   query: '',
+  sourceView: null,
+  sourceViewFor: null,
 };
 
 const store = createSettingsStore(host.storage);
@@ -158,6 +176,29 @@ const order = (): string[] => (state.orderFor === state.projectId ? state.order 
 /** The same rule for the card order: a load takes storage only when every reorder of this frame is written. */
 const orderSync = createStorageSync();
 /**
+ * What the board shows of the shown project's sources (sourceView.ts): its choice, re-checked against
+ * the config (a removed source falls back to the primary), else the primary. Null without a config.
+ * Add task (ticket 04) picks its source from this: a source id, or `all` for "let the user choose".
+ */
+const sourceView = (): SourceView | null => {
+  if (state.config === null) return null;
+  return currentSourceView(state.sourceViewFor === state.projectId ? state.sourceView : null, state.config);
+};
+/** The tasks the board draws: those of the switcher's source, every one in All. */
+const viewTasks = (): Task[] | null => {
+  const view = sourceView();
+  return state.tasks === null || view === null ? null : tasksInView(state.tasks, view);
+};
+/** The switcher's pick: stored for the project, then the board redraws with that source's tasks. */
+const setSourceView = (view: SourceView): void => {
+  const id = state.projectId;
+  if (id === null) return;
+  state.sourceView = view;
+  state.sourceViewFor = id;
+  saver.save(STORAGE_KEYS.sourceView(id), () => store.saveSourceView(id, view));
+  draw();
+};
+/**
  * Per project, task id -> when this frame unarchived it: a merge with storage does not bring those
  * marks back. Kept across project switches (a write of the old project may still be queued).
  */
@@ -168,7 +209,7 @@ const pendingMarks = createPendingMarks();
 // Every field reports each keystroke; only the newest value per key is written.
 const saver = createLatestSaver<() => Promise<void>>(
   (_key, run) => run(),
-  (e) => fail(`Could not save settings: ${e instanceof Error ? e.message : String(e)}`),
+  (e) => fail(`Could not save settings: ${errorMessage(e)}`),
 );
 let settingsSheet: { dispose: () => void } | null = null;
 /** Global settings and presets are read once at start; editing waits for them, so nothing stored is overwritten. */
@@ -184,7 +225,7 @@ const loadGlobalSettings = async (): Promise<void> => {
     applySettings();
     summariseShown(); // tasks may have loaded before the settings
   } catch (e) {
-    fail(`Could not read the settings: ${e instanceof Error ? e.message : String(e)}`);
+    fail(`Could not read the settings: ${errorMessage(e)}`);
   }
 };
 
@@ -281,7 +322,7 @@ const loadProjectSettings = async (id: string): Promise<void> => {
     state.projectSettings = {};
     state.skills = found;
     state.settingsFor = id;
-    fail(`Could not read the project settings: ${e instanceof Error ? e.message : String(e)}`);
+    fail(`Could not read the project settings: ${errorMessage(e)}`);
   }
   applySettings();
   summariseShown(); // tasks may have loaded before the settings
@@ -316,6 +357,7 @@ const showSettings = (): void => {
       project: p !== null && id !== null ? { name: p.name, layer: state.projectSettings } : null,
       presets: state.presets,
       skills: id !== null ? (state.skills?.found ?? null) : null,
+      sources: p !== null ? state.config : null,
     },
     {
       onGlobal: (layer) => {
@@ -333,6 +375,21 @@ const showSettings = (): void => {
         saver.save('presets', () => store.savePresets(stored));
         editor.refresh();
       },
+      onSources: async (change) => {
+        if (p === null) return null;
+        try {
+          const next = await changeSource(createApi(host, p.directory), change, async (message) =>
+            (await askChoice('Replace the edited tracker instructions?', message, [
+              { id: 'replace', label: 'Replace', variant: 'destructive' },
+            ])) === 'replace',
+          );
+          if (next !== null && project()?.id === p.id) void load();
+          return next;
+        } catch (e) {
+          fail(`Could not change the sources: ${errorMessage(e)}`);
+          return null;
+        }
+      },
       onDismiss: closeSettings,
       lists,
     },
@@ -348,16 +405,23 @@ const follow = createProjectFollow({
 const draw = (): void => {
   board.setCanAdd(state.view === 'board' && state.config !== null);
   state.columns = new Map();
-  if (state.config === null || state.tasks === null) {
+  const view = sourceView();
+  const tasks = viewTasks();
+  if (state.config === null || tasks === null || view === null) {
+    board.setSources(null, null);
     setBadge(null);
+    board.setSourceBanners([], () => {});
     board.render(null);
     return;
   }
+  const { sources } = state.config;
+  board.setSources(sourceSwitcher(sources), view);
+  board.setSourceBanners(sourceBanners(state.sourceErrors, sources, state.config.warnings ?? []), () => void load());
   const marks = archivedTasks();
-  const archivedCount = archivedShown(state.tasks, marks);
+  const archivedCount = archivedShown(tasks, marks);
   if (archivedCount === 0) state.showArchived = false;
   const model = groupTasks(
-    applyOrder(state.tasks, order()),
+    applyOrder(tasks, order()),
     state.sessions,
     starter.isStarting,
     state.hideSubtasks,
@@ -370,25 +434,29 @@ const draw = (): void => {
   for (const [column, cards] of Object.entries(model)) for (const c of cards) state.columns.set(c.task.id, column as Column);
   // The attention mark: sessions that finished or wait for the user.
   setBadge(model.review.length || null);
-  const tracker = state.config.tracker;
-  const shown = filterBoard(model, state.tasks, state.query, tracker);
+  const primary = state.config.primary;
+  const shown = filterBoard(model, tasks, state.query);
   selection.beforeRender();
-  board.render(shown, editor.busy, (task) => summaries.get(task), {
-    archivable: archivableIds(state.tasks, marks).length,
-    archived: archivedCount,
-    showArchived: state.showArchived,
-  });
+  board.render(
+    shown,
+    editor.busy,
+    (task) => summaries.get(task),
+    { archivable: archivableIds(tasks, marks).length, archived: archivedCount, showArchived: state.showArchived },
+    (task) => sourceBadge(task, view, sources),
+  );
   selection.rendered(layoutOf(shown));
   auditLinks();
   focusSession();
-  if (state.tasks.length > 0 && state.query.trim() !== '' && Object.values(shown).every((cards) => cards.length === 0)) {
+  // The empty board speaks of the source it shows (in All: the primary one).
+  const emptyKind = view === 'all' ? primary : view;
+  if (tasks.length > 0 && state.query.trim() !== '' && Object.values(shown).every((cards) => cards.length === 0)) {
     board.setStatus({ kind: 'empty', title: 'No tasks match', body: `No task on the board matches "${state.query.trim()}".` });
-  } else if (state.tasks.length === 0) {
+  } else if (tasks.length === 0) {
     board.setStatus({
       kind: 'empty',
       title: 'No tasks yet',
       body:
-        tracker === 'github'
+        emptyKind === 'github'
           ? 'Open issues of this repository show up here. Create one on GitHub or with the task-board CLI, then press Refresh.'
           : 'Issues under .scratch/<feature>/issues/ show up here. Create one with the task-board CLI or an agent skill, then press Refresh.',
     });
@@ -399,7 +467,7 @@ const draw = (): void => {
 
 const failureOf = (e: unknown): ApiFailure => ({
   code: e instanceof ApiError ? e.code : 'FAILED',
-  message: e instanceof Error ? e.message : String(e),
+  message: errorMessage(e),
 });
 
 /** Clears the board and shows a notice whose button re-runs the load. */
@@ -458,6 +526,17 @@ const setup = async (api: Api, choice: TrackerChoice): Promise<void> => {
   else showNotice(outcome.notice);
 };
 
+/** The tasks as the sources last listed them; state.tasks is this with the pending moves over it. */
+let listedTasks: Task[] | null = null;
+const pending = createPending();
+/** Redraws with the pending moves over the last list (optimistic.ts): a move shows before its write ends. */
+const showPending = (): void => {
+  if (state.tasks === null || listedTasks === null) return;
+  state.tasks = pending.apply(listedTasks);
+  draw();
+  editor.refresh();
+};
+
 const load = async (): Promise<void> => {
   const p = project();
   const mine = ++generation;
@@ -490,15 +569,25 @@ const load = async (): Promise<void> => {
     // Links and the start queue come from the service's own files (starter.ts).
     const token = archiveSync.loadToken();
     const orderToken = orderSync.loadToken();
-    const [tasks, marks, gone, shelved, ranked] = await Promise.all([
+    const [listed, marks, gone, shelved, ranked, pickedSource] = await Promise.all([
       api.list(),
       store.loadDetached(p.id).catch(() => null),
       store.loadArchived(p.id).catch(() => null),
       store.loadArchivedTasks(p.id).catch(() => null),
       store.loadOrder(p.id).catch(() => null),
+      // Read once per project: afterwards this frame's own pick stands.
+      state.sourceViewFor === p.id ? Promise.resolve(state.sourceView) : store.loadSourceView(p.id).catch(() => null),
       starter.refresh(p.id, p.directory),
     ]);
     if (mine !== generation) return;
+    if (state.sourceViewFor !== p.id) {
+      state.sourceView = pickedSource as SourceView | null;
+      state.sourceViewFor = p.id;
+    }
+    // A source that failed to list keeps its tasks' archive marks and places (listedBoard).
+    const { tasks, errors, unlisted } = listedBoard(listed, (id) => state.seenSources.get(id));
+    for (const t of tasks) state.seenSources.set(t.id, t.source);
+    state.unlisted = unlisted;
     // Stored marks (also those of the board's other frame) join this frame's own; unreadable ones keep memory.
     if (marks !== null) {
       const merged = new Map(detached());
@@ -516,7 +605,7 @@ const load = async (): Promise<void> => {
     // that is written back.
     const base =
       shelved === null ? archivedTasks() : archiveSync.trusts(token) ? shelved : mergeArchived(archivedTasks(), shelved, removedFor(p.id));
-    const fixed = reconcileArchived(base, tasks);
+    const fixed = reconcileArchived(base, tasks, unlisted);
     state.archivedTasks = fixed.marks;
     state.archivedTasksFor = p.id;
     if (fixed.changed) writeArchivedTasks(p.id, fixed.marks, tasks);
@@ -525,13 +614,16 @@ const load = async (): Promise<void> => {
     // but only when nothing changed the order since the load began: a task moved meanwhile (new id)
     // may be missing from this list yet.
     if (ranked !== null && (orderSync.trusts(orderToken) || state.orderFor !== p.id)) {
-      const pruned = pruneOrder(ranked, tasks);
+      const pruned = pruneOrder(ranked, tasks, unlisted);
       state.order = pruned;
       state.orderFor = p.id;
       if (pruned.length !== ranked.length && orderSync.trusts(orderToken)) setOrder(p.id, pruned);
     }
     state.config = result.config;
-    state.tasks = tasks;
+    listedTasks = tasks;
+    // A move whose write or reload is still in flight stays drawn where it was dropped (optimistic.ts).
+    state.tasks = pending.apply(tasks);
+    state.sourceErrors = errors;
     state.view = 'board';
     draw();
     editor.refresh();
@@ -573,10 +665,15 @@ const selectProject = async (id: string | null): Promise<void> => {
   state.showArchived = false;
   state.order = [];
   state.orderFor = null;
+  state.sourceView = null;
+  state.sourceViewFor = null;
   audited.clear();
   starter.reset();
   state.config = null;
   state.tasks = null;
+  state.sourceErrors = [];
+  state.unlisted = () => false;
+  state.seenSources = new Map();
   board.setProjects(projectOptions(), id);
   unsubscribeSessions?.();
   unsubscribeSessions = null;
@@ -728,7 +825,6 @@ const summarySettingsChanged = (): void => {
 
 // --- starting agents (starter.ts) ---
 
-const errorText = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
 /** What a start needs from the settings; null while the shown project's settings are loading. */
 const startContext = (): { projectId: string; settings: Settings; presets: Preset[] } | null => {
@@ -740,6 +836,7 @@ const starter = createStarter({
   host,
   project,
   tasks: () => state.tasks,
+  primary: () => state.config?.primary ?? null,
   sessions: () => state.sessions,
   context: startContext,
   loadCard: (projectId, taskId) => store.loadCard(projectId, taskId),
@@ -779,7 +876,7 @@ const reorderCard = (taskId: string, column: Column, before: string | null): voi
   const id = state.projectId;
   if (id === null || state.tasks === null) return;
   const ids = [...state.columns].filter(([, c]) => c === column).map(([t]) => t);
-  const next = pruneOrder(reorder(order(), ids, taskId, before), state.tasks);
+  const next = pruneOrder(reorder(order(), ids, taskId, before), state.tasks, state.unlisted);
   setOrder(id, next);
   draw();
 };
@@ -810,7 +907,7 @@ const writeArchivedTasks = (projectId: string, marks: ReadonlyMap<string, number
   // Joined with marks still queued: a job this one replaces may hold some memory no longer has.
   const snapshot = pendingMarks.queue(projectId, marks, removed, n);
   const job = archiveWriteJob(
-    { marks: snapshot, removed, tasks },
+    { marks: snapshot, removed, tasks, unlisted: state.unlisted },
     { load: () => store.loadArchivedTasks(projectId), save: (next) => store.saveArchivedTasks(projectId, next) },
     (next) => {
       archiveSync.written(n);
@@ -818,7 +915,7 @@ const writeArchivedTasks = (projectId: string, marks: ReadonlyMap<string, number
       // The other frame's marks (or, after a switch back, this job's own) join what the board shows.
       if (state.archivedTasksFor !== projectId || state.tasks === null) return;
       const current = state.archivedTasks;
-      const shown = reconcileArchived(mergeArchived(current, next, removedFor(projectId)), state.tasks).marks;
+      const shown = reconcileArchived(mergeArchived(current, next, removedFor(projectId)), state.tasks, state.unlisted).marks;
       if (sameMarks(current, shown)) return;
       state.archivedTasks = shown;
       draw();
@@ -842,8 +939,8 @@ const setArchivedTasks = (projectId: string, marks: Map<string, number>): void =
 
 const archiveDone = async (): Promise<void> => {
   const id = state.projectId;
-  if (id === null || state.tasks === null) return;
-  const n = archivableIds(state.tasks, archivedTasks()).length;
+  if (id === null || viewTasks() === null) return;
+  const n = archivableIds(viewTasks() ?? [], archivedTasks()).length;
   if (n === 0) return;
   const answer = await askChoice(
     `Archive ${n} done task${n === 1 ? '' : 's'}?`,
@@ -851,8 +948,8 @@ const archiveDone = async (): Promise<void> => {
     [{ id: 'archive', label: 'Archive' }],
   );
   // The board may have reloaded or switched project while the question was open.
-  if (answer === null || state.projectId !== id || state.tasks === null) return;
-  const ids = archivableIds(state.tasks, archivedTasks());
+  if (answer === null || state.projectId !== id || viewTasks() === null) return;
+  const ids = archivableIds(viewTasks() ?? [], archivedTasks());
   if (ids.length === 0) return;
   setArchivedTasks(id, archiveTasks(archivedTasks(), ids, Date.now()));
   info(`Archived ${ids.length} done task${ids.length === 1 ? '' : 's'}`);
@@ -887,9 +984,10 @@ const clearArchiveNow = async (): Promise<void> => {
   const id = state.projectId;
   const p = project();
   if (id === null || p === null || state.view !== 'board' || state.config === null || state.tasks === null) return;
-  const tracker = state.config.tracker;
-  const plan = clearArchivePlan(tracker, state.tasks, archivedTasks());
-  const ask = clearConfirm(tracker, plan);
+  const primary = state.config.primary;
+  // Only what the board shows: the switcher's source, or every source in All.
+  const plan = clearArchivePlan(primary, viewTasks() ?? [], archivedTasks());
+  const ask = clearConfirm(plan);
   if (ask === null) {
     info('The archived features still have sub-tasks on the board; nothing to delete.');
     return;
@@ -897,7 +995,7 @@ const clearArchiveNow = async (): Promise<void> => {
   const answer = await askChoice(ask.title, ask.body, [{ id: 'clear', label: 'Delete all', variant: 'destructive' }]);
   if (answer === null || state.projectId !== id || state.tasks === null) return;
   // The board may have reloaded while the question was open: delete only what the user confirmed.
-  const fresh = clearArchivePlan(tracker, state.tasks, archivedTasks());
+  const fresh = clearArchivePlan(primary, viewTasks() ?? [], archivedTasks());
   if (JSON.stringify(fresh) !== JSON.stringify(plan)) {
     info('The archive changed while you were asked; nothing was deleted. Try again.');
     return;
@@ -908,9 +1006,9 @@ const clearArchiveNow = async (): Promise<void> => {
     if (result.deleted.length > 0) {
       info(`Deleted ${result.deleted.length} archived task${result.deleted.length === 1 ? '' : 's'}`);
       if (state.projectId === id) forgetOrdered(result.deleted);
-      for (const d of result.deleted) await forgetStartOptions(id, d).catch((e: unknown) => fail(`Could not drop the start options of ${d}: ${errorText(e)}`));
+      for (const d of result.deleted) await forgetStartOptions(id, d).catch((e: unknown) => fail(`Could not drop the start options of ${d}: ${errorMessage(e)}`));
     }
-    for (const f of result.failed) fail(`Could not delete ${f.id}: ${errorText(f.error)}`);
+    for (const f of result.failed) fail(`Could not delete ${f.id}: ${errorMessage(f.error)}`);
   } finally {
     // The reload prunes the marks of deleted tasks (reconcileArchived).
     await load();
@@ -1204,7 +1302,8 @@ const start = (ctx: HostReadyContext): void => {
       state.query = query;
       draw();
     },
-    suggest: (text, caret) => searchSuggestions(text, caret, boardTypes()),
+    suggest: (text, caret) => searchSuggestions(text, caret, boardTypes(), state.config?.sources.map((s) => s.id) ?? []),
+    onSource: setSourceView,
     // Second Esc: focus back on the Selected card, or on the Board itself when there is none.
     onSearchExit: () => {
       const id = selection.get();
@@ -1238,11 +1337,23 @@ const start = (ctx: HostReadyContext): void => {
       return p === null || state.view !== 'board' ? null : createApi(host, p.directory);
     },
     tasks: () => state.tasks ?? [],
-    tracker: () => state.config?.tracker ?? 'local',
+    primary: () => state.config?.primary ?? 'local',
+    sources: () => ({ view: sourceView(), sources: state.config?.sources ?? [] }),
     labels: () => state.config?.labels ?? {},
     columnOf: (id) => state.columns.get(id) ?? null,
     reload: load,
     redraw: draw,
+    shown: {
+      add: (states) => {
+        const key = pending.add(states);
+        showPending();
+        return key;
+      },
+      settle: (key) => {
+        pending.settle(key);
+        showPending();
+      },
+    },
     onStart: (task) => void starter.onStart(task),
     lists,
     beforeMove: (task) => starter.leaveQueue(task.id),
@@ -1250,7 +1361,7 @@ const start = (ctx: HostReadyContext): void => {
     session: {
       target: (task) => sessionTarget(task.id, state.sessions, starter.links(), detached().get(task.id)),
       check: checkSession,
-      open: (id) => void host.openSession(id).catch((e: unknown) => fail(`Could not open the session: ${errorText(e)}`)),
+      open: (id) => void host.openSession(id).catch((e: unknown) => fail(`Could not open the session: ${errorMessage(e)}`)),
     },
     sections: { get: () => sections, save: saveSections },
     // The Open task is the Selected card while it is drawn (a hidden sub-task is not), so a redraw
@@ -1322,7 +1433,7 @@ const start = (ctx: HostReadyContext): void => {
         kind: 'banner',
         tone: 'error',
         title: 'Projects are not available',
-        body: `${e instanceof Error ? e.message : String(e)}. Allow the “sessions” capability for Kanban Board in Settings → Extensions.`,
+        body: `${errorMessage(e)}. Allow the “sessions” capability for Kanban Board in Settings → Extensions.`,
       });
     });
 

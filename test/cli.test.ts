@@ -6,7 +6,9 @@ import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { main } from '../src/cli/main.ts';
 import type { CliIO } from '../src/cli/main.ts';
-import { writeConfig } from '../src/core/config.ts';
+import { withAdditionalSources, writeConfig } from '../src/core/config.ts';
+import { TEMPLATES } from '../src/core/templates/index.ts';
+import { fakeGh, type FakeGhOptions } from './fakeGh.ts';
 import { createLocalTracker } from '../src/core/localTracker.ts';
 import type { Exec, Task } from '../src/core/types.ts';
 
@@ -337,4 +339,205 @@ test('edit <id> --title / --body-file changes the title and description, keeping
   assert.match(task.body, /New description\./);
   assert.equal((await run(['edit', ids[0]!], root)).code, 2);
   assert.match((await run(['--help'], root)).out, /edit <id>/);
+});
+
+/** Local primary (the `project` feature) plus GitHub: #5 ready-for-agent, #6 needs-triage. */
+const twoSources = async (t: T, ghOptions?: FakeGhOptions) => {
+  const p = await project(t);
+  const path = join(p.root, 'docs/agents/issue-tracker.md');
+  await writeFile(path, withAdditionalSources(await readFile(path, 'utf8'), ['github']));
+  const gh = fakeGh(
+    [
+      { number: 5, title: 'Public ready', labels: ['ready-for-agent'] },
+      { number: 6, title: 'Public triage' },
+    ],
+    ghOptions,
+  );
+  const runIn = async (argv: string[]): Promise<Run> => {
+    let out = '';
+    let err = '';
+    const code = await main(argv, { stdout: (s) => void (out += s), stderr: (s) => void (err += s), cwd: p.root, exec: gh.exec });
+    return { code, out, err };
+  };
+  return { ...p, gh, run: runIn };
+};
+
+test('with several sources list shows every source and names it on each line; --source narrows', async (t) => {
+  const { run: cli, spec, ids } = await twoSources(t);
+  const all = await cli(['list']);
+  assert.equal(all.code, 0, all.err);
+  assert.match(all.out, /^#5  github  \[ready-for-agent\]  Public ready$/m);
+  assert.match(all.out, new RegExp(`^${ids[2]}  local  \\[ready-for-agent\\]  Third$`, 'm'));
+
+  const json = JSON.parse((await cli(['list', '--json'])).out) as Task[];
+  assert.deepEqual(json.map((x) => [x.id, x.source]).sort(), [
+    ['#5', 'github'], ['#6', 'github'], [spec, 'local'], [ids[0]!, 'local'], [ids[1]!, 'local'], [ids[2]!, 'local'],
+  ].sort());
+
+  const github = await cli(['list', '--source', 'github', '--json']);
+  assert.deepEqual((JSON.parse(github.out) as Task[]).map((x) => x.id), ['#5', '#6']);
+  const unknown = await cli(['list', '--source', 'jira']);
+  assert.equal(unknown.code, 4);
+  assert.match(unknown.err, /INVALID: Unknown source "jira"/);
+});
+
+test('with one source list text stays as it was, and --json carries the source', async (t) => {
+  const { root, ids } = await project(t);
+  const r = await run(['list'], root);
+  assert.match(r.out, new RegExp(`^${ids[2]}  \\[ready-for-agent\\]  Third$`, 'm'));
+  assert.ok((JSON.parse((await run(['list', '--json'], root)).out) as Task[]).every((x) => x.source === 'local'));
+});
+
+test('list --ready and next take ready tickets from every source; --source narrows next', async (t) => {
+  const { run: cli, ids } = await twoSources(t);
+  const ready = JSON.parse((await cli(['list', '--ready', '--json'])).out) as Task[];
+  assert.deepEqual(ready.map((x) => x.id).sort(), ['#5', ids[2]!].sort());
+  const next = await cli(['next']);
+  assert.equal(next.out, `${ids[2]}  local  Third\n`);
+  const github = await cli(['next', '--source', 'github', '--json']);
+  assert.equal((JSON.parse(github.out) as Task).id, '#5');
+});
+
+test('a source that fails is reported on stderr while the others are listed', async (t) => {
+  const { run: cli, ids } = await twoSources(t, { authed: false });
+  const r = await cli(['list']);
+  assert.equal(r.code, 0);
+  assert.match(r.out, new RegExp(`^${ids[2]}  local  `, 'm'));
+  assert.match(r.err, /^task-board: source github: GH_AUTH: gh is not logged in/m);
+});
+
+test('show, state and close reach a GitHub task by its id with no source named', async (t) => {
+  const { run: cli, gh } = await twoSources(t);
+  assert.match((await cli(['show', '#6'])).out, /Public triage/);
+  assert.equal((await cli(['state', '#6', 'ready-for-human'])).code, 0);
+  assert.equal((await cli(['close', '#6'])).code, 0);
+  assert.ok(gh.calls.some((c) => c[1] === 'issue' && c[2] === 'close'));
+});
+
+test('create goes to the primary source, --source picks another, and a sub-task follows its parent', async (t) => {
+  const { run: cli, gh, spec, ids } = await twoSources(t);
+  const local = await cli(['create', '--title', 'Private note']);
+  assert.equal(local.code, 0, local.err);
+  assert.match(local.out, /^\.scratch\/\S+  local  \[needs-triage\]  Private note$/m);
+
+  const shared = await cli(['create', '--title', 'Shared', '--source', 'github', '--json']);
+  assert.equal(shared.code, 0, shared.err);
+  assert.equal(json<Task>(shared).source, 'github');
+  assert.ok(gh.calls.some((c) => c[1] === 'issue' && c[2] === 'create'));
+
+  const sub = await cli(['create', '--title', 'Public sub', '--parent', '#5', '--json']);
+  assert.equal(sub.code, 0, sub.err);
+  assert.deepEqual([json<Task>(sub).source, json<Task>(sub).parentId], ['github', '#5']);
+
+  const clash = await cli(['create', '--title', 'X', '--parent', spec, '--source', 'github']);
+  assert.equal(clash.code, 4);
+  assert.match(clash.err, /INVALID: A sub-task goes to its parent's source/);
+
+  const blocker = await cli(['create', '--title', 'Y', '--source', 'github', '--blocked-by', ids[0]!]);
+  assert.equal(blocker.code, 4);
+  assert.match(blocker.err, /INVALID: Blocker .* never linked/);
+
+  const parent = await cli(['parent', '#6', spec]);
+  assert.equal(parent.code, 4);
+  assert.match(parent.err, /INVALID: .*different sources/);
+
+  const unknown = await cli(['create', '--title', 'Z', '--source', 'jira']);
+  assert.equal(unknown.code, 4);
+  assert.match(unknown.err, /INVALID: Unknown source "jira"/);
+  assert.match((await cli(['--help'])).out, /create .*--source <id>/s);
+});
+
+test('publish <id> --to github turns a local feature into an issue with sub-issues and closes it', async (t) => {
+  const { run: cli, spec, ids } = await twoSources(t);
+  const r = await cli(['publish', spec, '--to', 'github']);
+  assert.equal(r.code, 0, r.err);
+  assert.equal(
+    r.out,
+    [
+      `${spec}  ->  #7  https://github.com/o/r/issues/7`,
+      `${ids[0]}  ->  #8  https://github.com/o/r/issues/8`,
+      `${ids[1]}  ->  #9  https://github.com/o/r/issues/9`,
+      `${ids[2]}  ->  #10  https://github.com/o/r/issues/10`,
+      '',
+    ].join('\n'),
+  );
+  assert.equal(JSON.parse((await cli(['show', spec, '--json'])).out).state, 'done');
+
+  const again = await cli(['publish', '#7', '--json']);
+  assert.equal(again.code, 4);
+  assert.equal(JSON.parse(again.out).error.code, 'INVALID');
+  assert.equal((await cli(['publish', spec, '--to', 'jira'])).code, 2);
+});
+
+test('init --add / --remove / --primary change the sources in docs/agents/issue-tracker.md', async (t) => {
+  const root = await tmp(t);
+  await writeConfig(root, 'local');
+  const file = (): Promise<string> => readFile(join(root, 'docs/agents/issue-tracker.md'), 'utf8');
+
+  const added = await run(['init', '--add', 'github'], root);
+  assert.equal(added.code, 0, added.err);
+  assert.equal(added.out, 'Sources: local (primary), github (docs/agents/issue-tracker.md)\n');
+  assert.equal(await file(), withAdditionalSources(TEMPLATES.local, ['github']));
+
+  const primary = await run(['init', '--primary', 'github', '--json'], root);
+  assert.equal(primary.code, 0, primary.err);
+  assert.deepEqual(json<{ primary: string; sources: string[] }>(primary), { primary: 'github', sources: ['github', 'local'] });
+  assert.equal(await file(), withAdditionalSources(TEMPLATES.github, ['local']));
+
+  const removed = await run(['init', '--remove', 'local'], root);
+  assert.equal(removed.code, 0, removed.err);
+  assert.equal(await file(), TEMPLATES.github);
+
+  const primaryGone = await run(['init', '--remove', 'github', '--json'], root);
+  assert.equal(primaryGone.code, 4);
+  assert.equal(json<{ error: { code: string } }>(primaryGone).error.code, 'INVALID');
+});
+
+test('init --primary over a hand-edited template exits 4 and names --force; --force replaces it', async (t) => {
+  const root = await tmp(t);
+  await mkdir(join(root, 'docs/agents'), { recursive: true });
+  const edited = `${TEMPLATES.local.replace('# Issue tracker: Local Markdown', '# Issue tracker: Local Markdown (ours)')}`;
+  await writeFile(join(root, 'docs/agents/issue-tracker.md'), edited);
+  const refused = await run(['init', '--primary', 'github'], root);
+  assert.equal(refused.code, 4);
+  assert.match(refused.err, /edited by hand.*--force/);
+  assert.equal(await readFile(join(root, 'docs/agents/issue-tracker.md'), 'utf8'), edited);
+  const forced = await run(['init', '--primary', 'github', '--force'], root);
+  assert.equal(forced.code, 0, forced.err);
+  assert.equal(await readFile(join(root, 'docs/agents/issue-tracker.md'), 'utf8'), withAdditionalSources(TEMPLATES.github, ['local']));
+});
+
+test('init usage: a tracker or exactly one of --add/--remove/--primary', async (t) => {
+  const root = await tmp(t);
+  await writeConfig(root, 'local');
+  for (const argv of [
+    ['init'],
+    ['init', 'local', '--add', 'github'],
+    ['init', '--add', 'github', '--remove', 'local'],
+    ['init', '--add', 'jira'],
+    ['init', 'local', '--force'],
+    ['list', '--add', 'github'],
+  ]) {
+    const r = await run(argv, root);
+    assert.equal(r.code, 2, `${argv.join(' ')} -> ${r.code} ${r.err}`);
+  }
+});
+
+test('delete removes a task for good on an id of any source; a feature needs --with-children', async (t) => {
+  const { run: cli, gh, spec, ids } = await twoSources(t);
+  const refused = await cli(['delete', spec]);
+  assert.equal(refused.code, 4, refused.out);
+  const one = await cli(['delete', ids[2]!]);
+  assert.equal(one.code, 0, one.err);
+  assert.equal(one.out, `${ids[2]}\n`);
+  const all = await cli(['delete', spec, '--with-children', '--json']);
+  assert.equal(all.code, 0, all.err);
+  assert.deepEqual((JSON.parse(all.out) as string[]).sort(), [spec, ids[0]!, ids[1]!].sort());
+  const issue = await cli(['delete', '#6']);
+  assert.equal(issue.code, 0, issue.err);
+  assert.ok(gh.calls.some((c) => c[1] === 'issue' && c[2] === 'delete'));
+});
+
+test('help lists delete', async (t) => {
+  assert.match((await run(['--help'], await tmp(t))).out, /^  delete <id> \[--with-children\]/m);
 });

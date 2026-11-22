@@ -2,7 +2,7 @@
 // node:test; edit.ts asks (ui/confirm.ts) and calls the service, which also drops the task's
 // session links and queue entry.
 import type { Task } from '../core/types.ts';
-import type { TrackerKind } from './addTask.ts';
+import type { SourceId } from '../core/types.ts';
 
 /** `all` deletes the sub-tasks too (withChildren), `one` only the task. Fits ui/confirm.ts Choice (not imported: it pulls in the DOM). */
 export type DeleteChoice = { id: 'all' | 'one'; label: string; variant: 'destructive' | 'secondary' };
@@ -10,7 +10,7 @@ export type DeleteConfirm = { title: string; body: string; choices: DeleteChoice
 
 const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' : 's'}`;
 
-export const deleteConfirm = (tracker: TrackerKind, task: Task, tasks: readonly Task[]): DeleteConfirm => {
+export const deleteConfirm = (tracker: SourceId, task: Task, tasks: readonly Task[]): DeleteConfirm => {
   const n = tasks.filter((t) => t.parentId === task.id).length;
   const title = `Delete “${task.title}”?`;
   if (tracker === 'local') {

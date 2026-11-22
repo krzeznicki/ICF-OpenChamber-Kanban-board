@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.5.0
+
+- **Several sources per project** (local `.scratch/` files and GitHub Issues at once), one of them the **Primary source** (ADR 0001, `GLOSSARY.md`). `docs/agents/issue-tracker.md` keeps describing the primary source in Matt Pocock's format; an optional `## Additional sources` section lists the others with instructions for agents. Without it a project has one source, as before.
+  - A combined tracker (`core/sources.ts`) lists every source (one failing source does not hide the others) and routes each operation to the source that owns the id. Every task carries `source`. Each source declares its capabilities and availability (`ok`, `needs-login`, `unavailable`).
+  - New tasks go to the primary source unless one is named; a sub-task always goes to its parent's source. A parent or blocker in another source is refused (INVALID).
+  - CLI: `create --source`, `list`/`next` read every source (the source is named on each line when there are several, always in `--json`) and `--source` narrows them; `init --add/--remove/--primary`; `publish <id> [--to github]`; `delete <id> [--with-children]`.
+  - Board: a source switcher (`All | Local | GitHub`) next to the project switcher when a project has several sources, kept per project, the primary source on first opening. A source badge on cards in All. The `source:` search filter with suggestions. A banner with **Try again** for a source that fails to list (its own text when it needs a login); archive marks and card order of its tasks are kept.
+  - Add task has a **Source** select whenever the project has several sources, starting on the source the board shows (in All, the primary source). Parent, blockers and existing sub-tasks come only from the chosen source.
+  - Settings → **Sources**: add, remove (deletes nothing) and make a source primary; the file Settings writes is the one `init --add` writes. Replacing a hand-edited template asks first; hand-written notes and later sections are kept.
+  - **Publish to GitHub** on a local task (in the task modal, on the right of the Move to row): creates the issue (sub-tasks as sub-issues, state label carried over), then closes the local files with a link to it. On a partial failure it names what was created and leaves the local files open.
+  - The task modal links a GitHub task to its issue (**Open on GitHub ↗**) right under its title, instead of inside the collapsed Settings section.
+  - A session started from a card gets the tracker instructions of that task's source. The `icf-kanban-*` skills describe `--source` and the parent's-source rule.
+- A move (a drop, Move to, the State select, closing) shows at once: the card sits in its new column while the write and the reload from the source (several `gh` calls for GitHub) run in the background (`optimistic.ts`). A reload landing meanwhile does not snap it back; a failed write is a toast and the card goes back.
+
 ## 0.4.2
 
 - Fixed: a card at the end of a long column could not be dragged into the column beside it. Each column was only as tall as its own cards, so beside the end of a long list there was no column under the pointer and the drop was cancelled. On the full-screen board, where columns sit side by side, they now all reach the bottom of the board (the longest column, at least the rest of the window), and the whole height takes the drop. The rail panel, where columns are stacked, is unchanged.

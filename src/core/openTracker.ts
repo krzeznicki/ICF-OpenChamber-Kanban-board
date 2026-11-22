@@ -1,11 +1,13 @@
-// Picks the tracker named in `docs/agents/issue-tracker.md`.
+// Opens the project's sources named in `docs/agents/issue-tracker.md` (the primary one and any under
+// `## Additional sources`) as one combined tracker.
 import { readConfig } from './config.ts';
-import { createGithubTracker } from './githubTracker.ts';
-import { createLocalTracker } from './localTracker.ts';
-import type { Exec, Tracker } from './types.ts';
+import { type CombinedTracker, createCombinedTracker, createGithubSource, createLocalSource } from './sources.ts';
+import type { Exec } from './types.ts';
 
-export const openTracker = async (root: string, exec: Exec): Promise<Tracker> => {
+export const openTracker = async (root: string, exec: Exec): Promise<CombinedTracker> => {
   const config = await readConfig(root);
-  if (config.tracker === 'local') return createLocalTracker(root);
-  return createGithubTracker(root, exec, config.labels);
+  const sources = config.sources.map((id) =>
+    id === 'local' ? createLocalSource(root) : createGithubSource(root, exec, config.labels),
+  );
+  return createCombinedTracker(config.primary, sources);
 };

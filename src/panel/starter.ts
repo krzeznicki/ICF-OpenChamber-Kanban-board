@@ -8,7 +8,7 @@
 // start now (/queue/take) and each entry goes through the normal launcher (path A or B by its options).
 import { clampStartSessionRequest, GUEST_ATTACH_ID_MAX } from '@openchamber/sdk';
 import type { GuestProject, GuestSessionRecord, HostClient } from '@openchamber/sdk';
-import type { Task } from '../core/types.ts';
+import { errorMessage, type Task } from '../core/types.ts';
 import { VARIANT, panelId } from '../core/variant.ts';
 import { ApiError, createApi } from './api.ts';
 import { ledByOrchestrator, markArchived, sessionForTask, type Detached, type SessionLink } from './columns.ts';
@@ -35,6 +35,8 @@ export type StarterDeps = {
   host: HostClient;
   project: () => GuestProject | null;
   tasks: () => Task[] | null;
+  /** The shown project's primary source; null before its config is read. */
+  primary: () => string | null;
   sessions: () => GuestSessionRecord[];
   /** Null while the shown project's settings are loading. */
   context: () => StartContext | null;
@@ -48,7 +50,6 @@ export type StarterDeps = {
   lists: StartLists;
 };
 
-const errorText = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
 export const createStarter = (deps: StarterDeps) => {
   const { host } = deps;
@@ -177,7 +178,7 @@ export const createStarter = (deps: StarterDeps) => {
     // A preset the set does not have falls back to its Implement, else Plain's (a set may be empty).
     const preset = pickPreset(ctx.presets, opts.presetId);
     const children = (deps.tasks() ?? []).filter((t) => t.parentId === task.id);
-    return buildPrompt(task, preset, await cliPath(p.directory), p.directory, children);
+    return buildPrompt(task, preset, await cliPath(p.directory), p.directory, children, deps.primary() ?? undefined);
   };
 
   const isStarting = new Set<string>();
@@ -186,7 +187,7 @@ export const createStarter = (deps: StarterDeps) => {
     hasLiveSession,
     start: startTask,
     prompt: buildFor,
-    onError: (task, e) => fail(`Could not start “${task.title}”: ${errorText(e)}`),
+    onError: (task, e) => fail(`Could not start “${task.title}”: ${errorMessage(e)}`),
   });
 
   const report = (task: Task, result: string): void => {
@@ -276,7 +277,7 @@ export const createStarter = (deps: StarterDeps) => {
     try {
       prompt = await buildFor(task, opts);
     } catch (e) {
-      fail(`Could not queue “${task.title}”: ${errorText(e)}`);
+      fail(`Could not queue “${task.title}”: ${errorMessage(e)}`);
       return;
     }
     const entry: QueueEntry = {
@@ -295,7 +296,7 @@ export const createStarter = (deps: StarterDeps) => {
       queue = fresh;
       shown = p.id;
     } catch (e) {
-      fail(`Could not queue “${task.title}”: ${errorText(e)}`);
+      fail(`Could not queue “${task.title}”: ${errorMessage(e)}`);
       return;
     }
     deps.draw();
@@ -329,7 +330,7 @@ export const createStarter = (deps: StarterDeps) => {
     try {
       card = await deps.loadCard(ctx.projectId, task.id);
     } catch (e) {
-      fail(`Could not read the card's start options: ${errorText(e)}`);
+      fail(`Could not read the card's start options: ${errorMessage(e)}`);
       return;
     }
     const subtasks = (deps.tasks() ?? []).some((t) => t.parentId === task.id);
@@ -371,7 +372,7 @@ export const createStarter = (deps: StarterDeps) => {
       deps.draw();
       return true;
     } catch (e) {
-      fail(`Could not take the card out of the queue: ${errorText(e)}`);
+      fail(`Could not take the card out of the queue: ${errorMessage(e)}`);
       return false;
     }
   };

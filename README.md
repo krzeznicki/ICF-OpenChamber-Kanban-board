@@ -127,7 +127,7 @@ A click on any card (or Enter on a focused card) opens the task in a modal, in e
 - **Summary**: the personal summary (see [Summaries](#summaries)), or a **Summarise** button.
 - **Task**: the full body as formatted markdown: headings, lists, task-list checkboxes (read-only), code, quotes, tables, links. Raw HTML in a body is shown as text; only `http` and `https` links are links, opened in your browser; images are not loaded but shown as links.
 - **Sub-tasks**: the children with their states (a click opens that task); **Unlink** next to one asks first, then removes it from this parent as **No parent** does. Below, one **Add sub-task** button opens the adder with two tabs: **New task** (a title and an optional type; Enter adds, the form stays open for the next one) and **Existing tasks** (a list of the open tasks that may be linked under this one, with checkboxes and a **Filter** field when there are more than 8; **Link selected** links the checked ones one after another and names any that failed; only what the tracker accepts is offered). Only the tab that applies shows when the other has nothing to offer; **Cancel** folds it back to the button. New sub-tasks are offered locally on open features (`spec.md`), since a ticket cannot have tickets, and on GitHub on any open issue, which then becomes a parent.
-- **Settings**, collapsed by default: **Open on GitHub** and the card's start options. It is hidden when it would be empty (a local task with no start options, such as a done one).
+- **Settings**, collapsed by default: the card's start options. It is hidden when there are none (such as a done task). A GitHub task links to its issue (**Open on GitHub ↗**) under its title.
 
 Sections fold open and shut; which ones are open is remembered for every task in the extension's storage (key `detail-sections`, the default instance storage kept on the connected OpenChamber server, so every browser connected to it shares it).
 
@@ -147,9 +147,11 @@ A task counts when the session was started from its card (OpenChamber's start, o
 
 A parent (a feature with sub-tasks) is a card too, with its progress (`2/5 sub-tasks done`). Sub-tasks are drawn indented under their parent when both sit in the same column; **Hide sub-tasks** in the toolbar hides them.
 
+**Source switcher.** A project with several sources (local files and GitHub Issues, see `## Additional sources` in `docs/agents/issue-tracker.md`) gets a switcher next to the project switcher: **All | Local | GitHub** (a dropdown once there are more than three sources). The board then shows one source, or every source with the source's badge on each card. The choice is kept per project in the extension's storage (`sourceView:<projectId>`); the first opening, or a stored source the project no longer has, shows the primary source. **Archive done** and **Clear archive** take only what the view shows. A project with one source has no switcher and no badges.
+
 **Search tasks** in the toolbar narrows the board to cards whose title or description holds every word typed (case and accents ignored; a local file is searched without its field lines). A matching sub-task keeps its parent on the board for context. Only this panel session remembers the search; Escape clears it.
 
-The field also takes filters: `type:` (the task's type), `state:` (its tracker state), `column:` (the board column) and `status:` (the column when the value names one, as `status:ready`, otherwise the state, as `status:info`), with `:` or `=`. A value matches from its start or the start of one of its words, so `state:info` finds `needs-info` and `column:prog` finds In Progress. Repeating a key means either (`type:bug type:research`); everything else must all hold (`type:research status:backlog login`). A list under the field completes keys and values as you type: arrows select, Enter or Tab picks.
+The field also takes filters: `type:` (the task's type), `state:` (its tracker state), `column:` (the board column), `status:` (the column when the value names one, as `status:ready`, otherwise the state, as `status:info`) and `source:` (`source:local`, `source:github`; offered only when the project has several sources), with `:` or `=`. A value matches from its start or the start of one of its words, so `state:info` finds `needs-info` and `column:prog` finds In Progress. Repeating a key means either (`type:bug type:research`); everything else must all hold (`type:research status:backlog login`). A list under the field completes keys and values as you type: arrows select, Enter or Tab picks.
 
 Dragging a parent that has sub-tasks to In Progress starts one orchestrator session with the **Break down and orchestrate** preset (unless the card picks another; a parent without sub-tasks starts with its type's preset, or pick orchestrate on its card to have it broken down). The orchestrator creates sub-tasks if there are none, claims them through the CLI and hands them to subagents. While it runs, its sub-tasks show **led by orchestrator**, a claimed one sits in In Progress, and dropping one of them on In Progress starts nothing. Moving a parent with open sub-tasks to Done asks whether to close them too.
 
@@ -201,6 +203,8 @@ Three layers, each overriding the one before, field by field:
 3. **The card** (its modal, Settings → Start options): preset, location, model, thinking, agent and summary language for that card.
 
 All of them are per user and stored in the extension's storage.
+
+**Settings → Sources** is different: it lists the open project's sources (the primary one first) and changes `docs/agents/issue-tracker.md` in the repository. **Add Local** / **Add GitHub** adds a source (GitHub needs a github.com remote and a logged-in `gh`; its labels are created), **Remove** stops showing a source's tasks (nothing is deleted: the `.scratch/` files or the issues stay), and **Make primary** writes the new primary source's template and lists the others under `## Additional sources`. Text you added after the old template is kept; if the template itself was edited by hand, the board asks before replacing it. The CLI does the same with `task-board init --add <id>`, `--remove <id>` and `--primary <id>` (`--force` replaces an edited template), and writes the same file. The first-run wizard still asks only for the primary source.
 
 **Model**, **Thinking** and **Agent** are picked from lists, not typed, in every place start options are set (the card, Add task, the start form, Settings → Global and This project). The lists are what OpenCode's server reports for the project (`opencode api GET /api/model` and `GET /api/agent`; when the model request fails, `opencode models`, which has no names or thinking levels). Each list is fetched the first time a picker needs it in that project, then kept for the panel session, one list per project; the service caches it for 10 minutes.
 
@@ -272,7 +276,19 @@ Commands:
                                         which changes in a local tracker: the file moves)
   next                                  first ready-for-agent ticket with no open blocker
   close <id> [--with-children]          close a task (and a feature's tickets)
-  init <local|github>                   write docs/agents/issue-tracker.md
+  delete <id> [--with-children]         delete a task for good (prints the deleted ids); a local
+                                        feature with tickets needs --with-children (its whole
+                                        folder goes); GitHub: repository admins only, without
+                                        --with-children sub-issues stay as top-level issues
+  publish <id> [--to github]            publish a local task to GitHub: an issue (a feature's
+                                        tickets become sub-issues), then the local files are closed
+                                        with a link; if GitHub fails half way nothing local closes
+  init <local|github>                   write docs/agents/issue-tracker.md (the primary source)
+  init --add <id> | --remove <id> | --primary <id> [--force]
+                                        add or remove a source, or make one primary; this
+                                        rewrites docs/agents/issue-tracker.md as Settings does.
+                                        Removing deletes nothing (its files or issues stay).
+                                        --force: replace a primary template edited by hand
 
 Options for every command:
   --dir <path>   project root (default: current directory)
@@ -285,6 +301,8 @@ Exit codes: 0 ok, 2 usage, 3 nothing found, 4 tracker error
 ```
 
 Ids are paths locally (`.scratch/login/issues/01-empty-password.md`, `.scratch/login/spec.md`) and `#<number>` on GitHub. Locally, a task created without `--parent` becomes a feature (`spec.md`). Only a `ready-for-agent` ticket can be claimed.
+
+`publish <id> --to github` (projects with a GitHub source) turns a local task into a GitHub issue with its title, description, type and state label; a feature's tickets become sub-issues, and blockers between them point at the new issues. Then the local files are set to done with a `## Comments` line linking their issue. If GitHub fails half way, the error names the issues already created and nothing local is closed. The task modal offers the same as "Publish to GitHub" on an open local task, on the right of the Move to row, under Parent.
 
 `parent <id> <parentId>` links an existing task under an existing parent. On GitHub it sets the native parent (`gh issue edit --parent`, replacing an old one) and the number stays. Locally the file moves: a ticket of another feature becomes the parent feature's next ticket (renumbered; its `Blocked by` numbers are dropped, and its old feature's tickets that listed it lose that blocker), and a feature with no tickets becomes a ticket and its folder is removed. A feature with tickets or with other files in its folder, a ticket as the parent, the task itself, its current parent or (GitHub) one of its own descendants are refused (exit 4). The new id is printed; the board's session links and queued start follow it.
 

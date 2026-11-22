@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
-import { writeConfig } from '../src/core/config.ts';
+import { withAdditionalSources, writeConfig } from '../src/core/config.ts';
 import type { Exec, Task } from '../src/core/types.ts';
 import { handle } from '../src/service/routes.ts';
 
@@ -119,11 +119,11 @@ test('/config/init writes the config and /config/read returns it', async (t) => 
   const directory = await tmp(t);
   const init = await handle('POST', '/config/init', { directory, tracker: 'local' }, deps);
   assert.equal(init.status, 200, JSON.stringify(init.json));
-  assert.equal((init.json as { config: { tracker: string } }).config.tracker, 'local');
+  assert.equal((init.json as { config: { primary: string } }).config.primary, 'local');
   const read = await handle('POST', '/config/read', { directory }, deps);
   assert.equal(read.status, 200);
-  const config = (read.json as { config: { tracker: string; labels: Record<string, string> } }).config;
-  assert.equal(config.tracker, 'local');
+  const config = (read.json as { config: { primary: string; labels: Record<string, string> } }).config;
+  assert.equal(config.primary, 'local');
   assert.equal(config.labels['ready-for-agent'], 'ready-for-agent');
 
   const other = await handle('POST', '/config/init', { directory, tracker: 'github' }, deps);
@@ -324,7 +324,7 @@ test('/config/init github writes the config and creates only the missing labels'
   const gh = fakeGh([], { labels: ['bug', 'needs-info'] });
   const r = await handle('POST', '/config/init', { directory, tracker: 'github' }, { exec: gh.exec });
   assert.equal(r.status, 200, JSON.stringify(r.json));
-  assert.equal((r.json as { config: { tracker: string } }).config.tracker, 'github');
+  assert.equal((r.json as { config: { primary: string } }).config.primary, 'github');
   const created = gh.calls.filter((c) => c[1] === 'label' && c[2] === 'create').map((c) => c[3]);
   assert.deepEqual(created.sort(), ['enhancement', 'needs-triage', 'ready-for-agent', 'ready-for-human', 'wontfix']);
   assert.equal(gh.calls.filter((c) => c[1] === '--version').length, 1, 'one preflight');
@@ -444,4 +444,202 @@ test('POST /tasks/delete: a failing session-link cleanup is logged and the queue
   assert.deepEqual(queue.queue, []);
   assert.equal(logged.length, 1);
   assert.match(logged[0]!, /session links/);
+});
+
+test('/config/read names the sources, the primary one and their capabilities', async (t) => {
+  const directory = await local(t);
+  const one = (await handle('POST', '/config/read', { directory }, deps)).json as {
+    config: { primary: string; sources: { id: string; label: string; capabilities: Record<string, boolean> }[] };
+  };
+  assert.equal(one.config.primary, 'local');
+  assert.deepEqual(one.config.sources.map((s) => s.id), ['local']);
+
+  const path = join(directory, 'docs/agents/issue-tracker.md');
+  await writeFile(path, withAdditionalSources(await readFile(path, 'utf8'), ['github']));
+  const two = (await handle('POST', '/config/read', { directory }, deps)).json as typeof one;
+  assert.equal(two.config.primary, 'local');
+  assert.deepEqual(two.config.sources.map((s) => [s.id, s.label]), [['local', 'Local'], ['github', 'GitHub']]);
+  assert.equal(two.config.sources[1]!.capabilities.subtasks, true);
+});
+
+test('/config/read lists every supported source as known, and an unknown additional source is a warning, not an error', async (t) => {
+  const directory = await local(t);
+  const path = join(directory, 'docs/agents/issue-tracker.md');
+  await writeFile(path, `${await readFile(path, 'utf8')}\n## Additional sources\n\n- \`jira\`: later\n`);
+  const read = await handle('POST', '/config/read', { directory }, deps);
+  assert.equal(read.status, 200);
+  const { config } = read.json as { config: { sources: { id: string }[]; known: { id: string; label: string }[]; warnings: string[] } };
+  assert.deepEqual(config.sources.map((s) => s.id), ['local']);
+  assert.deepEqual(config.known.map((s) => [s.id, s.label]), [['local', 'Local'], ['github', 'GitHub']]);
+  assert.match(config.warnings[0]!, /jira/);
+});
+
+test('/tasks/list returns the tasks of working sources and the errors of failing ones', async (t) => {
+  const { fakeGh } = await import('./fakeGh.ts');
+  const directory = await local(t);
+  const path = join(directory, 'docs/agents/issue-tracker.md');
+  await writeFile(path, withAdditionalSources(await readFile(path, 'utf8'), ['github']));
+  await handle('POST', '/tasks/create', { directory, input: { title: 'Private' } }, deps);
+
+  const ok = await handle('POST', '/tasks/list', { directory }, { exec: fakeGh([{ number: 3, title: 'Public' }]).exec });
+  assert.equal(ok.status, 200);
+  const both = ok.json as { tasks: Task[]; errors: unknown[] };
+  assert.deepEqual(both.tasks.map((x) => x.source).sort(), ['github', 'local']);
+  assert.deepEqual(both.errors, []);
+
+  const down = await handle('POST', '/tasks/list', { directory }, { exec: fakeGh([], { authed: false }).exec });
+  assert.equal(down.status, 200);
+  const partial = down.json as { tasks: Task[]; errors: { source: string; code: string; availability: string }[] };
+  assert.deepEqual(partial.tasks.map((x) => x.title), ['Private']);
+  assert.deepEqual(partial.errors.map((e) => [e.source, e.code, e.availability]), [['github', 'GH_AUTH', 'needs-login']]);
+});
+
+test('/tasks/create takes an optional source; without it the task goes to the primary source', async (t) => {
+  const { fakeGh } = await import('./fakeGh.ts');
+  const directory = await local(t);
+  const path = join(directory, 'docs/agents/issue-tracker.md');
+  await writeFile(path, withAdditionalSources(await readFile(path, 'utf8'), ['github']));
+  const gh = fakeGh([{ number: 3, title: 'Public' }]);
+  const ghDeps = { exec: gh.exec };
+
+  const primary = await handle('POST', '/tasks/create', { directory, input: { title: 'Private' } }, ghDeps);
+  assert.equal(primary.status, 200, JSON.stringify(primary.json));
+  assert.equal((primary.json as { task: Task }).task.source, 'local');
+
+  const shared = await handle('POST', '/tasks/create', { directory, input: { title: 'Shared', source: 'github' } }, ghDeps);
+  assert.equal(shared.status, 200, JSON.stringify(shared.json));
+  assert.equal((shared.json as { task: Task }).task.source, 'github');
+
+  const clash = await handle('POST', '/tasks/create', { directory, input: { title: 'X', parentId: '#3', source: 'local' } }, ghDeps);
+  assert.equal(clash.status, 422, JSON.stringify(clash.json));
+  assert.equal((clash.json as Err).error.code, 'INVALID');
+
+  const bad = await handle('POST', '/tasks/create', { directory, input: { title: 'X', source: 42 } }, ghDeps);
+  assert.equal(bad.status, 400);
+  assert.equal((bad.json as Err).error.code, 'INVALID');
+});
+
+test('POST /tasks/publish publishes a local task to GitHub and closes it; a partial failure is 422 naming what was created', async (t) => {
+  const { fakeGh } = await import('./fakeGh.ts');
+  const directory = await local(t);
+  const path = join(directory, 'docs/agents/issue-tracker.md');
+  await writeFile(path, withAdditionalSources(await readFile(path, 'utf8'), ['github']));
+  const gh = fakeGh([], { failCreate: (title) => title === 'Broken' });
+  const d = { exec: gh.exec };
+  const create = async (input: Record<string, unknown>) =>
+    ((await handle('POST', '/tasks/create', { directory, input }, d)).json as { task: Task }).task;
+
+  const spec = await create({ title: 'Feature', body: 'Spec.' });
+  await create({ title: 'Ticket', parentId: spec.id });
+  const r = await handle('POST', '/tasks/publish', { directory, id: spec.id, to: 'github' }, d);
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  const out = r.json as { issue: Task; subIssues: { from: string; task: Task }[]; closed: Task[] };
+  assert.equal(out.issue.id, '#1');
+  assert.deepEqual(out.subIssues.map((s) => s.task.id), ['#2']);
+  assert.ok(out.closed.every((x) => x.state === 'done'));
+
+  const broken = await create({ title: 'Other' });
+  await create({ title: 'Broken', parentId: broken.id });
+  const partial = await handle('POST', '/tasks/publish', { directory, id: broken.id }, d);
+  assert.equal(partial.status, 422);
+  assert.equal((partial.json as Err).error.code, 'FAILED');
+  assert.match((partial.json as Err).error.message, /#3 \(Other\)/);
+
+  assert.equal((await handle('POST', '/tasks/publish', { directory, id: broken.id, to: 'jira' }, d)).status, 400);
+});
+
+// --- Settings → Sources: /config/sources ---
+
+type Sourced = { config: { primary: string; sources: Array<{ id: string; label: string }> } };
+const trackerText = (directory: string): Promise<string> => readFile(join(directory, 'docs/agents/issue-tracker.md'), 'utf8');
+
+test('/config/sources adds github to a local project: the same file the CLI writes, gh checked and labels made', async (t) => {
+  const { fakeGh } = await import('./fakeGh.ts');
+  const { main } = await import('../src/cli/main.ts');
+  const directory = await local(t);
+  const gh = fakeGh([], { labels: [] });
+  const r = await handle('POST', '/config/sources', { directory, change: { add: 'github' } }, { exec: gh.exec });
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  const config = (r.json as Sourced).config;
+  assert.equal(config.primary, 'local');
+  assert.deepEqual(config.sources.map((s) => s.id), ['local', 'github']);
+  assert.ok(gh.calls.some((c) => c[1] === 'label' && c[2] === 'create'), 'labels created');
+
+  const viaCli = await local(t);
+  const code = await main(['init', '--add', 'github'], { stdout: () => {}, stderr: () => {}, cwd: viaCli, exec: noExec });
+  assert.equal(code, 0);
+  assert.equal(await trackerText(directory), await trackerText(viaCli));
+});
+
+test('/config/sources adding github without a GitHub remote or with gh logged out writes nothing', async (t) => {
+  const { fakeGh } = await import('./fakeGh.ts');
+  for (const [options, code] of [[{ remote: null }, 'INVALID'], [{ authed: false }, 'GH_AUTH']] as const) {
+    const directory = await local(t);
+    const before = await trackerText(directory);
+    const r = await handle('POST', '/config/sources', { directory, change: { add: 'github' } }, { exec: fakeGh([], options).exec });
+    assert.equal(r.status, 422, code);
+    assert.equal((r.json as Err).error.code, code);
+    assert.equal(await trackerText(directory), before);
+  }
+});
+
+test('/config/sources: a github project adds local, makes it primary, and removes github without touching any issue', async (t) => {
+  const { fakeGh } = await import('./fakeGh.ts');
+  const directory = await tmp(t);
+  await writeConfig(directory, 'github');
+  const gh = fakeGh([{ number: 7, title: 'Shared', labels: [] }]);
+  const call = (change: unknown) => handle('POST', '/config/sources', { directory, change }, { exec: gh.exec });
+
+  assert.equal((await call({ add: 'local' })).status, 200);
+  const primary = await call({ primary: 'local' });
+  assert.equal(primary.status, 200, JSON.stringify(primary.json));
+  assert.deepEqual((primary.json as Sourced).config.sources.map((s) => s.id), ['local', 'github']);
+  const removed = await call({ remove: 'github' });
+  assert.equal(removed.status, 200, JSON.stringify(removed.json));
+  assert.deepEqual((removed.json as Sourced).config.sources.map((s) => s.id), ['local']);
+  assert.ok(
+    !gh.calls.some((c) => c[0] === 'gh' && c[1] === 'issue' && ['close', 'delete', 'edit'].includes(c[2]!)),
+    'no issue was changed',
+  );
+  const listed = await handle('POST', '/tasks/list', { directory }, { exec: gh.exec });
+  assert.deepEqual((listed.json as { tasks: Task[] }).tasks, [], 'github tasks are no longer shown');
+});
+
+test('/config/sources removing local keeps its .scratch files', async (t) => {
+  const { fakeGh } = await import('./fakeGh.ts');
+  const directory = await tmp(t);
+  await writeConfig(directory, 'github');
+  await writeFile(join(directory, 'docs/agents/issue-tracker.md'), withAdditionalSources(await trackerText(directory), ['local']));
+  const gh = fakeGh([]);
+  await mkdir(join(directory, '.scratch/mine'), { recursive: true });
+  await writeFile(join(directory, '.scratch/mine/spec.md'), '# Mine\n');
+  const r = await handle('POST', '/config/sources', { directory, change: { remove: 'local' } }, { exec: gh.exec });
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  assert.equal(await readFile(join(directory, '.scratch/mine/spec.md'), 'utf8'), '# Mine\n');
+});
+
+test('/config/sources over a hand-edited template asks to confirm, and force goes ahead', async (t) => {
+  const directory = await local(t);
+  const edited = `${(await trackerText(directory)).replace('One feature per directory', 'One feature per folder')}`;
+  await writeFile(join(directory, 'docs/agents/issue-tracker.md'), edited);
+  const { fakeGh } = await import('./fakeGh.ts');
+  const exec = fakeGh([]).exec;
+  const asked = await handle('POST', '/config/sources', { directory, change: { primary: 'github' } }, { exec });
+  assert.equal(asked.status, 200, JSON.stringify(asked.json));
+  assert.match((asked.json as { confirm: string }).confirm, /edited by hand/);
+  assert.equal(await trackerText(directory), edited);
+  const forced = await handle('POST', '/config/sources', { directory, change: { primary: 'github' }, force: true }, { exec });
+  assert.equal(forced.status, 200, JSON.stringify(forced.json));
+  assert.equal((forced.json as Sourced).config.primary, 'github');
+});
+
+test('/config/sources rejects a bad change with 400 and removing the primary with 422', async (t) => {
+  const directory = await local(t);
+  for (const change of [undefined, {}, { add: 'jira' }, { add: 'github', remove: 'local' }, 'github']) {
+    const r = await handle('POST', '/config/sources', { directory, change }, deps);
+    assert.equal(r.status, 400, JSON.stringify(change));
+  }
+  const primary = await handle('POST', '/config/sources', { directory, change: { remove: 'local' } }, deps);
+  assert.equal(primary.status, 422);
+  assert.equal((primary.json as Err).error.code, 'INVALID');
 });
