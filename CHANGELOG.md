@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.0
 
 - **Several sources per project** (local `.scratch/` files and GitHub Issues at once), one of them the **Primary source** (ADR 0001, `GLOSSARY.md`). `docs/agents/issue-tracker.md` keeps describing the primary source in Matt Pocock's format; an optional `## Additional sources` section lists the others with instructions for agents. Without it a project has one source, as before.
   - A combined tracker (`core/sources.ts`) lists every source (one failing source does not hide the others) and routes each operation to the source that owns the id. Every task carries `source`. Each source declares its capabilities and availability (`ok`, `needs-login`, `unavailable`).
