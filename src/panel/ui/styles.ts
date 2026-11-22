@@ -40,6 +40,9 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
 .kb-card.is-child { margin-left: 0.75rem; }
 .kb-card-title { font-weight: 500; overflow-wrap: anywhere; }
 .kb-card-id { color: var(--oc-muted); font-family: var(--oc-mono); font-size: 0.8em; overflow-wrap: anywhere; }
+.kb-sheet-id { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.25rem 0.75rem; }
+.kb-sheet-link { font-size: 0.85em; color: var(--oc-primary, inherit); text-decoration: none; }
+.kb-sheet-link:hover { text-decoration: underline; }
 .kb-card-error { color: var(--oc-error-text, var(--oc-fg)); font-size: 0.8em; overflow-wrap: anywhere; }
 .kb-badges { display: flex; flex-wrap: wrap; gap: 0.25rem; }
 .kb-badges:empty { display: none; }

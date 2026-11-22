@@ -9,7 +9,8 @@
   - Board: a source switcher (`All | Local | GitHub`) next to the project switcher when a project has several sources, kept per project, the primary source on first opening. A source badge on cards in All. The `source:` search filter with suggestions. A banner with **Try again** for a source that fails to list (its own text when it needs a login); archive marks and card order of its tasks are kept.
   - Add task has a **Source** select whenever the project has several sources, starting on the source the board shows (in All, the primary source). Parent, blockers and existing sub-tasks come only from the chosen source.
   - Settings → **Sources**: add, remove (deletes nothing) and make a source primary; the file Settings writes is the one `init --add` writes. Replacing a hand-edited template asks first; hand-written notes and later sections are kept.
-  - **Publish to GitHub** on a local task: creates the issue (sub-tasks as sub-issues, state label carried over), then closes the local files with a link to it. On a partial failure it names what was created and leaves the local files open.
+  - **Publish to GitHub** on a local task (in the task modal, under State, Type and Parent): creates the issue (sub-tasks as sub-issues, state label carried over), then closes the local files with a link to it. On a partial failure it names what was created and leaves the local files open.
+  - The task modal links a GitHub task to its issue (**Open on GitHub ↗**) right under its title, instead of inside the collapsed Settings section.
   - A session started from a card gets the tracker instructions of that task's source. The `icf-kanban-*` skills describe `--source` and the parent's-source rule.
 
 ## 0.4.2

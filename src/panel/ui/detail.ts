@@ -1,8 +1,9 @@
 // The task modal, opened by a click on any card. A header (title, id, badges, Edit, Delete, ×, and
 // the task's session: "Open session" or why not; "Unarchive" for an archived task), a compact row
-// (State, Type, Parent with "No parent", Move to), then collapsible sections whose open state is
+// (State, Type, Parent with "No parent", Publish to GitHub on a local task, Move to; a GitHub task links
+// to its issue under the title), then collapsible sections whose open state is
 // remembered: Summary, Task (the body as markdown, or the Edit form, ui/editForm.ts), Sub-tasks
-// (rows with Unlink; "Add sub-task" opens New task / Existing tasks) and Settings (Open on GitHub or Publish to GitHub,
+// (rows with Unlink; "Add sub-task" opens New task / Existing tasks) and Settings (
 // start options, ui/startOptions.ts). It sits on the modal shell (ui/modal.ts), draws what it is
 // given and reports choices; the editor (edit.ts) runs them and asks to confirm.
 import { mountBadge, mountBanner, mountButton, mountList, mountSelect, mountSpinner, mountTabs, mountTextField } from '@openchamber/sdk/ui';
@@ -278,7 +279,21 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
     const { task } = m;
     const top = el('div', 'kb-sheet-head');
     const titles = el('div', 'kb-sheet-titles');
-    titles.append(el('h2', 'kb-sheet-title', task.title), el('div', 'kb-card-id', task.id));
+    const idRow = el('div', 'kb-sheet-id');
+    idRow.append(el('span', 'kb-card-id', task.id));
+    // A GitHub task links to its issue right under the title (the host opens it in the browser).
+    const url = task.url;
+    if (url !== null) {
+      const link = el('a', 'kb-sheet-link', 'Open on GitHub ↗');
+      link.setAttribute('href', url);
+      link.title = url;
+      link.addEventListener('click', (event) => {
+        event.preventDefault();
+        callbacks.onOpenUrl(url);
+      });
+      idRow.append(link);
+    }
+    titles.append(el('h2', 'kb-sheet-title', task.title), idRow);
     const closeSlot = el('div', 'kb-sheet-x');
     top.append(titles, closeSlot);
     disposers.push(mountCloseButton(closeSlot, dismiss));
@@ -467,7 +482,7 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
   const drawQuick = (m: DetailModel): void => {
     const { task } = m;
     if (parentError !== null && parentError.taskId !== task.id) parentError = null;
-    const key = JSON.stringify([task.id, task.state, task.type, m.types, m.labels, m.moves, m.busy, m.links.parent, m.links.parents, parentError]);
+    const key = JSON.stringify([task.id, task.state, task.type, m.types, m.labels, m.moves, m.busy, m.publish, m.links.parent, m.links.parents, parentError]);
     if (key === quickKey) return;
     quickKey = key;
     clearQuick();
@@ -552,6 +567,15 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
       }).dispose,
     );
 
+    // "Publish to GitHub" sits right under State, Type and Parent (taskPublish.ts canPublish).
+    if (m.publish) {
+      const publishRow = el('div', 'kb-actions kb-actions-start kb-quick-publish');
+      disposers.push(
+        mountButton(publishRow, { label: 'Publish to GitHub', variant: 'outline', size: 'sm', disabled: m.busy, onClick: callbacks.onPublish }).dispose,
+      );
+      quick.append(publishRow);
+    }
+
     if (m.moves.length > 0) {
       const moveRow = el('div', 'kb-actions kb-actions-start kb-quick-moves');
       moveRow.setAttribute('role', 'group');
@@ -573,22 +597,7 @@ export const openDetail = (initial: DetailModel, callbacks: DetailCallbacks, opt
     const { task } = m;
     // Left with nothing (a local task without start options, e.g. done), the section hides.
     // `start` is null for a done task or while no project settings are loaded (edit.ts detailModel).
-    settingsSec.box.hidden = task.url === null && m.start === null && !m.publish;
-    const url = task.url;
-    if (url !== null) {
-      const actions = el('div', 'kb-actions kb-actions-start');
-      disposers.push(
-        mountButton(actions, { label: 'Open on GitHub', variant: 'ghost', size: 'sm', onClick: () => callbacks.onOpenUrl(url) }).dispose,
-      );
-      settingsTop.append(actions);
-    }
-    if (m.publish) {
-      const actions = el('div', 'kb-actions kb-actions-start');
-      disposers.push(
-        mountButton(actions, { label: 'Publish to GitHub', variant: 'outline', size: 'sm', disabled: m.busy, onClick: callbacks.onPublish }).dispose,
-      );
-      settingsTop.append(actions);
-    }
+    settingsSec.box.hidden = m.start === null;
     drawStart(task.id, m.start);
   };
 

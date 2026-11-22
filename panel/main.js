@@ -12774,7 +12774,20 @@ ${ref}`,
       const { task } = m;
       const top = el5("div", "kb-sheet-head");
       const titles = el5("div", "kb-sheet-titles");
-      titles.append(el5("h2", "kb-sheet-title", task.title), el5("div", "kb-card-id", task.id));
+      const idRow = el5("div", "kb-sheet-id");
+      idRow.append(el5("span", "kb-card-id", task.id));
+      const url = task.url;
+      if (url !== null) {
+        const link2 = el5("a", "kb-sheet-link", "Open on GitHub \u2197");
+        link2.setAttribute("href", url);
+        link2.title = url;
+        link2.addEventListener("click", (event) => {
+          event.preventDefault();
+          callbacks.onOpenUrl(url);
+        });
+        idRow.append(link2);
+      }
+      titles.append(el5("h2", "kb-sheet-title", task.title), idRow);
       const closeSlot = el5("div", "kb-sheet-x");
       top.append(titles, closeSlot);
       disposers.push(mountCloseButton(closeSlot, dismiss));
@@ -12939,7 +12952,7 @@ ${ref}`,
     const drawQuick = (m) => {
       const { task } = m;
       if (parentError !== null && parentError.taskId !== task.id) parentError = null;
-      const key = JSON.stringify([task.id, task.state, task.type, m.types, m.labels, m.moves, m.busy, m.links.parent, m.links.parents, parentError]);
+      const key = JSON.stringify([task.id, task.state, task.type, m.types, m.labels, m.moves, m.busy, m.publish, m.links.parent, m.links.parents, parentError]);
       if (key === quickKey) return;
       quickKey = key;
       clearQuick();
@@ -13019,6 +13032,13 @@ ${ref}`,
           }
         }).dispose
       );
+      if (m.publish) {
+        const publishRow = el5("div", "kb-actions kb-actions-start kb-quick-publish");
+        disposers2.push(
+          mountButton(publishRow, { label: "Publish to GitHub", variant: "outline", size: "sm", disabled: m.busy, onClick: callbacks.onPublish }).dispose
+        );
+        quick.append(publishRow);
+      }
       if (m.moves.length > 0) {
         const moveRow = el5("div", "kb-actions kb-actions-start kb-quick-moves");
         moveRow.setAttribute("role", "group");
@@ -13036,22 +13056,7 @@ ${ref}`,
     };
     const drawSettings = (m) => {
       const { task } = m;
-      settingsSec.box.hidden = task.url === null && m.start === null && !m.publish;
-      const url = task.url;
-      if (url !== null) {
-        const actions = el5("div", "kb-actions kb-actions-start");
-        disposers.push(
-          mountButton(actions, { label: "Open on GitHub", variant: "ghost", size: "sm", onClick: () => callbacks.onOpenUrl(url) }).dispose
-        );
-        settingsTop.append(actions);
-      }
-      if (m.publish) {
-        const actions = el5("div", "kb-actions kb-actions-start");
-        disposers.push(
-          mountButton(actions, { label: "Publish to GitHub", variant: "outline", size: "sm", disabled: m.busy, onClick: callbacks.onPublish }).dispose
-        );
-        settingsTop.append(actions);
-      }
+      settingsSec.box.hidden = m.start === null;
       drawStart(task.id, m.start);
     };
     let addKey = null;
@@ -15616,6 +15621,9 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
 .kb-card.is-child { margin-left: 0.75rem; }
 .kb-card-title { font-weight: 500; overflow-wrap: anywhere; }
 .kb-card-id { color: var(--oc-muted); font-family: var(--oc-mono); font-size: 0.8em; overflow-wrap: anywhere; }
+.kb-sheet-id { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.25rem 0.75rem; }
+.kb-sheet-link { font-size: 0.85em; color: var(--oc-primary, inherit); text-decoration: none; }
+.kb-sheet-link:hover { text-decoration: underline; }
 .kb-card-error { color: var(--oc-error-text, var(--oc-fg)); font-size: 0.8em; overflow-wrap: anywhere; }
 .kb-badges { display: flex; flex-wrap: wrap; gap: 0.25rem; }
 .kb-badges:empty { display: none; }
