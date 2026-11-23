@@ -180,3 +180,19 @@ test('editing the draft after failure starts a fresh explicit selection', async 
   assert.equal((await s.get('a')).type, 'chore');
   assert.equal((await s.get('b')).type, 'bug');
 });
+
+test('a save of an ancestor blocks editing its descendants until it finishes', async () => {
+  const s = setup([task('p'), task('c', 'p'), task('g', 'c')]);
+  s.busy.add('p');
+  const c = s.controller;
+  c.selectionChanged(['g']);
+  c.setDraft({ state: 'needs-info' });
+  assert.equal(c.model().canApply, false);
+  assert.match(c.model().blockReason ?? '', /being changed/i);
+  await c.apply();
+  assert.equal((await s.get('g')).state, 'needs-triage');
+  s.busy.clear();
+  assert.equal(c.model().canApply, true);
+  await c.apply();
+  assert.equal((await s.get('g')).state, 'needs-info');
+});

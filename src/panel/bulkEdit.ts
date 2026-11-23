@@ -18,6 +18,7 @@ export type BulkApi = Pick<Api, 'get' | 'setType' | 'setState'>;
 export const planBulk = (tasks: readonly Task[], ids: readonly string[], draft: BulkDraft): BulkPlan => {
   const selectedIds = [...new Set(ids)];
   const known = new Set(tasks.map(t => t.id));
+  const byId = new Map(tasks.map(t => [t.id, t]));
   for (const id of selectedIds) if (!known.has(id)) throw new Error(`Task not found: ${id}`);
   const children = new Map<string, string[]>();
   for (const task of tasks) {
@@ -29,6 +30,10 @@ export const planBulk = (tasks: readonly Task[], ids: readonly string[], draft: 
   const visit = (id: string): void => {
     if (visiting.has(id)) throw new Error('Cycle in sub-task hierarchy.');
     if (visited.has(id)) return;
+    const task = byId.get(id)!;
+    if (task.source === 'github' && (task.childCount === undefined || task.childCount !== (children.get(id)?.length ?? 0))) {
+      throw new Error(`Sub-task tree for ${id} is not fully loaded. Turn off “Close sub-tasks” to edit only marked tasks.`);
+    }
     visiting.add(id);
     for (const child of children.get(id) ?? []) visit(child);
     visiting.delete(id);

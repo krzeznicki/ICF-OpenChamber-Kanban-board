@@ -44,7 +44,18 @@ export const createBulkToolbar = (deps: BulkToolbarDeps) => {
     if (deps.api() === null) return 'No project is open.';
     if (!deps.complete()) return 'Task sources could not be fully loaded. Refresh before editing the group.';
     try {
-      return targets(currentPlan()).some(id => deps.busy().has(id))
+      const parents = new Map(deps.tasks().map(t => [t.id, t.parentId]));
+      const busy = deps.busy();
+      // Existing editor operations reserve their root; closing/deleting it may still write children.
+      const overlaps = (id: string): boolean => {
+        const seen = new Set<string>();
+        for (let at: string | null = id; at !== null && !seen.has(at); at = parents.get(at) ?? null) {
+          if (busy.has(at)) return true;
+          seen.add(at);
+        }
+        return false;
+      };
+      return targets(currentPlan()).some(overlaps)
         ? 'A selected task or sub-task is being changed. Wait for that save to finish.' : null;
     } catch (e) {
       return errorMessage(e);

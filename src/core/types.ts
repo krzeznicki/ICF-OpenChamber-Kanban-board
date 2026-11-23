@@ -51,6 +51,9 @@ export type Task = {
   claimed: boolean;
   /** The Source the task lives in; every id belongs to exactly one source. */
   source: SourceId;
+  /** GitHub's authoritative direct sub-issue count, including children omitted from list().
+   * Absent when relationships could not be read; recursive edits must not assume zero. */
+  childCount?: number;
 };
 
 export type NewTask = {

@@ -14,11 +14,13 @@ document.documentElement.style.cssText = '--oc-bg:#fafafa;--oc-fg:#222;--oc-mute
 const check = (condition: boolean, message: string): void => { if (!condition) throw new Error(message); };
 const root = document.getElementById('root')!;
 let settingsOpened = 0;
+let projectsPicked = 0;
 const board = createBoard(root, {
-  onProject() {}, onSource() {}, onHideSubtasks() {}, onSearch() {}, suggest: () => [], onSearchExit() {},
+  onProject() { projectsPicked++; }, onSource() {}, onHideSubtasks() {}, onSearch() {}, suggest: () => [], onSearchExit() {},
   onSearchDown: () => false, onRefresh() {}, onAdd() {}, onSettings() { settingsOpened++; },
   onArchiveDone() {}, onShowArchived() {}, onClearArchive() {},
 });
+board.setProjects([{ id: 'one', label: 'Project one' }, { id: 'two', label: 'Project two' }], 'one');
 const tasks: Task[] = Array.from({ length: 30 }, (_, i) => ({
   id: `task-${i}`, title: `Task ${i + 1}`, type: 'enhancement', state: 'needs-triage', source: 'local',
   parentId: null, kind: 'ticket', body: '', blockedBy: [], claimed: false, url: null, updatedAt: 0,
@@ -99,10 +101,15 @@ try {
   check(button('Clear').disabled, 'Clear must be disabled while saving');
   [...root.querySelectorAll('button')].find(b => b.textContent?.trim() === 'Settings')!.click();
   check(settingsOpened === 0, 'Board controls must not act during a save');
+  root.querySelector<HTMLButtonElement>('.kb-project button')!.click();
+  check(root.querySelector('.kb-project [role="option"]') === null && projectsPicked === 0, 'Project switch must stay locked');
   board.columns.querySelector('.kb-card')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
   check(opened === 0, 'Enter must not open a task during a save');
   selection.clearMarks();
   check(selection.marked().length === 1, 'Escape/clear must not change a running group');
+  selection.rendered([['task-1']]);
+  check(selection.marked()[0] === 'task-0', 'A poll/filter redraw must preserve the running target');
+  selection.rendered([tasks.map(t => t.id)]);
   check(release !== null, 'Save must reach the service');
   (release as unknown as () => void)();
   await finished;

@@ -15835,6 +15835,7 @@ ${listKey(projects)}`;
   var planBulk = (tasks, ids, draft) => {
     const selectedIds = [...new Set(ids)];
     const known = new Set(tasks.map((t) => t.id));
+    const byId = new Map(tasks.map((t) => [t.id, t]));
     for (const id of selectedIds) if (!known.has(id)) throw new Error(`Task not found: ${id}`);
     const children = /* @__PURE__ */ new Map();
     for (const task of tasks) {
@@ -15846,6 +15847,10 @@ ${listKey(projects)}`;
     const visit = (id) => {
       if (visiting.has(id)) throw new Error("Cycle in sub-task hierarchy.");
       if (visited.has(id)) return;
+      const task = byId.get(id);
+      if (task.source === "github" && (task.childCount === void 0 || task.childCount !== (children.get(id)?.length ?? 0))) {
+        throw new Error(`Sub-task tree for ${id} is not fully loaded. Turn off \u201CClose sub-tasks\u201D to edit only marked tasks.`);
+      }
       visiting.add(id);
       for (const child of children.get(id) ?? []) visit(child);
       visiting.delete(id);
@@ -15895,7 +15900,17 @@ ${listKey(projects)}`;
       if (deps.api() === null) return "No project is open.";
       if (!deps.complete()) return "Task sources could not be fully loaded. Refresh before editing the group.";
       try {
-        return targets(currentPlan()).some((id) => deps.busy().has(id)) ? "A selected task or sub-task is being changed. Wait for that save to finish." : null;
+        const parents = new Map(deps.tasks().map((t) => [t.id, t.parentId]));
+        const busy = deps.busy();
+        const overlaps = (id) => {
+          const seen = /* @__PURE__ */ new Set();
+          for (let at = id; at !== null && !seen.has(at); at = parents.get(at) ?? null) {
+            if (busy.has(at)) return true;
+            seen.add(at);
+          }
+          return false;
+        };
+        return targets(currentPlan()).some(overlaps) ? "A selected task or sub-task is being changed. Wait for that save to finish." : null;
       } catch (e) {
         return errorMessage(e);
       }

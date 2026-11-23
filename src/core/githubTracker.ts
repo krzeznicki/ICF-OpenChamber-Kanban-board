@@ -221,7 +221,7 @@ export const createGithubTracker = (root: string, exec: Exec, labels: ProjectCon
     return custom === undefined ? null : custom.slice(TYPE_PREFIX.length).trim() || null;
   };
 
-  const toTask = (issue: Issue, rel: Relations): Task => ({
+  const toTask = (issue: Issue, rel: Relations, childCount?: number): Task => ({
     id: idOf(issue.number),
     kind: rel.childCount > 0 ? 'parent' : 'ticket',
     title: issue.title,
@@ -234,6 +234,7 @@ export const createGithubTracker = (root: string, exec: Exec, labels: ProjectCon
     updatedAt: Date.parse(issue.updatedAt) || 0,
     claimed: issue.assignees.length > 0,
     source: 'github',
+    ...(childCount === undefined ? {} : { childCount }),
   });
 
   const load = async (n: number): Promise<{ task: Task; issue: Issue; rel: Relations }> => {
@@ -251,7 +252,7 @@ export const createGithubTracker = (root: string, exec: Exec, labels: ProjectCon
       assignees: (g.assignees?.nodes ?? []).map((a) => a.login),
     };
     const rel = relationsOf(g);
-    return { task: toTask(issue, rel), issue, rel };
+    return { task: toTask(issue, rel, g.subIssues?.totalCount), issue, rel };
   };
 
   const get = async (id: string): Promise<Task> => (await load(parseNumber(id))).task;
@@ -348,7 +349,10 @@ export const createGithubTracker = (root: string, exec: Exec, labels: ProjectCon
         .sort((a, b) => a.number - b.number);
       if (issues.length === 0) return [];
       const rel = await graph(issues.map((i) => i.number), false);
-      return issues.map((i) => toTask(i, relationsOf(rel.get(i.number) ?? null)));
+      return issues.map((i) => {
+        const g = rel.get(i.number) ?? null;
+        return toTask(i, relationsOf(g), g?.subIssues?.totalCount);
+      });
     },
 
     get,

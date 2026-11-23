@@ -695,7 +695,7 @@ var createGithubTracker = (root, exec, labels) => {
     const custom = names.find((l) => l.toLowerCase().startsWith(TYPE_PREFIX));
     return custom === void 0 ? null : custom.slice(TYPE_PREFIX.length).trim() || null;
   };
-  const toTask = (issue, rel) => ({
+  const toTask = (issue, rel, childCount) => ({
     id: idOf(issue.number),
     kind: rel.childCount > 0 ? "parent" : "ticket",
     title: issue.title,
@@ -707,7 +707,8 @@ var createGithubTracker = (root, exec, labels) => {
     url: issue.url,
     updatedAt: Date.parse(issue.updatedAt) || 0,
     claimed: issue.assignees.length > 0,
-    source: "github"
+    source: "github",
+    ...childCount === void 0 ? {} : { childCount }
   });
   const load = async (n) => {
     const g = (await graph([n], true)).get(n) ?? null;
@@ -724,7 +725,7 @@ var createGithubTracker = (root, exec, labels) => {
       assignees: (g.assignees?.nodes ?? []).map((a) => a.login)
     };
     const rel = relationsOf(g);
-    return { task: toTask(issue, rel), issue, rel };
+    return { task: toTask(issue, rel, g.subIssues?.totalCount), issue, rel };
   };
   const get = async (id) => (await load(parseNumber(id))).task;
   const typeLabel = (type) => CATEGORIES.includes(type) ? type : `${TYPE_PREFIX}${type}`;
@@ -803,7 +804,10 @@ var createGithubTracker = (root, exec, labels) => {
       })).filter((i) => i.state === "OPEN" || i.closedAt !== null && now - Date.parse(i.closedAt) <= DONE_WINDOW_MS).sort((a, b) => a.number - b.number);
       if (issues.length === 0) return [];
       const rel = await graph(issues.map((i) => i.number), false);
-      return issues.map((i) => toTask(i, relationsOf(rel.get(i.number) ?? null)));
+      return issues.map((i) => {
+        const g = rel.get(i.number) ?? null;
+        return toTask(i, relationsOf(g), g?.subIssues?.totalCount);
+      });
     },
     get,
     async create(input) {
