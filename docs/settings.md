@@ -43,6 +43,8 @@ A layer that sets a model also owns the thinking level, so a level is never carr
 
 **Settings → Sources** lists the open project's task sources, primary first. Unlike the other settings, it changes `docs/agents/issue-tracker.md` in the repository.
 
+![Settings → Sources for a project with one local source](screenshots/sources.png)
+
 - **Add Local** or **Add GitHub** adds a source. GitHub needs a github.com remote and a logged-in `gh`; its labels are created.
 - **Remove** stops showing a source's tasks. Nothing is deleted: the `.scratch/` files or the issues stay.
 - **Make primary** makes a source the one new tasks go to.
