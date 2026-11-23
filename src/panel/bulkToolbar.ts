@@ -1,0 +1,139 @@
+// The bulk-edit toolbar's state (spec docs/superpowers/specs/2026-11-23-bulk-edit-toolbar-design.md):
+// the draft, the operation it runs (bulkEdit.ts) and what is left to retry. DOM-free, so it runs
+// under node:test; ui/bulkToolbar.ts draws the model and main.ts wires the deps.
+import { errorMessage, type Task } from '../core/types.ts';
+import { planBulk, runBulk, type BulkApi, type BulkDraft, type BulkFailure, type BulkPlan, type BulkProgress } from './bulkEdit.ts';
+
+export type BulkToolbarDeps = {
+  /** The current project's API (null: no project). */
+  api: () => BulkApi | null;
+  /** Every task of the project, as last listed. */
+  tasks: () => readonly Task[];
+  /** The ids drawn on the Board now. */
+  visible: () => readonly string[];
+  /** Tasks with a save already in flight elsewhere in the panel. */
+  busy: () => ReadonlySet<string>;
+  /** Whether `tasks` holds every source's tasks (a listing failed: false). */
+  complete: () => boolean;
+  /** The model changed: redraw the toolbar. */
+  changed: () => void;
+  /** Replace the Marked cards. */
+  replace: (ids: readonly string[]) => void;
+  /** Keep these marks even when a redraw does not draw them. */
+  retain: (ids: readonly string[]) => void;
+  /** Lock (or unlock) every other way to change the board while the operation runs. */
+  lock: (locked: boolean, ids: readonly string[]) => void;
+  /** Reload the board's tasks. */
+  reload: () => Promise<void>;
+};
+
+const emptyDraft = (): BulkDraft => ({ state: null, type: null, withChildren: true });
+
+export const createBulkToolbar = (deps: BulkToolbarDeps) => {
+  let ids: readonly string[] = [];
+  let draft = emptyDraft();
+  let saving = false;
+  let retry: BulkPlan | null = null;
+  let failures: BulkFailure[] = [];
+  let progress: BulkProgress | null = null;
+  let notice: string | null = null;
+
+  const currentPlan = (): BulkPlan => retry ?? planBulk(deps.tasks(), ids, draft);
+  const targets = (plan: BulkPlan): readonly string[] => retry ? ids : plan.closeIds.length ? plan.closeIds : plan.selectedIds;
+  const blockReason = (): string | null => {
+    if (deps.api() === null) return 'No project is open.';
+    if (!deps.complete()) return 'Task sources could not be fully loaded. Refresh before editing the group.';
+    try {
+      return targets(currentPlan()).some(id => deps.busy().has(id))
+        ? 'A selected task or sub-task is being changed. Wait for that save to finish.' : null;
+    } catch (e) {
+      return errorMessage(e);
+    }
+  };
+  const canApply = (): boolean => !saving && ids.length > 0 && (draft.state !== null || draft.type !== null) && blockReason() === null;
+
+  const clear = (): void => {
+    if (saving) return;
+    ids = [];
+    draft = emptyDraft();
+    retry = null;
+    failures = [];
+    progress = null;
+    notice = null;
+    deps.retain([]);
+    deps.replace([]);
+    deps.changed();
+  };
+
+  return {
+    model: () => {
+      let extraCloseCount = 0;
+      try {
+        const plan = currentPlan();
+        extraCloseCount = plan.closeIds.filter(id => !plan.selectedIds.includes(id)).length;
+      } catch { /* blockReason explains why the preview is unavailable */ }
+      return {
+        count: ids.length, draft: { ...draft }, canApply: canApply(), failures, locked: saving, progress, notice, blockReason: saving ? null : blockReason(),
+        hiddenCount: ids.filter(id => !deps.visible().includes(id)).length,
+        extraCloseCount,
+      };
+    },
+    selectionChanged: (next: readonly string[]): void => {
+      if (saving || (ids.length === next.length && ids.every((id, i) => id === next[i]))) return;
+      ids = [...next];
+      retry = null;
+      failures = [];
+      deps.retain([]);
+      if (ids.length === 0) draft = emptyDraft();
+      deps.changed();
+    },
+    setDraft: (change: Partial<BulkDraft>): void => {
+      if (saving) return;
+      draft = { ...draft, ...change };
+      retry = null;
+      failures = [];
+      deps.changed();
+    },
+    apply: async (): Promise<void> => {
+      const api = deps.api();
+      if (!canApply() || api === null) return;
+      const plan = currentPlan();
+      const targetIds = targets(plan);
+      saving = true;
+      notice = null;
+      progress = { completed: 0, total: targetIds.length };
+      deps.retain(ids);
+      deps.lock(true, targetIds);
+      deps.changed();
+      try {
+        const result = await runBulk(plan, api, value => { progress = value; deps.changed(); }, retry ? ids : undefined);
+        failures = result.failures;
+        if (failures.length) {
+          retry = plan;
+          ids = failures.map(f => f.id);
+          deps.retain(ids);
+          deps.replace(ids);
+        }
+        await deps.reload();
+        if (result.failures.length === 0) {
+          ids = [];
+          draft = emptyDraft();
+          retry = null;
+          deps.retain([]);
+          deps.replace([]);
+        }
+      } catch (e) {
+        notice = errorMessage(e);
+      } finally {
+        saving = false;
+        deps.lock(false, targetIds);
+        deps.changed();
+      }
+    },
+    clear,
+    reset: clear,
+  };
+};
+
+export type BulkToolbar = ReturnType<typeof createBulkToolbar>;
+export type BulkToolbarModel = ReturnType<BulkToolbar['model']>;
