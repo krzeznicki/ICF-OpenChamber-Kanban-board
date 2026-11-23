@@ -45,6 +45,8 @@ Every preset that runs skills tells the agent where the tracker is, never to run
 
 **Settings → Presets** shows one set at a time. You can edit any preset (**Reset** restores a built-in text), add your own presets to a set, and create your own sets with **New set**, either empty or as a copy of the shown set.
 
+![Settings → Presets with Matt Pocock's skills set](screenshots/presets.png)
+
 A preset text can use these placeholders, filled in when the session starts:
 
 | Placeholder | Becomes |

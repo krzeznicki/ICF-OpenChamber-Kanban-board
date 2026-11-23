@@ -2,6 +2,8 @@
 
 ⌘ is Ctrl outside macOS. Press `?` on the board to see the shortcuts currently in use; button tooltips show them too. The ⌘ shortcuts can be given other keys in **Settings → Global → Keyboard shortcuts**; the arrows, Enter, Esc and `?` are fixed. A new key must use ⌘ and must not be taken in the same Shortcut context. The contexts are the Board, an Open task and Add task, and the same key can do different things in each.
 
+![The shortcuts cheat sheet](screenshots/shortcuts.png)
+
 ## Board
 
 | Key | Action |

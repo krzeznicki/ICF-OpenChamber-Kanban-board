@@ -54,4 +54,8 @@ Each check needs the extension installed in OpenChamber. None has been done yet.
 
 ## Screenshots
 
-The images in [`docs/screenshots/`](screenshots/) show a demo project with made-up tasks. Retake them with the extension running when the UI changes: `board.png` (the board, in the README), `card-detail.png`, `settings.png`, `wizard.png` and `rail-icon.png`.
+The images in [`docs/screenshots/`](screenshots/) show a demo project with made-up tasks. Retake them with the extension running when the UI changes: `board.png` (the board, in the README), `card-detail.png`, `add-task.png`, `subtasks.png`, `search.png`, `shortcuts.png`, `settings.png`, `presets.png`, `wizard.png` and `rail-icon.png`.
+
+One way to retake them without showing your own projects: start headless Chrome with `--remote-debugging-port`, open OpenChamber's web UI with `prefers-color-scheme: dark` emulated at 1600×857, and capture only the Kanban page's iframe (1276×809), so the sidebar stays out of the image. Use a demo project with made-up tasks, and discard any form you fill in.
+
+Not shown yet: Settings → Sources and the source switcher (they need 0.5.0 installed and a project with a GitHub source), and cards in In Progress and Review (they need running agent sessions).

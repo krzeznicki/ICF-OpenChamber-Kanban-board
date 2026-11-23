@@ -51,6 +51,8 @@ Dropping a card onto the middle of another card makes it that card's sub-task, a
 
 **Add task** opens a form with the title, type, state, parent, the tasks it is blocked by, a Markdown description, the card's start options and a list of sub-tasks to create with it. You can also pick existing tasks to move under the new one. With several sources, a **Source** select chooses where the task goes.
 
+![The Add task form](screenshots/add-task.png)
+
 Locally a task without a parent is a feature (`spec.md`), and a task with a parent is a ticket in that feature. Blockers can only be tickets of the same feature. On GitHub any open issue can be a parent or a blocker.
 
 If some sub-tasks fail to be created, the form names them and the reason; the main task stays. Closing a form you have filled in asks **Discard this task?** first.
@@ -85,6 +87,8 @@ Changing a local ticket's parent moves its file, so the task gets a new id. Its 
 
 A parent is a task with sub-tasks. Its card shows progress (`2/5 sub-tasks done`), and sub-tasks are drawn indented under it when both are in the same column. **Hide sub-tasks** in the toolbar hides them.
 
+![A parent's sub-tasks in its modal, with Add sub-task open](screenshots/subtasks.png)
+
 Dragging a parent with sub-tasks to In Progress starts one orchestrator session with the **Break down and orchestrate** preset. The orchestrator claims each sub-task through the CLI and hands it to a subagent. While it runs, its sub-tasks show **led by orchestrator**, and dropping one of them on In Progress starts nothing. A parent without sub-tasks starts with its type's preset; choose Break down and orchestrate on the card to have it split into sub-tasks first.
 
 Moving a parent with open sub-tasks to Done asks whether to close them too.
@@ -104,6 +108,8 @@ The field also takes filters, with `:` or `=`:
 | `source:github` | the source (only with several sources) |
 
 A value matches from the start of any of its words. The same key twice means either (`type:bug type:research`); everything else must all match. A list under the field completes keys and values as you type. Escape clears the search.
+
+![Search completing the type: filter](screenshots/search.png)
 
 ## Archiving done tasks
 

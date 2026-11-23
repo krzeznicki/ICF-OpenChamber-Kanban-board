@@ -20,6 +20,13 @@ Also:
 - Opened beside a chat, the panel shows the task that chat is working on. `/kanban` in the composer opens it.
 - Settings, presets and summaries are stored per user in OpenChamber, never in the repository.
 
+<p>
+  <img src="docs/screenshots/card-detail.png" alt="The task modal" width="49%">
+  <img src="docs/screenshots/add-task.png" alt="The Add task form" width="49%">
+  <img src="docs/screenshots/search.png" alt="Search with filter completion" width="49%">
+  <img src="docs/screenshots/presets.png" alt="Preset settings for Matt Pocock's skills" width="49%">
+</p>
+
 ## Install
 
 The repository is private for now, so install from a local clone:
