@@ -18,6 +18,8 @@ import type { MarkHow } from '../marks.ts';
 const COLUMNS: readonly string[] = ['backlog', 'ready', 'in_progress', 'review', 'done'];
 
 export type DragCallbacks = {
+  /** No marking, opening or dragging while the bulk form owns the board. */
+  locked?: () => boolean;
   /** False while the card's last move is in flight: the press is ignored. */
   canDrag: (taskId: string) => boolean;
   /** What a drag of taskId carries: the Marked cards when it is one of them, else just it (../marks.ts dragGroup). */
@@ -170,6 +172,7 @@ export const attachDrag = (container: HTMLElement, callbacks: DragCallbacks): ((
   };
 
   const onDown = (e: PointerEvent): void => {
+    if (callbacks.locked?.()) return;
     const target = e.target instanceof Element ? e.target : null;
     const card = target?.closest<HTMLElement>('.kb-card') ?? null;
     const col = columnOf(card);
@@ -216,6 +219,7 @@ export const attachDrag = (container: HTMLElement, callbacks: DragCallbacks): ((
   };
 
   const onUp = (e: PointerEvent): void => {
+    if (callbacks.locked?.()) { feed({ type: 'abort' }); return; }
     const hit = press?.dragging === true ? document.elementFromPoint(e.clientX, e.clientY) : null;
     const to = columnOf(hit);
     const onto = press !== null && hit !== null ? (linkTarget(hit, press, e.clientY)?.dataset.taskId ?? null) : null;
@@ -232,6 +236,7 @@ export const attachDrag = (container: HTMLElement, callbacks: DragCallbacks): ((
   };
 
   const onKey = (e: KeyboardEvent): void => {
+    if (callbacks.locked?.()) return;
     if (e.key !== 'Enter' && e.key !== ' ') return;
     if (!(e.target instanceof HTMLElement) || !e.target.classList.contains('kb-card')) return;
     const id = e.target.dataset.taskId;

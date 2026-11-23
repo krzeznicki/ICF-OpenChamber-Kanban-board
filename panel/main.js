@@ -13620,6 +13620,7 @@ ${ref}`,
       return effect;
     };
     const onDown = (e) => {
+      if (callbacks.locked?.()) return;
       const target = e.target instanceof Element ? e.target : null;
       const card = target?.closest(".kb-card") ?? null;
       const col = columnOf(card);
@@ -13662,6 +13663,10 @@ ${ref}`,
       if (effect.kind === "start" || effect.kind === "follow") e.preventDefault();
     };
     const onUp = (e) => {
+      if (callbacks.locked?.()) {
+        feed({ type: "abort" });
+        return;
+      }
       const hit = press?.dragging === true ? document.elementFromPoint(e.clientX, e.clientY) : null;
       const to = columnOf(hit);
       const onto = press !== null && hit !== null ? linkTarget(hit, press, e.clientY)?.dataset.taskId ?? null : null;
@@ -13675,6 +13680,7 @@ ${ref}`,
       if (e.key === "Escape" && press !== null) feed({ type: "abort" });
     };
     const onKey = (e) => {
+      if (callbacks.locked?.()) return;
       if (e.key !== "Enter" && e.key !== " ") return;
       if (!(e.target instanceof HTMLElement) || !e.target.classList.contains("kb-card")) return;
       const id = e.target.dataset.taskId;
@@ -13971,11 +13977,13 @@ ${ref}`,
       }
     };
     const move = (id, from, to) => {
+      if (deps.blocked?.()) return;
       const task = find(id);
       if (task === null || moving.has(id) || from === to) return;
       void apply(task, from, planMove(task, from, to, openChildren(task, deps.tasks())));
     };
     const moveGroup = async (ids, to) => {
+      if (deps.blocked?.()) return;
       const cards = ids.flatMap((id) => {
         const task = find(id);
         const from = deps.columnOf(id);
@@ -14048,6 +14056,7 @@ ${ref}`,
       d?.handle.dispose();
     };
     const showDetail = (openId) => {
+      if (deps.blocked?.()) return;
       let id = openId;
       const task = find(id);
       if (task === null) return;
@@ -14196,6 +14205,7 @@ ${ref}`,
       };
     };
     const showAdd = () => {
+      if (deps.blocked?.()) return;
       if (addModal !== null) return;
       const tasks = deps.tasks();
       const types = taskTypes(tasks, deps.baseTypes()).filter((t) => t !== MODEL_PICK);
@@ -14217,6 +14227,7 @@ ${ref}`,
       );
     };
     const detachDrag = attachDrag(deps.board.columns, {
+      locked: () => deps.blocked?.() ?? false,
       canDrag: (id) => !moving.has(id),
       group: (id) => deps.marks.group(id, moving),
       onDrop: (id, from, to, group) => {
@@ -14242,6 +14253,12 @@ ${ref}`,
     return {
       /** Ids whose write is in flight; the board draws them busy. */
       busy: moving,
+      setBulkBusy: (ids, value) => {
+        for (const id of ids) {
+          if (value) moving.add(id);
+          else moving.delete(id);
+        }
+      },
       showAdd,
       /** Add task's Create task (Mod+Enter); false when no form is open or it is busy. */
       submitAddForm: () => addModal?.submit() ?? false,
@@ -15297,8 +15314,18 @@ ${listKey(projects)}`;
     const sessionNote = div3("kb-session-note");
     const sourceNotes = div3("kb-source-notes");
     const columns = div3("kb-columns");
-    shell.append(toolbar, status, sourceNotes, sessionNote, columns);
+    const bulkSlot = div3("kb-bulk");
+    bulkSlot.hidden = true;
+    shell.append(toolbar, status, sourceNotes, sessionNote, columns, bulkSlot);
     root.replaceChildren(shell);
+    let interactionLocked = false;
+    for (const event of ["click", "pointerdown", "keydown", "input", "change"]) {
+      shell.addEventListener(event, (e) => {
+        if (!interactionLocked || e.target instanceof Node && bulkSlot.contains(e.target)) return;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+      }, true);
+    }
     const project2 = mountSelect(projectSlot, {
       value: null,
       options: [],
@@ -15418,6 +15445,13 @@ ${listKey(projects)}`;
     return {
       /** The persistent container the cards are drawn in; drag listeners live here. */
       columns,
+      bulkSlot,
+      /** The save's footer stays usable; every other control/card is temporarily inert. */
+      setInteractionLocked: (locked) => {
+        interactionLocked = locked;
+        for (const node of [toolbar, status, sourceNotes, sessionNote, columns]) node.inert = locked;
+        shell.setAttribute("aria-busy", String(locked));
+      },
       /** "Add task" works only while a board is shown. */
       setCanAdd: (enabled) => add2.update({ disabled: !enabled }),
       /** The "Hide sub-tasks" switch follows the project's settings when they load. */
@@ -15660,8 +15694,12 @@ ${listKey(projects)}`;
     const range = i === -1 || j === -1 ? [id] : flat.slice(Math.min(i, j), Math.max(i, j) + 1);
     return { ids: inOrder(layout, /* @__PURE__ */ new Set([...marks.base, ...range])), anchor, base: marks.base };
   };
-  var keepMarks = (marks, layout) => {
-    const flat = new Set(order(layout));
+  var allMarks = (layout) => {
+    const ids = order(layout);
+    return { ids, anchor: null, base: ids };
+  };
+  var keepMarks = (marks, layout, retained = []) => {
+    const flat = /* @__PURE__ */ new Set([...order(layout), ...retained]);
     const ids = marks.ids.filter((id) => flat.has(id));
     const base2 = marks.base.filter((id) => flat.has(id));
     const anchor = marks.anchor !== null && flat.has(marks.anchor) ? marks.anchor : null;
@@ -15671,19 +15709,63 @@ ${listKey(projects)}`;
     if (!marks.ids.includes(pressed)) return [pressed];
     return inOrder(layout, new Set(marks.ids.filter((id) => id === pressed || !busy.has(id))));
   };
+  var createMarks = (changed) => {
+    let marks = NO_MARKS;
+    let layout = [];
+    let retained = [];
+    let locked = false;
+    const update = (next) => {
+      const previous = marks.ids;
+      marks = next;
+      if (previous.length !== next.ids.length || previous.some((id, i) => id !== next.ids[i])) changed(next.ids);
+    };
+    return {
+      get: () => marks,
+      set: (ids) => {
+        const unique2 = [...new Set(ids)];
+        update({ ids: unique2, anchor: null, base: unique2 });
+      },
+      mark: (id, how, fallback = null) => {
+        if (!locked) update(clickMarks(marks, layout, id, how, fallback));
+      },
+      clear: () => {
+        if (!locked) {
+          retained = [];
+          update(NO_MARKS);
+        }
+      },
+      selectAll: () => {
+        if (!locked) update(allMarks(layout));
+      },
+      retain: (ids) => {
+        retained = [...ids];
+      },
+      setLocked: (value) => {
+        locked = value;
+      },
+      rendered: (next) => {
+        layout = next;
+        update(keepMarks(marks, layout, retained));
+      },
+      group: (id, busy) => locked ? [] : dragGroup(marks, layout, id, busy)
+    };
+  };
 
   // src/panel/ui/selection.ts
   var createSelection = (container, options) => {
     let selected = null;
     let layout = [];
     let refocus = false;
-    let marks = NO_MARKS;
+    const marks = createMarks((ids) => {
+      paint2();
+      options.onMarksChanged?.(ids);
+    });
     const cardOf = (id) => container.querySelector(`.kb-card[data-task-id="${CSS.escape(id)}"]`);
     const paint2 = () => {
       for (const el7 of container.querySelectorAll(".kb-card.is-selected")) el7.classList.remove("is-selected");
       if (selected !== null) cardOf(selected.id)?.classList.add("is-selected");
       for (const el7 of container.querySelectorAll(".kb-card.is-marked")) el7.classList.remove("is-marked");
-      for (const id of marks.ids) cardOf(id)?.classList.add("is-marked");
+      for (const id of marks.get().ids) cardOf(id)?.classList.add("is-marked");
     };
     const focus = (scroll) => {
       if (selected === null || !options.canFocus()) return;
@@ -15727,25 +15809,277 @@ ${listKey(projects)}`;
       rendered: (next) => {
         layout = next;
         selected = keepSelected(layout, selected);
-        marks = keepMarks(marks, layout);
+        marks.rendered(layout);
         paint2();
         if (refocus) focus(false);
         refocus = false;
       },
       focusOnBoard,
-      marked: () => marks.ids,
+      marked: () => marks.get().ids,
       mark: (id, how) => {
-        marks = clickMarks(marks, layout, id, how, selected?.id ?? null);
+        marks.mark(id, how, selected?.id ?? null);
         selected = locate(layout, id) ?? selected;
         paint2();
       },
-      clearMarks: () => {
-        if (marks === NO_MARKS) return;
-        marks = NO_MARKS;
-        paint2();
-      },
-      group: (id, busy) => dragGroup(marks, layout, id, busy),
+      clearMarks: marks.clear,
+      setMarked: marks.set,
+      selectAll: marks.selectAll,
+      retain: marks.retain,
+      setLocked: marks.setLocked,
+      group: marks.group,
       dispose: () => container.removeEventListener("focusin", onFocusIn)
+    };
+  };
+
+  // src/panel/bulkEdit.ts
+  var planBulk = (tasks, ids, draft) => {
+    const selectedIds = [...new Set(ids)];
+    const known = new Set(tasks.map((t) => t.id));
+    for (const id of selectedIds) if (!known.has(id)) throw new Error(`Task not found: ${id}`);
+    const children = /* @__PURE__ */ new Map();
+    for (const task of tasks) {
+      if (task.parentId !== null) children.set(task.parentId, [...children.get(task.parentId) ?? [], task.id]);
+    }
+    const closeIds = [];
+    const visited = /* @__PURE__ */ new Set();
+    const visiting = /* @__PURE__ */ new Set();
+    const visit = (id) => {
+      if (visiting.has(id)) throw new Error("Cycle in sub-task hierarchy.");
+      if (visited.has(id)) return;
+      visiting.add(id);
+      for (const child of children.get(id) ?? []) visit(child);
+      visiting.delete(id);
+      visited.add(id);
+      closeIds.push(id);
+    };
+    if (draft.state === "done" && draft.withChildren) for (const id of selectedIds) visit(id);
+    return { selectedIds, typeIds: draft.type === null ? [] : selectedIds, closeIds, children, draft: { ...draft } };
+  };
+  var runBulk = async (plan, api, progress, retryIds) => {
+    const succeeded = [];
+    const failures = [];
+    const ids = (plan.closeIds.length ? plan.closeIds : plan.selectedIds).filter((id) => retryIds === void 0 || retryIds.includes(id));
+    for (const id of ids) {
+      let field2 = "read";
+      try {
+        const task = await api.get(id);
+        field2 = "type";
+        if (plan.typeIds.includes(id) && plan.draft.type !== null && task.type !== plan.draft.type) await api.setType(id, plan.draft.type);
+        field2 = "state";
+        if (plan.closeIds.length && (plan.children.get(id) ?? []).some((child) => failures.some((f) => f.id === child))) {
+          throw new Error("A sub-task could not be closed. Retry its closure before closing this task.");
+        }
+        if (plan.draft.state !== null && task.state !== plan.draft.state) await api.setState(id, plan.draft.state);
+        succeeded.push(id);
+      } catch (e) {
+        failures.push({ id, field: field2, message: errorMessage(e) });
+      }
+      progress({ completed: succeeded.length + failures.length, total: ids.length });
+    }
+    return { succeeded, failures };
+  };
+
+  // src/panel/bulkToolbar.ts
+  var emptyDraft2 = () => ({ state: null, type: null, withChildren: true });
+  var createBulkToolbar = (deps) => {
+    let ids = [];
+    let draft = emptyDraft2();
+    let saving = false;
+    let retry = null;
+    let failures = [];
+    let progress = null;
+    let notice = null;
+    const currentPlan = () => retry ?? planBulk(deps.tasks(), ids, draft);
+    const targets = (plan) => retry ? ids : plan.closeIds.length ? plan.closeIds : plan.selectedIds;
+    const blockReason = () => {
+      if (deps.api() === null) return "No project is open.";
+      if (!deps.complete()) return "Task sources could not be fully loaded. Refresh before editing the group.";
+      try {
+        return targets(currentPlan()).some((id) => deps.busy().has(id)) ? "A selected task or sub-task is being changed. Wait for that save to finish." : null;
+      } catch (e) {
+        return errorMessage(e);
+      }
+    };
+    const canApply = () => !saving && ids.length > 0 && (draft.state !== null || draft.type !== null) && blockReason() === null;
+    const clear = () => {
+      if (saving) return;
+      ids = [];
+      draft = emptyDraft2();
+      retry = null;
+      failures = [];
+      progress = null;
+      notice = null;
+      deps.retain([]);
+      deps.replace([]);
+      deps.changed();
+    };
+    return {
+      model: () => {
+        let extraCloseCount = 0;
+        try {
+          const plan = currentPlan();
+          extraCloseCount = plan.closeIds.filter((id) => !plan.selectedIds.includes(id)).length;
+        } catch {
+        }
+        return {
+          count: ids.length,
+          draft: { ...draft },
+          canApply: canApply(),
+          failures,
+          locked: saving,
+          progress,
+          notice,
+          blockReason: saving ? null : blockReason(),
+          hiddenCount: ids.filter((id) => !deps.visible().includes(id)).length,
+          extraCloseCount
+        };
+      },
+      selectionChanged: (next) => {
+        if (saving || ids.length === next.length && ids.every((id, i) => id === next[i])) return;
+        ids = [...next];
+        retry = null;
+        failures = [];
+        deps.retain([]);
+        if (ids.length === 0) draft = emptyDraft2();
+        deps.changed();
+      },
+      setDraft: (change) => {
+        if (saving) return;
+        draft = { ...draft, ...change };
+        retry = null;
+        failures = [];
+        deps.changed();
+      },
+      apply: async () => {
+        const api = deps.api();
+        if (!canApply() || api === null) return;
+        const plan = currentPlan();
+        const targetIds = targets(plan);
+        saving = true;
+        notice = null;
+        progress = { completed: 0, total: targetIds.length };
+        deps.retain(ids);
+        deps.lock(true, targetIds);
+        deps.changed();
+        try {
+          const result = await runBulk(plan, api, (value) => {
+            progress = value;
+            deps.changed();
+          }, retry ? ids : void 0);
+          failures = result.failures;
+          if (failures.length) {
+            retry = plan;
+            ids = failures.map((f) => f.id);
+            deps.retain(ids);
+            deps.replace(ids);
+          }
+          await deps.reload();
+          if (result.failures.length === 0) {
+            ids = [];
+            draft = emptyDraft2();
+            retry = null;
+            deps.retain([]);
+            deps.replace([]);
+          }
+        } catch (e) {
+          notice = errorMessage(e);
+        } finally {
+          saving = false;
+          deps.lock(false, targetIds);
+          deps.changed();
+        }
+      },
+      clear,
+      reset: clear
+    };
+  };
+
+  // src/panel/ui/bulkToolbar.ts
+  var mountBulkToolbar = (root, callbacks) => {
+    root.classList.add("kb-bulk");
+    root.hidden = true;
+    root.setAttribute("role", "region");
+    root.setAttribute("aria-label", "Edit marked tasks");
+    const slot = (className, parent = root) => {
+      const node = document.createElement("div");
+      node.className = className;
+      parent.append(node);
+      return node;
+    };
+    const head = slot("kb-bulk-head");
+    const count = slot("kb-bulk-count", head);
+    count.setAttribute("aria-live", "polite");
+    const all = mountButton(slot("", head), { label: "Select all", variant: "outline", size: "sm", onClick: callbacks.onSelectAll });
+    const clear = mountButton(slot("", head), { label: "Clear", variant: "outline", size: "sm", onClick: callbacks.onClear });
+    const fields = slot("kb-bulk-fields");
+    const stateSlot = slot("kb-bulk-field", fields);
+    stateSlot.dataset.bulkField = "state";
+    const typeSlot = slot("kb-bulk-field", fields);
+    typeSlot.dataset.bulkField = "type";
+    const state2 = mountSelect(stateSlot, {
+      label: "State",
+      value: "",
+      options: [{ id: "", label: "No change" }, ...TASK_STATES.map((id) => ({ id, label: id }))],
+      onChange: (id) => callbacks.onDraft({ state: id === "" ? null : id })
+    });
+    const type = mountSelect(typeSlot, {
+      label: "Type",
+      value: "",
+      options: [{ id: "", label: "No change" }],
+      onChange: (id) => callbacks.onDraft({ type: id || null })
+    });
+    const apply = mountButton(slot("kb-bulk-apply", fields), { label: "Apply", size: "sm", disabled: true, onClick: callbacks.onApply });
+    const childrenSlot = slot("kb-bulk-children");
+    const children = mountSwitch(childrenSlot, {
+      label: "Close sub-tasks",
+      checked: true,
+      onChange: (checked) => callbacks.onDraft({ withChildren: checked })
+    });
+    const extra = slot("kb-muted", childrenSlot);
+    const status = slot("kb-bulk-status");
+    status.setAttribute("role", "status");
+    const errors2 = slot("kb-bulk-errors");
+    errors2.setAttribute("aria-live", "polite");
+    let previousState = "";
+    let previousType = "";
+    let previousErrors = "";
+    return {
+      update: (model, types) => {
+        root.hidden = model.count === 0;
+        count.textContent = `${model.count} marked${model.hiddenCount ? ` (${model.hiddenCount} hidden by filters)` : ""}`;
+        all.update({ disabled: model.locked });
+        clear.update({ disabled: model.locked });
+        apply.update({ disabled: !model.canApply, label: model.locked ? "Saving\u2026" : "Apply" });
+        const stateKey = JSON.stringify([model.draft.state, model.locked]);
+        if (stateKey !== previousState) {
+          previousState = stateKey;
+          state2.update({ value: model.draft.state ?? "", disabled: model.locked });
+        }
+        const options = [.../* @__PURE__ */ new Set([...types, ...model.draft.type ? [model.draft.type] : []])];
+        const typeKey = JSON.stringify([options, model.draft.type, model.locked]);
+        if (typeKey !== previousType) {
+          previousType = typeKey;
+          type.update({ value: model.draft.type ?? "", disabled: model.locked, options: [{ id: "", label: "No change" }, ...options.map((id) => ({ id, label: id }))] });
+        }
+        childrenSlot.hidden = model.draft.state !== "done";
+        children.update({ checked: model.draft.withChildren, disabled: model.locked });
+        extra.textContent = model.draft.withChildren ? `${model.extraCloseCount} additional sub-task${model.extraCloseCount === 1 ? "" : "s"} to close` : "Only marked tasks will be closed";
+        status.textContent = model.locked && model.progress ? `Saving ${model.progress.completed} of ${model.progress.total} tasks\u2026` : model.notice ?? model.blockReason ?? "";
+        const errorText2 = model.failures.map((f) => `${f.id} \u2014 ${f.field}: ${f.message}`).join("\n");
+        if (errorText2 !== previousErrors) {
+          previousErrors = errorText2;
+          errors2.textContent = errorText2;
+        }
+      },
+      dispose: () => {
+        all.dispose();
+        clear.dispose();
+        state2.dispose();
+        type.dispose();
+        apply.dispose();
+        children.dispose();
+        root.replaceChildren();
+      }
     };
   };
 
@@ -15755,6 +16089,19 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
 * { box-sizing: border-box; }
 .kb { display: flex; flex-direction: column; gap: 0.75rem; padding: 0.75rem; min-height: 100vh; }
 .kb-toolbar { display: flex; flex-direction: column; gap: 0.5rem; }
+.kb:has(> .kb-bulk:not([hidden])) { height: 100dvh; min-height: 0; }
+.kb:has(> .kb-bulk:not([hidden])) > .kb-columns { flex: 1 1 0; min-height: 0; overflow: auto; }
+.kb-bulk { flex: 0 0 auto; display: flex; flex-direction: column; gap: 0.5rem; padding-top: 0.75rem;
+  border-top: 1px solid var(--oc-border); background: var(--oc-bg); }
+.kb-bulk[hidden], .kb-bulk-children[hidden] { display: none; }
+.kb-bulk-head, .kb-bulk-fields, .kb-bulk-children { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
+.kb-bulk-count { flex: 1 1 auto; font-size: 0.85em; font-variant-numeric: tabular-nums; }
+.kb-bulk-field { flex: 1 1 9rem; min-width: 0; }
+.kb-bulk-apply { align-self: flex-end; padding-bottom: 0.125rem; }
+.kb-bulk-status { font-size: 0.85em; color: var(--oc-muted); overflow-wrap: anywhere; }
+.kb-bulk-errors { max-height: 5rem; overflow-y: auto; white-space: pre-wrap; overflow-wrap: anywhere;
+  font-size: 0.8em; color: var(--oc-error-text, var(--oc-fg)); }
+.kb-bulk-status:empty, .kb-bulk-errors:empty { display: none; }
 .kb-toolbar-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 0.75rem; }
 .kb-project { flex: 1 1 12rem; min-width: 10rem; max-width: 28rem; }
 .kb-source { flex: 0 0 auto; }
@@ -16134,6 +16481,12 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
   var board;
   var editor;
   var selection2;
+  var bulk = null;
+  var bulkUi = null;
+  var bulkLocked = false;
+  var paintBulk = () => {
+    if (bulk !== null) bulkUi?.update(bulk.model(), boardTypes());
+  };
   var shortcuts;
   var unsubscribeSessions = null;
   var generation = 0;
@@ -16312,6 +16665,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
       (task) => sourceBadge(task, view, sources)
     );
     selection2.rendered(layoutOf(shown));
+    paintBulk();
     auditLinks();
     focusSession();
     const emptyKind = view === "all" ? primary2 : view;
@@ -16479,7 +16833,9 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     if (state.view !== "wizard") void load();
   };
   var selectProject = async (id) => {
+    if (bulkLocked) return;
     if (id === state.projectId) return;
+    bulk?.reset();
     state.projectId = id;
     editor.reset();
     selection2.set(null);
@@ -16903,6 +17259,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     installOpenTaskShortcuts(shortcuts);
     installToolbarShortcuts(shortcuts);
     installCheatSheet(shortcuts);
+    shortcuts.addLayer(() => bulkLocked ? "none" : null, { front: true });
     applyKeymap();
   };
   var installOpenTaskShortcuts = (shortcuts2) => {
@@ -16934,7 +17291,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     shortcuts2.on("board.settings", () => showSettings());
     shortcuts2.on("board.search", () => board.focusSearch());
     shortcuts2.on("board.refresh", () => {
-      if (!board.busy()) void load();
+      if (!bulkLocked && !board.busy()) void load();
     });
     shortcuts2.reserve("board.refresh");
   };
@@ -16969,6 +17326,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     }
     board = createBoard(root, {
       onProject: (id) => {
+        if (bulkLocked) return;
         state.pinned = true;
         rememberProject(id);
         void selectProject(id);
@@ -17003,10 +17361,14 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
       },
       onClearArchive: () => void clearArchive()
     });
-    selection2 = createSelection(board.columns, { canFocus: () => shortcuts.context() === "board" });
+    selection2 = createSelection(board.columns, {
+      canFocus: () => !bulkLocked && shortcuts.context() === "board",
+      onMarksChanged: (ids) => bulk?.selectionChanged(ids)
+    });
     editor = createEditor({
       host,
       board,
+      blocked: () => bulkLocked,
       api: () => {
         const p = project();
         return p === null || state.view !== "board" ? null : createApi(host, p.directory);
@@ -17076,6 +17438,37 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
       // Global only; off until the global layer is read.
       suggest: { enabled: () => suggestEnabled(globalLoaded, state.globalSettings), suggester }
     });
+    bulkUi = mountBulkToolbar(board.bulkSlot, {
+      onDraft: (change) => bulk?.setDraft(change),
+      onApply: () => void bulk?.apply(),
+      onClear: () => bulk?.clear(),
+      onSelectAll: () => selection2.selectAll()
+    });
+    bulk = createBulkToolbar({
+      api: () => {
+        const p = project();
+        return p === null || state.view !== "board" ? null : createApi(host, p.directory);
+      },
+      tasks: () => state.tasks ?? [],
+      visible: () => selection2.layout().flat(),
+      busy: () => editor.busy,
+      complete: () => state.tasks !== null && state.sourceErrors.length === 0,
+      changed: paintBulk,
+      replace: selection2.setMarked,
+      retain: selection2.retain,
+      lock: (locked, ids) => {
+        bulkLocked = locked;
+        selection2.setLocked(locked);
+        board.setInteractionLocked(locked);
+        editor.setBulkBusy(ids, locked);
+        draw();
+      },
+      reload: async () => {
+        await load();
+        if (state.view !== "board") throw new Error("Changes were saved, but the board could not reload. Refresh to retry loading.");
+      }
+    });
+    paintBulk();
     installShortcuts();
     if (ctx.features?.lateGenerateResults === true) host.onLateGenerateResult((late) => void summaries.acceptLate(late));
     void loadGlobalSettings();

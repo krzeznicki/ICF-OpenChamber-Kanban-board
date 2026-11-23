@@ -60,6 +60,8 @@ import { openCheatSheet } from './ui/cheatSheet.ts';
 import { firstSelected, layoutOf, locate } from './navigation.ts';
 import { columnNeighbour } from './openTask.ts';
 import { createSelection, type Selection } from './ui/selection.ts';
+import { createBulkToolbar, type BulkToolbar } from './bulkToolbar.ts';
+import { mountBulkToolbar } from './ui/bulkToolbar.ts';
 import { setHintKeymap } from './ui/shortcutHints.ts';
 import { openSettings } from './ui/settingsView.ts';
 import { injectStyles } from './ui/styles.ts';
@@ -244,6 +246,12 @@ let editor: Editor;
  * drawn layout navigation.ts steps through (also for Mod+↑/↓ in an Open task).
  */
 let selection: Selection;
+let bulk: BulkToolbar | null = null;
+let bulkUi: ReturnType<typeof mountBulkToolbar> | null = null;
+let bulkLocked = false;
+const paintBulk = (): void => {
+  if (bulk !== null) bulkUi?.update(bulk.model(), boardTypes());
+};
 let shortcuts: Shortcuts;
 let unsubscribeSessions: (() => void) | null = null;
 /** Bumped on every load and project switch; a stale answer is dropped. */
@@ -445,6 +453,7 @@ const draw = (): void => {
     (task) => sourceBadge(task, view, sources),
   );
   selection.rendered(layoutOf(shown));
+  paintBulk();
   auditLinks();
   focusSession();
   // The empty board speaks of the source it shows (in All: the primary one).
@@ -643,7 +652,9 @@ const backgroundLoad = (): void => {
 };
 
 const selectProject = async (id: string | null): Promise<void> => {
+  if (bulkLocked) return;
   if (id === state.projectId) return;
+  bulk?.reset();
   state.projectId = id;
   editor.reset();
   selection.set(null);
@@ -1216,6 +1227,7 @@ const installShortcuts = (): void => {
   installOpenTaskShortcuts(shortcuts);
   installToolbarShortcuts(shortcuts);
   installCheatSheet(shortcuts);
+  shortcuts.addLayer(() => bulkLocked ? 'none' : null, { front: true });
   applyKeymap();
 };
 
@@ -1260,7 +1272,7 @@ const installToolbarShortcuts = (shortcuts: Shortcuts): void => {
   shortcuts.on('board.settings', () => showSettings());
   shortcuts.on('board.search', () => board.focusSearch());
   shortcuts.on('board.refresh', () => {
-    if (!board.busy()) void load();
+    if (!bulkLocked && !board.busy()) void load();
   });
   shortcuts.reserve('board.refresh');
 };
@@ -1303,6 +1315,7 @@ const start = (ctx: HostReadyContext): void => {
   }
   board = createBoard(root, {
     onProject: (id) => {
+      if (bulkLocked) return;
       state.pinned = true;
       rememberProject(id);
       void selectProject(id);
@@ -1338,10 +1351,14 @@ const start = (ctx: HostReadyContext): void => {
     onClearArchive: () => void clearArchive(),
   });
   // Focus returns to the Selected card after a redraw only on the Board itself, never under a dialog.
-  selection = createSelection(board.columns, { canFocus: () => shortcuts.context() === 'board' });
+  selection = createSelection(board.columns, {
+    canFocus: () => !bulkLocked && shortcuts.context() === 'board',
+    onMarksChanged: ids => bulk?.selectionChanged(ids),
+  });
   editor = createEditor({
     host,
     board,
+    blocked: () => bulkLocked,
     api: () => {
       const p = project();
       return p === null || state.view !== 'board' ? null : createApi(host, p.directory);
@@ -1412,6 +1429,37 @@ const start = (ctx: HostReadyContext): void => {
     // Global only; off until the global layer is read.
     suggest: { enabled: () => suggestEnabled(globalLoaded, state.globalSettings), suggester },
   });
+  bulkUi = mountBulkToolbar(board.bulkSlot, {
+    onDraft: change => bulk?.setDraft(change),
+    onApply: () => void bulk?.apply(),
+    onClear: () => bulk?.clear(),
+    onSelectAll: () => selection.selectAll(),
+  });
+  bulk = createBulkToolbar({
+    api: () => {
+      const p = project();
+      return p === null || state.view !== 'board' ? null : createApi(host, p.directory);
+    },
+    tasks: () => state.tasks ?? [],
+    visible: () => selection.layout().flat(),
+    busy: () => editor.busy,
+    complete: () => state.tasks !== null && state.sourceErrors.length === 0,
+    changed: paintBulk,
+    replace: selection.setMarked,
+    retain: selection.retain,
+    lock: (locked, ids) => {
+      bulkLocked = locked;
+      selection.setLocked(locked);
+      board.setInteractionLocked(locked);
+      editor.setBulkBusy(ids, locked);
+      draw();
+    },
+    reload: async () => {
+      await load();
+      if (state.view !== 'board') throw new Error('Changes were saved, but the board could not reload. Refresh to retry loading.');
+    },
+  });
+  paintBulk();
   installShortcuts();
   // Answers the model gave after an earlier frame of this panel was gone are kept by the host. Only
   // summaries are taken back; a late type/state suggestion is dropped (summaries.acceptLate ignores

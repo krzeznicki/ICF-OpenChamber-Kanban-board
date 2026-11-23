@@ -23,6 +23,7 @@
     "test/**/*.ts"
   ],
   "exclude": [
-    "src/panel/**"
+    "src/panel/**",
+    "test/browser/**"
   ]
 }

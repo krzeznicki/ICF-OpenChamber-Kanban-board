@@ -39,6 +39,8 @@ import { editChanges, editConflict, editableText, type EditText } from './taskEd
 export type EditorDeps = {
   host: HostClient;
   board: Board;
+  /** A bulk save temporarily owns the board's write controls. */
+  blocked?: () => boolean;
   /** Null when no board is shown (no project, wizard, notice). */
   api: () => Api | null;
   tasks: () => Task[];
@@ -432,6 +434,7 @@ export const createEditor = (deps: EditorDeps) => {
   };
 
   const move = (id: string, from: Column, to: Column): void => {
+    if (deps.blocked?.()) return;
     const task = find(id);
     // Dropping back on its own column is not a move; say nothing.
     if (task === null || moving.has(id) || from === to) return;
@@ -443,6 +446,7 @@ export const createEditor = (deps: EditorDeps) => {
    * one after another, so their questions come one at a time and starts respect the agent limit.
    */
   const moveGroup = async (ids: readonly string[], to: Column): Promise<void> => {
+    if (deps.blocked?.()) return;
     const cards = ids.flatMap((id) => {
       const task = find(id);
       const from = deps.columnOf(id);
@@ -528,6 +532,7 @@ export const createEditor = (deps: EditorDeps) => {
   };
 
   const showDetail = (openId: string): void => {
+    if (deps.blocked?.()) return;
     let id = openId;
     const task = find(id);
     if (task === null) return;
@@ -690,6 +695,7 @@ export const createEditor = (deps: EditorDeps) => {
   };
 
   const showAdd = (): void => {
+    if (deps.blocked?.()) return;
     if (addModal !== null) return;
     const tasks = deps.tasks();
     const types = taskTypes(tasks, deps.baseTypes()).filter((t) => t !== MODEL_PICK);
@@ -712,6 +718,7 @@ export const createEditor = (deps: EditorDeps) => {
   };
 
   const detachDrag = attachDrag(deps.board.columns, {
+    locked: () => deps.blocked?.() ?? false,
     canDrag: (id) => !moving.has(id),
     group: (id) => deps.marks.group(id, moving),
     onDrop: (id, from, to, group) => {
@@ -739,6 +746,12 @@ export const createEditor = (deps: EditorDeps) => {
   return {
     /** Ids whose write is in flight; the board draws them busy. */
     busy: moving as ReadonlySet<string>,
+    setBulkBusy: (ids: readonly string[], value: boolean): void => {
+      for (const id of ids) {
+        if (value) moving.add(id);
+        else moving.delete(id);
+      }
+    },
     showAdd,
     /** Add task's Create task (Mod+Enter); false when no form is open or it is busy. */
     submitAddForm: (): boolean => addModal?.submit() ?? false,

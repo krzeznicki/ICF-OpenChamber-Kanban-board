@@ -6,6 +6,19 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
 * { box-sizing: border-box; }
 .kb { display: flex; flex-direction: column; gap: 0.75rem; padding: 0.75rem; min-height: 100vh; }
 .kb-toolbar { display: flex; flex-direction: column; gap: 0.5rem; }
+.kb:has(> .kb-bulk:not([hidden])) { height: 100dvh; min-height: 0; }
+.kb:has(> .kb-bulk:not([hidden])) > .kb-columns { flex: 1 1 0; min-height: 0; overflow: auto; }
+.kb-bulk { flex: 0 0 auto; display: flex; flex-direction: column; gap: 0.5rem; padding-top: 0.75rem;
+  border-top: 1px solid var(--oc-border); background: var(--oc-bg); }
+.kb-bulk[hidden], .kb-bulk-children[hidden] { display: none; }
+.kb-bulk-head, .kb-bulk-fields, .kb-bulk-children { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
+.kb-bulk-count { flex: 1 1 auto; font-size: 0.85em; font-variant-numeric: tabular-nums; }
+.kb-bulk-field { flex: 1 1 9rem; min-width: 0; }
+.kb-bulk-apply { align-self: flex-end; padding-bottom: 0.125rem; }
+.kb-bulk-status { font-size: 0.85em; color: var(--oc-muted); overflow-wrap: anywhere; }
+.kb-bulk-errors { max-height: 5rem; overflow-y: auto; white-space: pre-wrap; overflow-wrap: anywhere;
+  font-size: 0.8em; color: var(--oc-error-text, var(--oc-fg)); }
+.kb-bulk-status:empty, .kb-bulk-errors:empty { display: none; }
 .kb-toolbar-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 0.75rem; }
 .kb-project { flex: 1 1 12rem; min-width: 10rem; max-width: 28rem; }
 .kb-source { flex: 0 0 auto; }
