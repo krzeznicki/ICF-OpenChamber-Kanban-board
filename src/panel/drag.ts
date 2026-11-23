@@ -7,14 +7,19 @@
 // context menu and swallows it), a lost capture or a context menu would otherwise leave the press
 // armed, and later plain mouse movement plus the next click would drop the card somewhere.
 import type { Column } from './columns.ts';
+import type { MarkHow } from './marks.ts';
 
 export const THRESHOLD = 6;
 
-export type Press = { pointerId: number; taskId: string; from: Column; x: number; y: number; dragging: boolean };
+/**
+ * mark: the press was a Mod- or Shift-click (marks.ts), so a click marks the card instead of opening it.
+ * group: the Marked cards a drag carries (marks.ts dragGroup), when more than this one.
+ */
+export type Press = { pointerId: number; taskId: string; from: Column; x: number; y: number; dragging: boolean; mark?: MarkHow; group?: readonly string[] };
 
 export type DragInput =
-  /** taskId null: the press was not on a draggable card. */
-  | { type: 'down'; pointerId: number; button: number; taskId: string | null; from: Column; x: number; y: number }
+  /** taskId null: the press was not on a draggable card. mark: Mod or Shift held; group: what a drag carries (marks.ts dragGroup). */
+  | { type: 'down'; pointerId: number; button: number; taskId: string | null; from: Column; x: number; y: number; mark?: MarkHow; group?: readonly string[] }
   /** buttons: PointerEvent.buttons; canDrag: false while the card's move is in flight. */
   | { type: 'move'; pointerId: number; x: number; y: number; buttons: number; canDrag: boolean }
   /**
@@ -34,7 +39,10 @@ export type DragEffect =
   /** Remove the ghost and highlight; no move. */
   | { kind: 'cancel' }
   | { kind: 'open'; taskId: string }
-  | { kind: 'drop'; taskId: string; from: Column; to: Column }
+  /** A Mod- or Shift-click: toggle the card's mark, or mark the range up to it (marks.ts clickMarks). */
+  | { kind: 'mark'; taskId: string; how: MarkHow }
+  /** group: a drag of several Marked cards (taskId among them), each moved to `to` from its own column. */
+  | { kind: 'drop'; taskId: string; from: Column; to: Column; group?: readonly string[] }
   /** Released over an accepting card: make taskId a sub-task of parentId. */
   | { kind: 'link'; taskId: string; parentId: string }
   /** Released in its own column: put taskId before `before` (null: last) in the manual order (order.ts). */
@@ -52,7 +60,16 @@ export const step = (press: Press | null, input: DragInput): DragStep => {
       // Any earlier press is stale: its pointerup never reached us.
       const stale = end(press);
       if (input.button !== 0 || input.taskId === null) return stale;
-      const next: Press = { pointerId: input.pointerId, taskId: input.taskId, from: input.from, x: input.x, y: input.y, dragging: false };
+      const next: Press = {
+        pointerId: input.pointerId,
+        taskId: input.taskId,
+        from: input.from,
+        x: input.x,
+        y: input.y,
+        dragging: false,
+        ...(input.mark !== undefined ? { mark: input.mark } : {}),
+        ...(input.group !== undefined && input.group.length > 1 ? { group: input.group } : {}),
+      };
       return { press: next, effect: stale.effect };
     }
     case 'move': {
@@ -65,7 +82,15 @@ export const step = (press: Press | null, input: DragInput): DragStep => {
     }
     case 'up': {
       if (press === null || input.pointerId !== press.pointerId) return { press, effect: NONE };
-      if (!press.dragging) return { press: null, effect: { kind: 'open', taskId: press.taskId } };
+      if (!press.dragging) {
+        const effect: DragEffect = press.mark !== undefined ? { kind: 'mark', taskId: press.taskId, how: press.mark } : { kind: 'open', taskId: press.taskId };
+        return { press: null, effect };
+      }
+      // A group only moves between columns: no link under a card, no place in a column.
+      if (press.group !== undefined) {
+        if (input.to === null) return end(press);
+        return { press: null, effect: { kind: 'drop', taskId: press.taskId, from: press.from, to: input.to, group: press.group } };
+      }
       const onto = input.onto ?? null;
       if (onto !== null && onto !== press.taskId) return { press: null, effect: { kind: 'link', taskId: press.taskId, parentId: onto } };
       if (input.to === null) return end(press);

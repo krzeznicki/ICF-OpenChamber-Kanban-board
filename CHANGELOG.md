@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Marked cards**: Cmd+click (Ctrl+click elsewhere) marks a card, Shift+click marks a range across columns, as in a file list. Dragging a marked card moves every marked card to the column (a count on the dragged card); Mod+Shift+←/→ moves them too. Refusals are said once, close and start questions come one at a time, starts respect the agent limit. A plain click, a click on the background or Escape clears the marks (`marks.ts`, `GLOSSARY.md`).
+
 ## 0.5.0
 
 - **Several sources per project** (local `.scratch/` files and GitHub Issues at once), one of them the **Primary source** (ADR 0001, `GLOSSARY.md`). `docs/agents/issue-tracker.md` keeps describing the primary source in Matt Pocock's format; an optional `## Additional sources` section lists the others with instructions for agents. Without it a project has one source, as before.

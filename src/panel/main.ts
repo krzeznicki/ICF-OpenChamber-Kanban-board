@@ -1151,6 +1151,18 @@ const installBoardNavigation = (): void => {
   const moveSelected = (by: -1 | 1) => (): boolean => {
     // In a text field (the search) Mod+Shift+←/→ selects text.
     if (focusInTextField()) return false;
+    // Marked cards move together, each one column on from its own.
+    const marked = selection.marked().filter((m) => state.columns.has(m));
+    if (marked.length > 0) {
+      // Planned before any move: a moved card is drawn in its new column at once and must not move twice.
+      const steps = COLUMNS.flatMap((column, i) => {
+        const next = COLUMNS[i + by];
+        const ids = marked.filter((m) => state.columns.get(m) === column.id);
+        return next !== undefined && ids.length > 0 ? [{ ids, to: next.id }] : [];
+      });
+      for (const { ids, to } of steps) editor.moveCards(ids, to);
+      return true;
+    }
     const id = selection.get();
     const from = id === null ? undefined : state.columns.get(id);
     if (id === null || from === undefined) return false;
@@ -1159,6 +1171,10 @@ const installBoardNavigation = (): void => {
     if (to !== undefined) editor.moveCard(id, to.id);
     return true;
   };
+  // Escape is never bound (shortcuts.ts): on the Board it also drops the Marked cards.
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !e.defaultPrevented && shortcuts.context() === 'board') selection.clearMarks();
+  });
   shortcuts.on('board.moveCardPrev', moveSelected(-1));
   shortcuts.on('board.moveCardNext', moveSelected(1));
   shortcuts.on('board.toggleSubtasks', () => {
@@ -1354,7 +1370,8 @@ const start = (ctx: HostReadyContext): void => {
         showPending();
       },
     },
-    onStart: (task) => void starter.onStart(task),
+    onStart: (task) => starter.onStart(task),
+    marks: { group: (id, busy) => selection.group(id, busy), click: (id, how) => selection.mark(id, how), clear: () => selection.clearMarks() },
     lists,
     beforeMove: (task) => starter.leaveQueue(task.id),
     afterSetState: detach,

@@ -87,6 +87,7 @@ Types: `bug` and `enhancement` (a feature), plus your own (`chore` and `research
 - To close a task, drag it to Done or use **Move to → Done** under its modal's header (the × at the top right only closes the modal, as does Escape).
 - A drop on Backlog or Ready changes one line of the task file (local) or swaps the state label (GitHub). The rest of the file is left as it is.
 - Dragging a card out of In Progress or Review to Backlog or Ready detaches it from its session: the card follows its state again, and the session keeps running (open it from the session list). Starting the card again later links it to the new session.
+- Move several cards at once: **Cmd+click** (Ctrl+click on Windows and Linux) marks a card or unmarks it, **Shift+click** marks every card from the last marked one (or the selected one) to the clicked one, across columns in board order. Dragging a marked card carries all marked cards (the dragged card shows how many) and drops each of them on the column from its own; Mod+Shift+←/→ moves each marked card one column on. A group only moves between columns: no reordering and no linking under a card. Cards that cannot go there (Review, a done task to In Progress) stay, with the reason said once; parents with open sub-tasks ask one at a time, and starts go one after another, so the agent limit and the queue still hold. A plain click on a card, a click on the board's background or Escape clears the marks.
 - Drag a card up or down its own column to reorder it: a line shows where it goes. The order is kept in the board's own storage per project (nothing changes in the repository or on GitHub); cards never reordered keep the tracker's order, below the reordered ones. Deleted tasks, and tasks the tracker no longer lists, drop out of it. Sub-tasks stay right under their parent. In its own column, only the middle of a card makes the dragged card its sub-task; the top and bottom edges reorder.
 
 ### Archiving done tasks
@@ -344,7 +345,7 @@ npm install
 npm run check   # typecheck + tests + build
 ```
 
-The node tests have no layout, so drag and drop across columns of different lengths is checked separately, by hand, in headless Chrome (`CHROME` overrides the default macOS path): `sh scripts/debug/drag-across-columns/run.sh` must print only `PASS` lines.
+The node tests have no layout, so drag and drop across columns of different lengths is checked separately, by hand, in headless Chrome (`CHROME` overrides the default macOS path): `sh scripts/debug/drag-across-columns/run.sh` must print only `PASS` lines (it also checks Cmd/Ctrl/Shift+click marking and a group drag).
 
 `npm run build` bundles with esbuild: the panel to `panel/main.js` (IIFE), the service to `service/main.js` and the CLI to `build/cli/task-board.mjs` (ESM). Commit the built files with the sources: installs never build.
 

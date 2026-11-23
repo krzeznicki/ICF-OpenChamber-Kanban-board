@@ -22,7 +22,8 @@ import type { StartLists } from './models.ts';
 import { resolveStart, type CardOptions, type Sections, type Settings } from './settings.ts';
 import { askedOf, type Suggester } from './suggest.ts';
 import { COLUMNS, type Column, type SessionLookup, type SessionTarget } from './columns.ts';
-import { openChildren, planMove, taskTypes, type Move } from './moves.ts';
+import { openChildren, planGroupMove, planMove, taskTypes, type Move } from './moves.ts';
+import type { MarkHow } from './marks.ts';
 import { closingStates, type PendingStates } from './optimistic.ts';
 import { openAddModal, type AddModalHandle, type AddModalStart, type AddResult } from './ui/addModal.ts';
 import type { Board } from './ui/board.ts';
@@ -61,8 +62,8 @@ export type EditorDeps = {
    * returns a key; `settle` stops drawing them once the write and its reload are done or failed.
    */
   shown?: { add: (states: PendingStates) => number; settle: (key: number) => void };
-  /** Dropping on In Progress (also "Move to In Progress" in the detail): starts an agent. */
-  onStart: (task: Task) => void;
+  /** Dropping on In Progress (also "Move to In Progress" in the detail): starts an agent; resolves once launched or queued. */
+  onStart: (task: Task) => void | Promise<void>;
   /** The model picker's list (loaded once per panel session). */
   /** The model and agent lists of the start pickers. */
   lists: StartLists;
@@ -109,6 +110,13 @@ export type EditorDeps = {
      * type (suggest.ts createTypeClassifier). `move` and `forget` take this mark along.
      */
     markNoType: (projectId: string, taskId: string) => Promise<void>;
+  };
+  /** The Marked cards (marks.ts, kept by ui/selection.ts). */
+  marks: {
+    /** What a drag of `taskId` carries (marks.ts dragGroup). */
+    group: (taskId: string, busy: ReadonlySet<string>) => readonly string[];
+    click: (taskId: string, how: MarkHow) => void;
+    clear: () => void;
   };
   /** The task modal shows `taskId` (opened, or switched to it). */
   onOpenTaskShown?: (taskId: string) => void;
@@ -400,28 +408,30 @@ export const createEditor = (deps: EditorDeps) => {
       withChildren = answer === 'all';
     }
     if (deps.beforeMove !== undefined && !(await deps.beforeMove(task))) return;
-    await runShown(task.id, closingStates(task, deps.tasks(), withChildren), (api) => api.close(task.id, withChildren));
+    void runShown(task.id, closingStates(task, deps.tasks(), withChildren), (api) => api.close(task.id, withChildren));
   };
 
-  const apply = (task: Task, from: Column, move: Move): void => {
+  /**
+   * Makes one move. Resolves once everything the user is asked (close with sub-tasks, the start
+   * form) is answered and a start is launched or queued; a write runs on in the background.
+   */
+  const apply = async (task: Task, from: Column, move: Move): Promise<void> => {
     switch (move.kind) {
       case 'none':
         info(move.reason);
         return;
       case 'start':
-        deps.onStart(task);
+        await deps.onStart(task);
         return;
       case 'setState':
-        void (async () => {
-          if (deps.beforeMove !== undefined && !(await deps.beforeMove(task))) return;
-          await runShown(task.id, new Map([[task.id, move.state]]), async (api) => {
-            await api.setState(task.id, move.state);
-            await deps.afterSetState?.(task, from);
-          });
-        })();
+        if (deps.beforeMove !== undefined && !(await deps.beforeMove(task))) return;
+        void runShown(task.id, new Map([[task.id, move.state]]), async (api) => {
+          await api.setState(task.id, move.state);
+          await deps.afterSetState?.(task, from);
+        });
         return;
       case 'close':
-        void close(task, move.askChildren);
+        await close(task, move.askChildren);
         return;
     }
   };
@@ -430,7 +440,24 @@ export const createEditor = (deps: EditorDeps) => {
     const task = find(id);
     // Dropping back on its own column is not a move; say nothing.
     if (task === null || moving.has(id) || from === to) return;
-    apply(task, from, planMove(task, from, to, openChildren(task, deps.tasks())));
+    void apply(task, from, planMove(task, from, to, openChildren(task, deps.tasks())));
+  };
+
+  /**
+   * Several Marked cards dropped on `to` (also Mod+Shift+←/→ on them): each from its own column,
+   * one after another, so their questions come one at a time and starts respect the agent limit.
+   */
+  const moveGroup = async (ids: readonly string[], to: Column): Promise<void> => {
+    const cards = ids.flatMap((id) => {
+      const task = find(id);
+      const from = deps.columnOf(id);
+      return task === null || from === null || moving.has(id) ? [] : [{ task, from }];
+    });
+    const plan = planGroupMove(cards, to, deps.tasks());
+    for (const reason of plan.reasons) info(reason);
+    for (const { task, from, move: m } of plan.moves) {
+      if (!moving.has(task.id)) await apply(task, from, m);
+    }
   };
 
   /** A card dropped onto an accepting card: confirm, then link it under that card (a failure is a toast). */
@@ -691,7 +718,13 @@ export const createEditor = (deps: EditorDeps) => {
 
   const detachDrag = attachDrag(deps.board.columns, {
     canDrag: (id) => !moving.has(id),
-    onDrop: move,
+    group: (id) => deps.marks.group(id, moving),
+    onDrop: (id, from, to, group) => {
+      if (group === undefined) move(id, from, to);
+      else void moveGroup(group, to);
+    },
+    onMark: (id, how) => deps.marks.click(id, how),
+    onClearMarks: () => deps.marks.clear(),
     canLink: (id, parentId) => {
       const child = find(id);
       const parent = find(parentId);
@@ -701,7 +734,11 @@ export const createEditor = (deps: EditorDeps) => {
     onReorder: (id, column, before) => {
       if (!moving.has(id)) deps.order.reorder(id, column, before);
     },
-    onOpen: showDetail,
+    onOpen: (id) => {
+      // A plain click picks one card, as in a file list: the marks go.
+      deps.marks.clear();
+      showDetail(id);
+    },
   });
 
   return {
@@ -731,6 +768,8 @@ export const createEditor = (deps: EditorDeps) => {
       const from = deps.columnOf(id);
       if (from !== null) move(id, from, to);
     },
+    /** Moves several Marked cards to `to` through the same path as a group drop. */
+    moveCards: (ids: readonly string[], to: Column): void => void moveGroup(ids, to),
     /** Project switch or the board went away: drop the modal and the form. */
     reset: () => {
       closeDetail();

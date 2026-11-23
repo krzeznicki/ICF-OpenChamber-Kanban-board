@@ -29,6 +29,23 @@ export const planMove = (task: Task, from: Column, to: Column, openChildren: num
   }
 };
 
+export type GroupMove = { moves: { task: Task; from: Column; move: Exclude<Move, { kind: 'none' }> }[]; reasons: string[] };
+
+/**
+ * Several Marked cards (marks.ts) dropped on `to`: each is planned from its own column. Cards
+ * already in `to` are skipped without a word; every other refusal is said once, not once per card.
+ */
+export const planGroupMove = (cards: readonly { task: Task; from: Column }[], to: Column, tasks: readonly Task[]): GroupMove => {
+  const plan: GroupMove = { moves: [], reasons: [] };
+  for (const { task, from } of cards) {
+    if (from === to) continue;
+    const move = planMove(task, from, to, openChildren(task, tasks));
+    if (move.kind !== 'none') plan.moves.push({ task, from, move });
+    else if (!plan.reasons.includes(move.reason)) plan.reasons.push(move.reason);
+  }
+  return plan;
+};
+
 /** Listed sub-tasks of `task` that are not done yet. */
 export const openChildren = (task: Task, tasks: readonly Task[]): number =>
   tasks.filter((t) => t.parentId === task.id && t.state !== 'done').length;
