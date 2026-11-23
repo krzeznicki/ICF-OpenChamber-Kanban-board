@@ -86,9 +86,10 @@ export const step = (press: Press | null, input: DragInput): DragStep => {
         const effect: DragEffect = press.mark !== undefined ? { kind: 'mark', taskId: press.taskId, how: press.mark } : { kind: 'open', taskId: press.taskId };
         return { press: null, effect };
       }
-      // A group only moves between columns: no link under a card, no place in a column.
+      // A group only moves between columns: no link under a card, no place in a column. Let go in
+      // the dragged card's own column (back home) it is cancelled, so no other Marked card moves there.
       if (press.group !== undefined) {
-        if (input.to === null) return end(press);
+        if (input.to === null || input.to === press.from) return end(press);
         return { press: null, effect: { kind: 'drop', taskId: press.taskId, from: press.from, to: input.to, group: press.group } };
       }
       const onto = input.onto ?? null;

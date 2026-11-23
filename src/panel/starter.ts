@@ -306,7 +306,11 @@ export const createStarter = (deps: StarterDeps) => {
     }
   };
 
-  /** A drop on In Progress: resolve the start options, ask first when "Start automatically" is off, then launch or queue. */
+  /**
+   * A drop on In Progress: resolve the start options, ask first when "Start automatically" is off,
+   * then launch or queue. Resolves once launched (counted as starting) or queued, not when the
+   * session is up, so a group start (edit.ts moveGroup) goes on to the next card at once.
+   */
   const onStart = async (task: Task): Promise<void> => {
     // A sub-task of a running orchestrator gets no session of its own.
     if (ledByOrchestrator(task, deps.sessions(), markArchived(links, deps.archived()), deps.detached())) {
@@ -355,8 +359,10 @@ export const createStarter = (deps: StarterDeps) => {
     }
     const pending = launcher.launch(task, opts);
     deps.draw(); // the card shows in In Progress while it starts
-    report(task, await pending);
-    deps.draw();
+    void pending.then((result) => {
+      report(task, result);
+      deps.draw();
+    });
   };
 
   /**

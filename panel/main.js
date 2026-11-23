@@ -4879,6 +4879,11 @@ ${ref}`,
     }
     return plan;
   };
+  var groupSteps = (ids, columns, by) => COLUMNS.flatMap(({ id: column }, i) => {
+    const next = COLUMNS[i + by];
+    const here = ids.filter((m) => columns.get(m) === column);
+    return next !== void 0 && here.length > 0 ? [{ ids: here, to: next.id }] : [];
+  });
   var openChildren = (task, tasks) => tasks.filter((t) => t.parentId === task.id && t.state !== "done").length;
   var BASE_TYPES = ["enhancement", "bug", "chore", "research"];
   var taskTypes = (tasks, base2 = BASE_TYPES) => {
@@ -13484,7 +13489,7 @@ ${ref}`,
           return { press: null, effect };
         }
         if (press.group !== void 0) {
-          if (input.to === null) return end(press);
+          if (input.to === null || input.to === press.from) return end(press);
           return { press: null, effect: { kind: "drop", taskId: press.taskId, from: press.from, to: input.to, group: press.group } };
         }
         const onto = input.onto ?? null;
@@ -14218,8 +14223,8 @@ ${ref}`,
         if (group === void 0) move(id, from, to);
         else void moveGroup(group, to);
       },
-      onMark: (id, how) => deps.marks.click(id, how),
-      onClearMarks: () => deps.marks.clear(),
+      onMark: (id, how) => deps.marks.mark(id, how),
+      onClearMarks: () => deps.marks.clearMarks(),
       canLink: (id, parentId) => {
         const child = find(id);
         const parent = find(parentId);
@@ -14230,7 +14235,7 @@ ${ref}`,
         if (!moving.has(id)) deps.order.reorder(id, column, before);
       },
       onOpen: (id) => {
-        deps.marks.clear();
+        deps.marks.clearMarks();
         showDetail(id);
       }
     });
@@ -14261,8 +14266,13 @@ ${ref}`,
         const from = deps.columnOf(id);
         if (from !== null) move(id, from, to);
       },
-      /** Moves several Marked cards to `to` through the same path as a group drop. */
-      moveCards: (ids, to) => void moveGroup(ids, to),
+      /**
+       * Moves groups of Marked cards (moves.ts groupSteps) through the same path as a group drop, one
+       * group after another, so their questions still come one at a time.
+       */
+      moveGroups: (steps) => void (async () => {
+        for (const { ids, to } of steps) await moveGroup(ids, to);
+      })(),
       /** Project switch or the board went away: drop the modal and the form. */
       reset: () => {
         closeDetail();
@@ -14802,8 +14812,10 @@ ${note}` : note;
       }
       const pending2 = launcher.launch(task, opts);
       deps.draw();
-      report(task, await pending2);
-      deps.draw();
+      void pending2.then((result) => {
+        report(task, result);
+        deps.draw();
+      });
     };
     const leaveQueue = async (taskId) => {
       const p = deps.project();
@@ -15634,25 +15646,26 @@ ${listKey(projects)}`;
   };
 
   // src/panel/marks.ts
-  var NO_MARKS = { ids: [], anchor: null };
+  var NO_MARKS = { ids: [], anchor: null, base: [] };
   var order = (layout) => layout.flat();
   var inOrder = (layout, ids) => order(layout).filter((id) => ids.has(id));
   var clickMarks = (marks, layout, id, how, fallback = null) => {
     if (how === "toggle") {
       const ids = marks.ids.includes(id) ? marks.ids.filter((m) => m !== id) : [...marks.ids, id];
-      return { ids, anchor: id };
+      return { ids, anchor: id, base: ids };
     }
     const flat = order(layout);
     const anchor = [marks.anchor, fallback].find((a) => a !== null && flat.includes(a)) ?? id;
     const [i, j] = [flat.indexOf(anchor), flat.indexOf(id)];
     const range = i === -1 || j === -1 ? [id] : flat.slice(Math.min(i, j), Math.max(i, j) + 1);
-    return { ids: inOrder(layout, /* @__PURE__ */ new Set([...marks.ids, ...range])), anchor };
+    return { ids: inOrder(layout, /* @__PURE__ */ new Set([...marks.base, ...range])), anchor, base: marks.base };
   };
   var keepMarks = (marks, layout) => {
     const flat = new Set(order(layout));
     const ids = marks.ids.filter((id) => flat.has(id));
+    const base2 = marks.base.filter((id) => flat.has(id));
     const anchor = marks.anchor !== null && flat.has(marks.anchor) ? marks.anchor : null;
-    return ids.length === marks.ids.length && anchor === marks.anchor ? marks : { ids, anchor };
+    return ids.length === marks.ids.length && base2.length === marks.base.length && anchor === marks.anchor ? marks : { ids, anchor, base: base2 };
   };
   var dragGroup = (marks, layout, pressed, busy) => {
     if (!marks.ids.includes(pressed)) return [pressed];
@@ -15666,7 +15679,7 @@ ${listKey(projects)}`;
     let refocus = false;
     let marks = NO_MARKS;
     const cardOf = (id) => container.querySelector(`.kb-card[data-task-id="${CSS.escape(id)}"]`);
-    const mark = () => {
+    const paint2 = () => {
       for (const el7 of container.querySelectorAll(".kb-card.is-selected")) el7.classList.remove("is-selected");
       if (selected !== null) cardOf(selected.id)?.classList.add("is-selected");
       for (const el7 of container.querySelectorAll(".kb-card.is-marked")) el7.classList.remove("is-marked");
@@ -15688,7 +15701,7 @@ ${listKey(projects)}`;
       const id = e.target.dataset.taskId;
       if (id === void 0 || id === selected?.id) return;
       selected = locate(layout, id) ?? { id, column: 0, row: 0 };
-      mark();
+      paint2();
     };
     container.addEventListener("focusin", onFocusIn);
     return {
@@ -15696,7 +15709,7 @@ ${listKey(projects)}`;
       set: (id, opts) => {
         if (id === null) selected = null;
         else selected = locate(layout, id) ?? { id, column: selected?.column ?? 0, row: selected?.row ?? 0 };
-        mark();
+        paint2();
         if (opts?.focus === true) focus(true);
       },
       layout: () => layout,
@@ -15704,7 +15717,7 @@ ${listKey(projects)}`;
         const next = nextSelected(layout, selected, direction);
         if (next === null) return false;
         selected = next;
-        mark();
+        paint2();
         focus(true);
         return true;
       },
@@ -15715,7 +15728,7 @@ ${listKey(projects)}`;
         layout = next;
         selected = keepSelected(layout, selected);
         marks = keepMarks(marks, layout);
-        mark();
+        paint2();
         if (refocus) focus(false);
         refocus = false;
       },
@@ -15724,12 +15737,12 @@ ${listKey(projects)}`;
       mark: (id, how) => {
         marks = clickMarks(marks, layout, id, how, selected?.id ?? null);
         selected = locate(layout, id) ?? selected;
-        mark();
+        paint2();
       },
       clearMarks: () => {
         if (marks === NO_MARKS) return;
         marks = NO_MARKS;
-        mark();
+        paint2();
       },
       group: (id, busy) => dragGroup(marks, layout, id, busy),
       dispose: () => container.removeEventListener("focusin", onFocusIn)
@@ -16842,12 +16855,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
       if (focusInTextField()) return false;
       const marked = selection2.marked().filter((m) => state.columns.has(m));
       if (marked.length > 0) {
-        const steps = COLUMNS.flatMap((column, i) => {
-          const next = COLUMNS[i + by];
-          const ids = marked.filter((m) => state.columns.get(m) === column.id);
-          return next !== void 0 && ids.length > 0 ? [{ ids, to: next.id }] : [];
-        });
-        for (const { ids, to: to2 } of steps) editor.moveCards(ids, to2);
+        editor.moveGroups(groupSteps(marked, state.columns, by));
         return true;
       }
       const id = selection2.get();
@@ -17022,7 +17030,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
         }
       },
       onStart: (task) => starter.onStart(task),
-      marks: { group: (id, busy) => selection2.group(id, busy), click: (id, how) => selection2.mark(id, how), clear: () => selection2.clearMarks() },
+      marks: selection2,
       lists,
       beforeMove: (task) => starter.leaveQueue(task.id),
       afterSetState: detach,

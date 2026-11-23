@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Task } from '../src/core/types.ts';
-import { openChildren, planGroupMove, planMove, taskTypes } from '../src/panel/moves.ts';
+import { groupSteps, openChildren, planGroupMove, planMove, taskTypes } from '../src/panel/moves.ts';
+import type { Column } from '../src/panel/columns.ts';
 
 const task = (over: Partial<Task> = {}): Task => ({
   id: '.scratch/f/issues/01-a.md',
@@ -118,4 +119,18 @@ test('planGroupMove: a parent closed with the group asks about its open children
   const plan = planGroupMove([{ task: p, from: 'ready' }], 'done', [p, kid]);
   assert.deepEqual(plan.moves, [{ task: p, from: 'ready', move: { kind: 'close', askChildren: true } }]);
   assert.deepEqual(plan.reasons, []);
+});
+
+test('groupSteps: Mod+Shift+←/→ on Marked cards moves each one column on from its own, grouped by column; the edge stays', () => {
+  const columns = new Map<string, Column>([
+    ['a', 'backlog'],
+    ['b', 'ready'],
+    ['c', 'backlog'],
+    ['d', 'done'],
+  ]);
+  assert.deepEqual(groupSteps(['a', 'b', 'c', 'd', 'gone'], columns, 1), [
+    { ids: ['a', 'c'], to: 'ready' },
+    { ids: ['b'], to: 'in_progress' },
+  ]);
+  assert.deepEqual(groupSteps(['a', 'b'], columns, -1), [{ ids: ['b'], to: 'backlog' }]);
 });

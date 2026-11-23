@@ -135,8 +135,8 @@ test('a drag of marked cards moves the whole group to a column, never links or r
   const drop = { kind: 'drop', taskId: 't', from: 'backlog', to: 'done', group: ['s', 't', 'u'] };
   assert.deepEqual(step(group, { type: 'up', pointerId: 1, to: 'done' }).effect, drop);
   assert.deepEqual(step(group, { type: 'up', pointerId: 1, to: 'done', onto: 'p' }).effect, drop);
-  // In its own column there is nothing to do; outside every column it is cancelled.
-  assert.deepEqual(step(group, { type: 'up', pointerId: 1, to: 'backlog', before: 'v' }).effect, { ...drop, to: 'backlog' });
+  // Let go in its own column (back home) or outside every column: cancelled, nothing moves.
+  assert.deepEqual(step(group, { type: 'up', pointerId: 1, to: 'backlog', before: 'v' }).effect, { kind: 'cancel' });
   assert.deepEqual(step(group, { type: 'up', pointerId: 1, to: null, onto: 'p' }).effect, { kind: 'cancel' });
   // A group of one is the plain drag.
   const one = step(step(null, { ...down, group: ['t'] }).press, move(THRESHOLD)).press;

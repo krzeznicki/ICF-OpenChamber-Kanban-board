@@ -20,10 +20,10 @@ columns.hasPointerCapture = () => false;
 
 const log: string[] = [];
 /** The Marked cards the harness pretends to have (a drag of one of them carries them all). */
-let marked: string[] = [];
+let markedIds: string[] = [];
 attachDrag(columns, {
   canDrag: () => true,
-  group: (task) => (marked.includes(task) ? marked : [task]),
+  group: (task) => (markedIds.includes(task) ? markedIds : [task]),
   onMark: (task, how) => log.push(`mark ${task} ${how}`),
   onClearMarks: () => log.push('clear'),
   canLink: () => false,
@@ -100,10 +100,10 @@ draw(3);
 lines.push(click('Cmd+click marks', 'backlog1', { metaKey: true }, ['mark backlog1 toggle']));
 lines.push(click('Ctrl+click marks', 'backlog1', { ctrlKey: true }, ['mark backlog1 toggle']));
 lines.push(click('Shift+click marks a range', 'backlog2', { shiftKey: true }, ['mark backlog2 range']));
-marked = ['backlog0', 'backlog2'];
+markedIds = ['backlog0', 'backlog2'];
 lines.push(drag('a marked card drags the group', 'backlog2', (top) => top + 10, 'backlog0,backlog2'));
 lines.push(drag('an unmarked card drags alone', 'backlog1', (top) => top + 10));
-marked = [];
+markedIds = [];
 {
   log.length = 0;
   const empty = columns.querySelector<HTMLElement>('[data-column="review"] .kb-cards');

@@ -23,7 +23,7 @@ import { resolveStart, type CardOptions, type Sections, type Settings } from './
 import { askedOf, type Suggester } from './suggest.ts';
 import { COLUMNS, type Column, type SessionLookup, type SessionTarget } from './columns.ts';
 import { openChildren, planGroupMove, planMove, taskTypes, type Move } from './moves.ts';
-import type { MarkHow } from './marks.ts';
+import type { Selection } from './ui/selection.ts';
 import { closingStates, type PendingStates } from './optimistic.ts';
 import { openAddModal, type AddModalHandle, type AddModalStart, type AddResult } from './ui/addModal.ts';
 import type { Board } from './ui/board.ts';
@@ -111,13 +111,8 @@ export type EditorDeps = {
      */
     markNoType: (projectId: string, taskId: string) => Promise<void>;
   };
-  /** The Marked cards (marks.ts, kept by ui/selection.ts). */
-  marks: {
-    /** What a drag of `taskId` carries (marks.ts dragGroup). */
-    group: (taskId: string, busy: ReadonlySet<string>) => readonly string[];
-    click: (taskId: string, how: MarkHow) => void;
-    clear: () => void;
-  };
+  /** The Marked cards (marks.ts), kept by ui/selection.ts. */
+  marks: Pick<Selection, 'group' | 'mark' | 'clearMarks'>;
   /** The task modal shows `taskId` (opened, or switched to it). */
   onOpenTaskShown?: (taskId: string) => void;
   /**
@@ -723,8 +718,8 @@ export const createEditor = (deps: EditorDeps) => {
       if (group === undefined) move(id, from, to);
       else void moveGroup(group, to);
     },
-    onMark: (id, how) => deps.marks.click(id, how),
-    onClearMarks: () => deps.marks.clear(),
+    onMark: (id, how) => deps.marks.mark(id, how),
+    onClearMarks: () => deps.marks.clearMarks(),
     canLink: (id, parentId) => {
       const child = find(id);
       const parent = find(parentId);
@@ -736,7 +731,7 @@ export const createEditor = (deps: EditorDeps) => {
     },
     onOpen: (id) => {
       // A plain click picks one card, as in a file list: the marks go.
-      deps.marks.clear();
+      deps.marks.clearMarks();
       showDetail(id);
     },
   });
@@ -768,8 +763,14 @@ export const createEditor = (deps: EditorDeps) => {
       const from = deps.columnOf(id);
       if (from !== null) move(id, from, to);
     },
-    /** Moves several Marked cards to `to` through the same path as a group drop. */
-    moveCards: (ids: readonly string[], to: Column): void => void moveGroup(ids, to),
+    /**
+     * Moves groups of Marked cards (moves.ts groupSteps) through the same path as a group drop, one
+     * group after another, so their questions still come one at a time.
+     */
+    moveGroups: (steps: readonly { ids: readonly string[]; to: Column }[]): void =>
+      void (async () => {
+        for (const { ids, to } of steps) await moveGroup(ids, to);
+      })(),
     /** Project switch or the board went away: drop the modal and the form. */
     reset: () => {
       closeDetail();

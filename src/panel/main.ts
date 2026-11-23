@@ -40,7 +40,7 @@ import { createAgentLoader, createModelLoader, type StartLists } from './models.
 import { createStarter } from './starter.ts';
 import { MODEL_NOTICES, createLimiter, createModelAvailability } from './limiter.ts';
 import { createSuggester, createTypeClassifier } from './suggest.ts';
-import { taskTypes } from './moves.ts';
+import { groupSteps, taskTypes } from './moves.ts';
 import { MODEL_PICK } from './addTask.ts';
 import { filterBoard, searchSuggestions } from './search.ts';
 import { currentSourceView, sourceBadge, sourceSwitcher, tasksInView, type SourceView } from './sourceView.ts';
@@ -1151,16 +1151,10 @@ const installBoardNavigation = (): void => {
   const moveSelected = (by: -1 | 1) => (): boolean => {
     // In a text field (the search) Mod+Shift+←/→ selects text.
     if (focusInTextField()) return false;
-    // Marked cards move together, each one column on from its own.
+    // Marked cards move together, each one column on from its own (moves.ts groupSteps).
     const marked = selection.marked().filter((m) => state.columns.has(m));
     if (marked.length > 0) {
-      // Planned before any move: a moved card is drawn in its new column at once and must not move twice.
-      const steps = COLUMNS.flatMap((column, i) => {
-        const next = COLUMNS[i + by];
-        const ids = marked.filter((m) => state.columns.get(m) === column.id);
-        return next !== undefined && ids.length > 0 ? [{ ids, to: next.id }] : [];
-      });
-      for (const { ids, to } of steps) editor.moveCards(ids, to);
+      editor.moveGroups(groupSteps(marked, state.columns, by));
       return true;
     }
     const id = selection.get();
@@ -1371,7 +1365,7 @@ const start = (ctx: HostReadyContext): void => {
       },
     },
     onStart: (task) => starter.onStart(task),
-    marks: { group: (id, busy) => selection.group(id, busy), click: (id, how) => selection.mark(id, how), clear: () => selection.clearMarks() },
+    marks: selection,
     lists,
     beforeMove: (task) => starter.leaveQueue(task.id),
     afterSetState: detach,
