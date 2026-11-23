@@ -58,7 +58,13 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
 .kb-card:focus-visible { outline: 2px solid var(--oc-focus); outline-offset: 1px; }
 /* The Selected card (keyboard navigation): marked also while focus is elsewhere, e.g. in the search field. */
 .kb-card.is-selected { border-color: var(--oc-focus); }
+/* A Marked card (Mod/Shift+click): moved together with the other Marked cards. */
+.kb-card.is-marked { border-color: var(--oc-primary); box-shadow: inset 0 0 0 1px var(--oc-primary);
+  background: color-mix(in srgb, var(--oc-primary) 10%, var(--oc-elevated)); }
 .kb-card.is-dragging { opacity: 0.4; }
+.kb-ghost-count { position: absolute; top: -0.5rem; right: -0.5rem; min-width: 1.5rem; height: 1.5rem; padding: 0 0.375rem;
+  border-radius: 999px; display: flex; align-items: center; justify-content: center; font-size: 0.8em; font-weight: 600;
+  background: var(--oc-primary); color: var(--oc-bg); }
 .kb-card.is-busy { opacity: 0.6; cursor: progress; }
 .kb-card.is-archived { opacity: 0.55; border-style: dashed; }
 .kb-column-tools { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.375rem 0.5rem;

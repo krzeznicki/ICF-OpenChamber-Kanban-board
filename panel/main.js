@@ -3048,31 +3048,31 @@ ${GUEST_UI_LOOK_CSS}`;
   };
 
   // src/panel/order.ts
-  var applyOrder = (tasks, order2) => {
-    const rank = new Map(order2.map((id, i) => [id, i]));
+  var applyOrder = (tasks, order3) => {
+    const rank = new Map(order3.map((id, i) => [id, i]));
     const ranked = tasks.filter((t) => rank.has(t.id)).sort((a, b) => rank.get(a.id) - rank.get(b.id));
     return [...ranked, ...tasks.filter((t) => !rank.has(t.id))];
   };
-  var reorder = (order2, column, taskId, before) => {
+  var reorder = (order3, column, taskId, before) => {
     const rest = column.filter((id) => id !== taskId);
     const at = before === null || before === taskId ? -1 : rest.indexOf(before);
     const block2 = before === taskId ? [...column] : at === -1 ? [...rest, taskId] : [...rest.slice(0, at), taskId, ...rest.slice(at)];
     const inColumn = new Set(column);
-    const first = order2.findIndex((id) => inColumn.has(id));
-    const others = order2.filter((id) => !inColumn.has(id));
-    const cut = first === -1 ? others.length : order2.slice(0, first).filter((id) => !inColumn.has(id)).length;
+    const first = order3.findIndex((id) => inColumn.has(id));
+    const others = order3.filter((id) => !inColumn.has(id));
+    const cut = first === -1 ? others.length : order3.slice(0, first).filter((id) => !inColumn.has(id)).length;
     return [...others.slice(0, cut), ...block2, ...others.slice(cut)];
   };
   var ORDER_MAX = 500;
   var parseOrder = (raw) => Array.isArray(raw) ? [...new Set(raw.filter((id) => typeof id === "string" && id !== ""))].slice(0, ORDER_MAX) : [];
-  var renameInOrder = (order2, from, to) => order2.includes(from) ? order2.filter((id) => id !== to).map((id) => id === from ? to : id) : [...order2];
-  var pruneOrder = (order2, tasks, unlisted = () => false) => {
+  var renameInOrder = (order3, from, to) => order3.includes(from) ? order3.filter((id) => id !== to).map((id) => id === from ? to : id) : [...order3];
+  var pruneOrder = (order3, tasks, unlisted = () => false) => {
     const listed2 = new Set(tasks.map((t) => t.id));
-    return order2.filter((id) => listed2.has(id) || unlisted(id));
+    return order3.filter((id) => listed2.has(id) || unlisted(id));
   };
-  var forgetInOrder = (order2, ids) => {
+  var forgetInOrder = (order3, ids) => {
     const gone = new Set(ids);
-    return order2.filter((id) => !gone.has(id));
+    return order3.filter((id) => !gone.has(id));
   };
 
   // src/panel/columns.ts
@@ -4602,7 +4602,7 @@ ${ref}`,
       loadArchivedTasks: async (projectId) => parseArchivedTasks(await storage.get(STORAGE_KEYS.archivedTasks(projectId))),
       saveArchivedTasks: (projectId, marks) => put(STORAGE_KEYS.archivedTasks(projectId), serializeArchived(marks), marks.size === 0),
       loadOrder: async (projectId) => parseOrder(await storage.get(STORAGE_KEYS.taskOrder(projectId))),
-      saveOrder: (projectId, order2) => put(STORAGE_KEYS.taskOrder(projectId), order2.slice(0, ORDER_MAX), order2.length === 0),
+      saveOrder: (projectId, order3) => put(STORAGE_KEYS.taskOrder(projectId), order3.slice(0, ORDER_MAX), order3.length === 0),
       /** The stored source switcher choice as text, or null; whether the project still has it is sourceView.ts's call. */
       loadSourceView: async (projectId) => {
         const v2 = await storage.get(STORAGE_KEYS.sourceView(projectId));
@@ -4869,6 +4869,21 @@ ${ref}`,
         return { kind: "close", askChildren: openChildren2 > 0 };
     }
   };
+  var planGroupMove = (cards, to, tasks) => {
+    const plan = { moves: [], reasons: [] };
+    for (const { task, from } of cards) {
+      if (from === to) continue;
+      const move = planMove(task, from, to, openChildren(task, tasks));
+      if (move.kind !== "none") plan.moves.push({ task, from, move });
+      else if (!plan.reasons.includes(move.reason)) plan.reasons.push(move.reason);
+    }
+    return plan;
+  };
+  var groupSteps = (ids, columns, by) => COLUMNS.flatMap(({ id: column }, i) => {
+    const next = COLUMNS[i + by];
+    const here = ids.filter((m) => columns.get(m) === column);
+    return next !== void 0 && here.length > 0 ? [{ ids: here, to: next.id }] : [];
+  });
   var openChildren = (task, tasks) => tasks.filter((t) => t.parentId === task.id && t.state !== "done").length;
   var BASE_TYPES = ["enhancement", "bug", "chore", "research"];
   var taskTypes = (tasks, base2 = BASE_TYPES) => {
@@ -13447,7 +13462,16 @@ ${ref}`,
       case "down": {
         const stale = end(press);
         if (input.button !== 0 || input.taskId === null) return stale;
-        const next = { pointerId: input.pointerId, taskId: input.taskId, from: input.from, x: input.x, y: input.y, dragging: false };
+        const next = {
+          pointerId: input.pointerId,
+          taskId: input.taskId,
+          from: input.from,
+          x: input.x,
+          y: input.y,
+          dragging: false,
+          ...input.mark !== void 0 ? { mark: input.mark } : {},
+          ...input.group !== void 0 && input.group.length > 1 ? { group: input.group } : {}
+        };
         return { press: next, effect: stale.effect };
       }
       case "move": {
@@ -13460,7 +13484,14 @@ ${ref}`,
       }
       case "up": {
         if (press === null || input.pointerId !== press.pointerId) return { press, effect: NONE3 };
-        if (!press.dragging) return { press: null, effect: { kind: "open", taskId: press.taskId } };
+        if (!press.dragging) {
+          const effect = press.mark !== void 0 ? { kind: "mark", taskId: press.taskId, how: press.mark } : { kind: "open", taskId: press.taskId };
+          return { press: null, effect };
+        }
+        if (press.group !== void 0) {
+          if (input.to === null || input.to === press.from) return end(press);
+          return { press: null, effect: { kind: "drop", taskId: press.taskId, from: press.from, to: input.to, group: press.group } };
+        }
         const onto = input.onto ?? null;
         if (onto !== null && onto !== press.taskId) return { press: null, effect: { kind: "link", taskId: press.taskId, parentId: onto } };
         if (input.to === null) return end(press);
@@ -13536,7 +13567,7 @@ ${ref}`,
         d.ghost?.remove();
         d.card.classList.remove("is-dragging");
       }
-      if (taskId !== null) container.querySelector(`.kb-card[data-task-id="${CSS.escape(taskId)}"]`)?.classList.remove("is-dragging");
+      if (taskId !== null) for (const el7 of container.querySelectorAll(".kb-card.is-dragging")) el7.classList.remove("is-dragging");
       document.documentElement.classList.remove("kb-dragging");
       if (pointerId !== null && container.hasPointerCapture(pointerId)) container.releasePointerCapture(pointerId);
     };
@@ -13547,6 +13578,14 @@ ${ref}`,
       ghost.removeAttribute("tabindex");
       ghost.setAttribute("aria-hidden", "true");
       ghost.style.width = `${dom.width}px`;
+      if (p.group !== void 0) {
+        ghost.classList.add("kb-ghost-group");
+        const count = document.createElement("span");
+        count.className = "kb-ghost-count";
+        count.textContent = String(p.group.length);
+        ghost.append(count);
+        for (const id of p.group) container.querySelector(`.kb-card[data-task-id="${CSS.escape(id)}"]`)?.classList.add("is-dragging");
+      }
       document.body.append(ghost);
       dom.ghost = ghost;
       dom.card.classList.add("is-dragging");
@@ -13574,7 +13613,8 @@ ${ref}`,
       if (effect.kind === "start" && next !== null && at !== void 0) startGhost(next, at.x, at.y);
       else if (effect.kind === "follow" && at !== void 0) follow2(at.x, at.y);
       else if (effect.kind === "open") callbacks.onOpen(effect.taskId);
-      else if (effect.kind === "drop") callbacks.onDrop(effect.taskId, effect.from, effect.to);
+      else if (effect.kind === "mark") callbacks.onMark(effect.taskId, effect.how);
+      else if (effect.kind === "drop") callbacks.onDrop(effect.taskId, effect.from, effect.to, effect.group);
       else if (effect.kind === "link") callbacks.onLink(effect.taskId, effect.parentId);
       else if (effect.kind === "reorder") callbacks.onReorder(effect.taskId, effect.column, effect.before);
       return effect;
@@ -13584,15 +13624,23 @@ ${ref}`,
       const card = target?.closest(".kb-card") ?? null;
       const col = columnOf(card);
       const ok = card !== null && target !== null && col !== null && card.dataset.taskId !== void 0 && !interactive(target, card);
+      const mark = e.shiftKey ? "range" : e.metaKey || e.ctrlKey ? "toggle" : null;
+      if (card === null && mark === null && e.button === 0 && target !== null && target.closest('button, a, input, select, textarea, [role="button"]') === null) {
+        callbacks.onClearMarks();
+      }
+      if (ok && mark !== null) e.preventDefault();
       const before = press;
+      const taskId = ok ? card.dataset.taskId : null;
       feed({
         type: "down",
         pointerId: e.pointerId,
         button: e.button,
-        taskId: ok ? card.dataset.taskId : null,
+        taskId,
         from: col?.dataset.column ?? "backlog",
         x: e.clientX,
-        y: e.clientY
+        y: e.clientY,
+        ...mark !== null ? { mark } : {},
+        ...taskId !== null ? { group: callbacks.group(taskId) } : {}
       });
       if (press !== null && press !== before && ok) {
         const rect = card.getBoundingClientRect();
@@ -13900,34 +13948,44 @@ ${ref}`,
         withChildren = answer === "all";
       }
       if (deps.beforeMove !== void 0 && !await deps.beforeMove(task)) return;
-      await runShown(task.id, closingStates(task, deps.tasks(), withChildren), (api) => api.close(task.id, withChildren));
+      void runShown(task.id, closingStates(task, deps.tasks(), withChildren), (api) => api.close(task.id, withChildren));
     };
-    const apply = (task, from, move2) => {
+    const apply = async (task, from, move2) => {
       switch (move2.kind) {
         case "none":
           info2(move2.reason);
           return;
         case "start":
-          deps.onStart(task);
+          await deps.onStart(task);
           return;
         case "setState":
-          void (async () => {
-            if (deps.beforeMove !== void 0 && !await deps.beforeMove(task)) return;
-            await runShown(task.id, /* @__PURE__ */ new Map([[task.id, move2.state]]), async (api) => {
-              await api.setState(task.id, move2.state);
-              await deps.afterSetState?.(task, from);
-            });
-          })();
+          if (deps.beforeMove !== void 0 && !await deps.beforeMove(task)) return;
+          void runShown(task.id, /* @__PURE__ */ new Map([[task.id, move2.state]]), async (api) => {
+            await api.setState(task.id, move2.state);
+            await deps.afterSetState?.(task, from);
+          });
           return;
         case "close":
-          void close(task, move2.askChildren);
+          await close(task, move2.askChildren);
           return;
       }
     };
     const move = (id, from, to) => {
       const task = find(id);
       if (task === null || moving.has(id) || from === to) return;
-      apply(task, from, planMove(task, from, to, openChildren(task, deps.tasks())));
+      void apply(task, from, planMove(task, from, to, openChildren(task, deps.tasks())));
+    };
+    const moveGroup = async (ids, to) => {
+      const cards = ids.flatMap((id) => {
+        const task = find(id);
+        const from = deps.columnOf(id);
+        return task === null || from === null || moving.has(id) ? [] : [{ task, from }];
+      });
+      const plan = planGroupMove(cards, to, deps.tasks());
+      for (const reason of plan.reasons) info2(reason);
+      for (const { task, from, move: m } of plan.moves) {
+        if (!moving.has(task.id)) await apply(task, from, m);
+      }
     };
     const link2 = async (id, parentId) => {
       const child = find(id);
@@ -14160,7 +14218,13 @@ ${ref}`,
     };
     const detachDrag = attachDrag(deps.board.columns, {
       canDrag: (id) => !moving.has(id),
-      onDrop: move,
+      group: (id) => deps.marks.group(id, moving),
+      onDrop: (id, from, to, group) => {
+        if (group === void 0) move(id, from, to);
+        else void moveGroup(group, to);
+      },
+      onMark: (id, how) => deps.marks.mark(id, how),
+      onClearMarks: () => deps.marks.clearMarks(),
       canLink: (id, parentId) => {
         const child = find(id);
         const parent = find(parentId);
@@ -14170,7 +14234,10 @@ ${ref}`,
       onReorder: (id, column, before) => {
         if (!moving.has(id)) deps.order.reorder(id, column, before);
       },
-      onOpen: showDetail
+      onOpen: (id) => {
+        deps.marks.clearMarks();
+        showDetail(id);
+      }
     });
     return {
       /** Ids whose write is in flight; the board draws them busy. */
@@ -14199,6 +14266,13 @@ ${ref}`,
         const from = deps.columnOf(id);
         if (from !== null) move(id, from, to);
       },
+      /**
+       * Moves groups of Marked cards (moves.ts groupSteps) through the same path as a group drop, one
+       * group after another, so their questions still come one at a time.
+       */
+      moveGroups: (steps) => void (async () => {
+        for (const { ids, to } of steps) await moveGroup(ids, to);
+      })(),
       /** Project switch or the board went away: drop the modal and the form. */
       reset: () => {
         closeDetail();
@@ -14738,8 +14812,10 @@ ${note}` : note;
       }
       const pending2 = launcher.launch(task, opts);
       deps.draw();
-      report(task, await pending2);
-      deps.draw();
+      void pending2.then((result) => {
+        report(task, result);
+        deps.draw();
+      });
     };
     const leaveQueue = async (taskId) => {
       const p = deps.project();
@@ -15569,15 +15645,45 @@ ${listKey(projects)}`;
     return close;
   };
 
+  // src/panel/marks.ts
+  var NO_MARKS = { ids: [], anchor: null, base: [] };
+  var order = (layout) => layout.flat();
+  var inOrder = (layout, ids) => order(layout).filter((id) => ids.has(id));
+  var clickMarks = (marks, layout, id, how, fallback = null) => {
+    if (how === "toggle") {
+      const ids = marks.ids.includes(id) ? marks.ids.filter((m) => m !== id) : [...marks.ids, id];
+      return { ids, anchor: id, base: ids };
+    }
+    const flat = order(layout);
+    const anchor = [marks.anchor, fallback].find((a) => a !== null && flat.includes(a)) ?? id;
+    const [i, j] = [flat.indexOf(anchor), flat.indexOf(id)];
+    const range = i === -1 || j === -1 ? [id] : flat.slice(Math.min(i, j), Math.max(i, j) + 1);
+    return { ids: inOrder(layout, /* @__PURE__ */ new Set([...marks.base, ...range])), anchor, base: marks.base };
+  };
+  var keepMarks = (marks, layout) => {
+    const flat = new Set(order(layout));
+    const ids = marks.ids.filter((id) => flat.has(id));
+    const base2 = marks.base.filter((id) => flat.has(id));
+    const anchor = marks.anchor !== null && flat.has(marks.anchor) ? marks.anchor : null;
+    return ids.length === marks.ids.length && base2.length === marks.base.length && anchor === marks.anchor ? marks : { ids, anchor, base: base2 };
+  };
+  var dragGroup = (marks, layout, pressed, busy) => {
+    if (!marks.ids.includes(pressed)) return [pressed];
+    return inOrder(layout, new Set(marks.ids.filter((id) => id === pressed || !busy.has(id))));
+  };
+
   // src/panel/ui/selection.ts
   var createSelection = (container, options) => {
     let selected = null;
     let layout = [];
     let refocus = false;
+    let marks = NO_MARKS;
     const cardOf = (id) => container.querySelector(`.kb-card[data-task-id="${CSS.escape(id)}"]`);
-    const mark = () => {
+    const paint2 = () => {
       for (const el7 of container.querySelectorAll(".kb-card.is-selected")) el7.classList.remove("is-selected");
       if (selected !== null) cardOf(selected.id)?.classList.add("is-selected");
+      for (const el7 of container.querySelectorAll(".kb-card.is-marked")) el7.classList.remove("is-marked");
+      for (const id of marks.ids) cardOf(id)?.classList.add("is-marked");
     };
     const focus = (scroll) => {
       if (selected === null || !options.canFocus()) return;
@@ -15595,7 +15701,7 @@ ${listKey(projects)}`;
       const id = e.target.dataset.taskId;
       if (id === void 0 || id === selected?.id) return;
       selected = locate(layout, id) ?? { id, column: 0, row: 0 };
-      mark();
+      paint2();
     };
     container.addEventListener("focusin", onFocusIn);
     return {
@@ -15603,7 +15709,7 @@ ${listKey(projects)}`;
       set: (id, opts) => {
         if (id === null) selected = null;
         else selected = locate(layout, id) ?? { id, column: selected?.column ?? 0, row: selected?.row ?? 0 };
-        mark();
+        paint2();
         if (opts?.focus === true) focus(true);
       },
       layout: () => layout,
@@ -15611,7 +15717,7 @@ ${listKey(projects)}`;
         const next = nextSelected(layout, selected, direction);
         if (next === null) return false;
         selected = next;
-        mark();
+        paint2();
         focus(true);
         return true;
       },
@@ -15621,11 +15727,24 @@ ${listKey(projects)}`;
       rendered: (next) => {
         layout = next;
         selected = keepSelected(layout, selected);
-        mark();
+        marks = keepMarks(marks, layout);
+        paint2();
         if (refocus) focus(false);
         refocus = false;
       },
       focusOnBoard,
+      marked: () => marks.ids,
+      mark: (id, how) => {
+        marks = clickMarks(marks, layout, id, how, selected?.id ?? null);
+        selected = locate(layout, id) ?? selected;
+        paint2();
+      },
+      clearMarks: () => {
+        if (marks === NO_MARKS) return;
+        marks = NO_MARKS;
+        paint2();
+      },
+      group: (id, busy) => dragGroup(marks, layout, id, busy),
       dispose: () => container.removeEventListener("focusin", onFocusIn)
     };
   };
@@ -15688,7 +15807,13 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
 .kb-card:focus-visible { outline: 2px solid var(--oc-focus); outline-offset: 1px; }
 /* The Selected card (keyboard navigation): marked also while focus is elsewhere, e.g. in the search field. */
 .kb-card.is-selected { border-color: var(--oc-focus); }
+/* A Marked card (Mod/Shift+click): moved together with the other Marked cards. */
+.kb-card.is-marked { border-color: var(--oc-primary); box-shadow: inset 0 0 0 1px var(--oc-primary);
+  background: color-mix(in srgb, var(--oc-primary) 10%, var(--oc-elevated)); }
 .kb-card.is-dragging { opacity: 0.4; }
+.kb-ghost-count { position: absolute; top: -0.5rem; right: -0.5rem; min-width: 1.5rem; height: 1.5rem; padding: 0 0.375rem;
+  border-radius: 999px; display: flex; align-items: center; justify-content: center; font-size: 0.8em; font-weight: 600;
+  background: var(--oc-primary); color: var(--oc-bg); }
 .kb-card.is-busy { opacity: 0.6; cursor: progress; }
 .kb-card.is-archived { opacity: 0.55; border-style: dashed; }
 .kb-column-tools { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.375rem 0.5rem;
@@ -15959,7 +16084,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
   var archived = () => state.archivedFor === state.projectId ? state.archived : /* @__PURE__ */ new Set();
   var archivedTasks = () => state.archivedTasksFor === state.projectId ? state.archivedTasks : /* @__PURE__ */ new Map();
   var archiveSync = createStorageSync();
-  var order = () => state.orderFor === state.projectId ? state.order : [];
+  var order2 = () => state.orderFor === state.projectId ? state.order : [];
   var orderSync = createStorageSync();
   var sourceView = () => {
     if (state.config === null) return null;
@@ -16164,7 +16289,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     const archivedCount = archivedShown(tasks, marks);
     if (archivedCount === 0) state.showArchived = false;
     const model = groupTasks(
-      applyOrder(tasks, order()),
+      applyOrder(tasks, order2()),
       state.sessions,
       starter.isStarting,
       state.hideSubtasks,
@@ -16531,17 +16656,17 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     const id = state.projectId;
     if (id === null || state.tasks === null) return;
     const ids = [...state.columns].filter(([, c]) => c === column).map(([t]) => t);
-    const next = pruneOrder(reorder(order(), ids, taskId, before), state.tasks, state.unlisted);
+    const next = pruneOrder(reorder(order2(), ids, taskId, before), state.tasks, state.unlisted);
     setOrder(id, next);
     draw();
   };
   var forgetOrdered = (ids) => {
     const id = state.projectId;
-    if (id !== null && ids.some((d) => order().includes(d))) setOrder(id, forgetInOrder(order(), ids));
+    if (id !== null && ids.some((d) => order2().includes(d))) setOrder(id, forgetInOrder(order2(), ids));
   };
   var renameOrdered = (from, to) => {
     const id = state.projectId;
-    if (id !== null && order().includes(from)) setOrder(id, renameInOrder(order(), from, to));
+    if (id !== null && order2().includes(from)) setOrder(id, renameInOrder(order2(), from, to));
   };
   var writeArchivedTasks = (projectId, marks, tasks) => {
     const n = archiveSync.edit();
@@ -16728,6 +16853,11 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     });
     const moveSelected = (by) => () => {
       if (focusInTextField()) return false;
+      const marked = selection2.marked().filter((m) => state.columns.has(m));
+      if (marked.length > 0) {
+        editor.moveGroups(groupSteps(marked, state.columns, by));
+        return true;
+      }
       const id = selection2.get();
       const from = id === null ? void 0 : state.columns.get(id);
       if (id === null || from === void 0) return false;
@@ -16735,6 +16865,9 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
       if (to !== void 0) editor.moveCard(id, to.id);
       return true;
     };
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && !e.defaultPrevented && shortcuts.context() === "board") selection2.clearMarks();
+    });
     shortcuts.on("board.moveCardPrev", moveSelected(-1));
     shortcuts.on("board.moveCardNext", moveSelected(1));
     shortcuts.on("board.toggleSubtasks", () => {
@@ -16896,7 +17029,8 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
           showPending();
         }
       },
-      onStart: (task) => void starter.onStart(task),
+      onStart: (task) => starter.onStart(task),
+      marks: selection2,
       lists,
       beforeMove: (task) => starter.leaveQueue(task.id),
       afterSetState: detach,

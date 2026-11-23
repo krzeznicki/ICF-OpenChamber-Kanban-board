@@ -2,7 +2,7 @@
 // Only Backlog, Ready and Done are written to the repo; In Progress starts an agent and Review
 // comes from the agent's session alone.
 import type { Task, TaskState } from '../core/types.ts';
-import type { Column } from './columns.ts';
+import { COLUMNS, type Column } from './columns.ts';
 
 export type Move =
   | { kind: 'setState'; state: TaskState }
@@ -28,6 +28,36 @@ export const planMove = (task: Task, from: Column, to: Column, openChildren: num
       return { kind: 'close', askChildren: openChildren > 0 };
   }
 };
+
+/** A group move planned: the moves to make in order, and the refusals to say (each once). */
+export type GroupMove = { moves: { task: Task; from: Column; move: Exclude<Move, { kind: 'none' }> }[]; reasons: string[] };
+
+/**
+ * Several Marked cards (marks.ts) dropped on `to`: each is planned from its own column. Cards
+ * already in `to` are skipped without a word; every other refusal is said once, not once per card.
+ */
+export const planGroupMove = (cards: readonly { task: Task; from: Column }[], to: Column, tasks: readonly Task[]): GroupMove => {
+  const plan: GroupMove = { moves: [], reasons: [] };
+  for (const { task, from } of cards) {
+    if (from === to) continue;
+    const move = planMove(task, from, to, openChildren(task, tasks));
+    if (move.kind !== 'none') plan.moves.push({ task, from, move });
+    else if (!plan.reasons.includes(move.reason)) plan.reasons.push(move.reason);
+  }
+  return plan;
+};
+
+/**
+ * Mod+Shift+←/→ (by -1/1) on Marked cards: each goes one column on from its own, as one group per
+ * column, in Board order. Planned before any move, so a card drawn in its new column at once never
+ * moves twice; cards not on the board, and those already in the first or last column, stay.
+ */
+export const groupSteps = (ids: readonly string[], columns: ReadonlyMap<string, Column>, by: -1 | 1): { ids: string[]; to: Column }[] =>
+  COLUMNS.flatMap(({ id: column }, i) => {
+    const next = COLUMNS[i + by];
+    const here = ids.filter((m) => columns.get(m) === column);
+    return next !== undefined && here.length > 0 ? [{ ids: here, to: next.id }] : [];
+  });
 
 /** Listed sub-tasks of `task` that are not done yet. */
 export const openChildren = (task: Task, tasks: readonly Task[]): number =>
