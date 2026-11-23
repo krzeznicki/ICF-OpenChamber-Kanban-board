@@ -7,7 +7,7 @@ Dropping a card on In Progress starts an agent session for the task. The session
 There are two ways, and the board picks one for you:
 
 - **Through OpenChamber (path A).** When the card has no model, thinking level or agent set, anywhere in its settings, the board calls OpenChamber's own start. OpenChamber creates the worktree and the session runs with whatever model, thinking level and agent your chat composer has selected. The pickers call this **Default — OpenChamber's current selection**.
-- **Through the extension (path B).** When any of model, thinking level or agent is set, and for every card started from the queue, the extension's service starts the session itself. For a new worktree it runs `git worktree add -b icf/<slug> <parent>/<repo>-worktrees/<slug>`, next to your project folder. If the session fails to start, the worktree and branch are removed again.
+- **Through the extension (path B).** When any of model, thinking level or agent is set, and for queued cards started while the board is closed, the extension's service starts the session itself. For a new worktree it runs `git worktree add -b icf/<slug> <parent>/<repo>-worktrees/<slug>`, next to your project folder. If the session fails to start, the worktree and branch are removed again.
 
 The first message tells the agent which task to work on, the preset's instructions, and how to update the task with the `task-board` CLI. The agent always passes `--dir <project root>`, because its worktree has no copy of the tracker the board reads.
 
@@ -15,7 +15,7 @@ Worktrees and branches of sessions that started are never merged or removed for 
 
 ## Presets
 
-A preset is a block of instructions added to the agent's first message. There are seven built-in presets:
+A preset is a block of instructions added to the agent's first message. There are seven built-in presets. The table gives each one's goal; how the agent gets there depends on the preset set below.
 
 | Preset | What the agent does |
 |---|---|
@@ -32,14 +32,14 @@ A preset is a block of instructions added to the agent's first message. There ar
 Each preset exists in three sets, which differ in how the agent does the work:
 
 - **Matt Pocock's skills**: the presets run [Matt Pocock's skills](https://github.com/mattpocock/skills), for example `/grill-with-docs`, `/to-spec` and `/to-tickets` for Plan, `/implement` with `/tdd` and `/code-review` for Implement, and `/diagnosing-bugs` for Diagnose.
-- **Superpowers**: the presets run [Superpowers](https://github.com/obra/superpowers) skills, for example `brainstorming` and `writing-plans` for Plan, `test-driven-development` for Implement, `subagent-driven-development` for orchestration and `systematic-debugging` for Diagnose.
+- **Superpowers**: the presets run [Superpowers](https://github.com/obra/superpowers) skills, for example `brainstorming` and `writing-plans` for Plan, `test-driven-development` for Implement, `subagent-driven-development` for orchestration and `systematic-debugging` for Diagnose. Triage has no Superpowers skill and uses the plain text.
 - **Plain**: the instructions alone, no skills.
 
 Without a choice, the board uses Matt Pocock's skills if all of them are installed, otherwise Superpowers if all of its skills are, otherwise Plain. Pick a set in **Settings → Global → Preset set**, or per project in **Settings → This project**. You can choose a set whose skills are missing; Settings names the missing ones.
 
 The board looks for skills (`<name>/SKILL.md`) in `~/.config/opencode/skills`, `~/.claude/skills`, `~/.agents/skills`, the project's `.opencode/skills` and `.claude/skills`, and the Superpowers plugin in OpenCode's cache. The first message lists the path of each SKILL.md the preset uses, for agents that cannot load a skill by name.
 
-Every skills preset tells the agent where the tracker is, never to run a setup skill such as `/setup-matt-pocock-skills`, and to make every tracker change through the `task-board` CLI. The Superpowers presets also tell the agent to work in the worktree the board created and not to merge, push or open a pull request; that stays your decision.
+Every preset that runs skills tells the agent where the tracker is, never to run a setup skill such as `/setup-matt-pocock-skills`, and to make every tracker change through the `task-board` CLI. The Superpowers presets also tell the agent to work in the worktree the board created and not to merge, push or open a pull request; that stays your decision.
 
 ### Editing presets
 

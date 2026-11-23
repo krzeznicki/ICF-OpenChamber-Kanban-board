@@ -17,7 +17,7 @@ Production is installed from `main`. To try a branch without touching it, build 
 
 1. Check out the branch.
 2. Run `npm run build:test`. It builds **Kanban TEST** (id `icf-kanban-test`) into `~/openchamber-extensions/icf-kanban-test`. Use `--out <dir>` or `KANBAN_TEST_OUT` for another folder. The folder is emptied on every build; the script refuses a folder inside the repository, or one with files it did not write.
-3. Install it once: in **Settings → Extensions**, install from that folder. Later builds reload it.
+3. Install it once: in **Settings → Extensions**, install from that folder, or open `openchamber://extensions/install?path=<the output folder>` in a chat. Later builds reload it.
 4. Test it. The TEST build keeps its data in `~/.icf-kanban-test/`, makes `icf-test/*` branches, ships its skills as `kanban-test-*` and shows a **TEST** badge, so production keeps running next to it.
 5. Open a pull request to `main` with a `version` bump and the rebuilt bundles from `npm run check`. Users get the update from **Settings → Extensions**.
 

@@ -10,7 +10,7 @@ Requires OpenChamber 2.7.1 or later. MIT licence.
 
 - **Local tasks next to GitHub Issues.** A project can keep private tasks in `.scratch/` and shared ones on GitHub, and see both on one board with a source switcher. **Publish to GitHub** turns a local task into an issue (sub-tasks become sub-issues). The board keeps no task data of its own; the tracker in your repository is the only copy.
 - **Drag a card, an agent starts.** Dropping a card on In Progress starts a session in a new git worktree, with the card's preset, model, thinking level and agent. When the agent finishes or waits for you, the card moves to Review. A per-project limit queues the rest, and the queue keeps going while the board is closed.
-- **Matt Pocock's skills or Superpowers.** Presets (Plan, Implement, Diagnose, Break down and orchestrate, and more) come in three sets: one for [Matt Pocock's skills](https://github.com/mattpocock/skills), one for [Superpowers](https://github.com/obra/superpowers), and one with plain instructions. The board picks the set whose skills you have installed; you can switch and edit any of them.
+- **Matt Pocock's skills or Superpowers.** Presets (Plan, Implement, Diagnose, Break down and orchestrate, and more) come in three sets: one for [Matt Pocock's skills](https://github.com/mattpocock/skills), one for [Superpowers](https://github.com/obra/superpowers), and one with plain instructions. By default the board uses the first set whose skills are all installed, in that order; you can switch and edit any of them.
 - **Agents use the board too.** Four agent skills and a `task-board` CLI let agents create, claim and close tasks in the same format. A feature with sub-tasks gets one orchestrator session that hands the sub-tasks to subagents.
 
 Also:
@@ -25,10 +25,10 @@ Also:
 The repository is private for now, so install from a local clone:
 
 1. Clone this repository somewhere outside the projects you will use the board on.
-2. In OpenChamber, open **Settings → Extensions** and install from that folder.
+2. In OpenChamber, open **Settings → Extensions** and install from that folder. Inside a chat, a link with the folder's absolute path shows an install button: `openchamber://extensions/install?path=/absolute/path/to/ICF-OpenChamber-Kanban-board`
 3. Approve the permissions OpenChamber lists. [docs/permissions.md](docs/permissions.md) explains each one.
 
-Once the repository is public, you can install it from **Settings → Extensions** with the URL `https://github.com/krzeznicki/ICF-OpenChamber-Kanban-board`, and OpenChamber will offer updates.
+Once the repository is public, you can install it from **Settings → Extensions** with the URL `https://github.com/krzeznicki/ICF-OpenChamber-Kanban-board` (or the link `openchamber://extensions/install?url=https://github.com/krzeznicki/ICF-OpenChamber-Kanban-board`), and OpenChamber will offer updates.
 
 The board opens from the **Kanban Board** icon in the side rail, or full screen from the sidebar's Extension pages menu.
 
@@ -50,7 +50,7 @@ The board opens from the **Kanban Board** icon in the side rail, or full screen 
 | Review | that session finished, or waits for a permission or an answer | the same |
 | Done | `Status: resolved` | issue closed |
 
-In Progress and Review are never written to the repository. Moving a card between the other columns changes one line of the task file, or one label on GitHub.
+In Progress and Review are never written to the repository ([full rules](docs/board.md)). Moving a card between the other columns changes one line of the task file, or swaps a label (or closes the issue) on GitHub.
 
 ## Documentation
 

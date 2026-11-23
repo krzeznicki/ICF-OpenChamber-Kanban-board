@@ -8,7 +8,9 @@ The board has five columns: Backlog, Ready, In Progress, Review and Done. Backlo
 | Ready | `Status: ready-for-agent` | label `ready-for-agent` | sets `ready-for-agent` |
 | In Progress | a linked session is running, or the card is queued or starting | the same | starts an agent, or queues it |
 | Review | the linked session finished, or waits for a permission or an answer | the same | not allowed |
-| Done | `Status: resolved` | issue closed (shown for 30 days) | closes the task |
+| Done | `Status: resolved` | issue closed | closes the task |
+
+Done shows tasks finished in the last 30 days.
 
 ## Trackers and sources
 
@@ -19,7 +21,7 @@ The board reads `docs/agents/issue-tracker.md`, the file Matt Pocock's `setup-ma
 
 An existing `issue-tracker.md` is never overwritten. If the project already uses Matt's skills, the board reads their files as they are, including custom label names in `docs/agents/triage-labels.md`.
 
-A project can have several sources, for example private local tasks and public GitHub Issues. One of them is the primary source, where new tasks go unless you pick another. The others are listed under `## Additional sources` in `issue-tracker.md`. A sub-task, its parent and its blockers always live in the same source, so a public issue never points at a private file. Add, remove and reorder sources in [Settings → Sources](settings.md#sources).
+A project can have several sources, for example private local tasks and public GitHub Issues. One of them is the primary source, where new tasks go unless you pick another. The others are listed under `## Additional sources` in `issue-tracker.md`. A sub-task, its parent and its blockers always live in the same source, so a public issue never points at a private file. Add and remove sources, or change the primary one, in [Settings → Sources](settings.md#sources).
 
 With several sources, a switcher next to the project switcher shows **All**, **Local** or **GitHub**, and each card in All carries a source badge. If one source fails to load (for example `gh` is logged out), the others still show, with a banner and **Try again** for the failing one.
 
@@ -48,7 +50,7 @@ Dropping a card onto the middle of another card makes it that card's sub-task, a
 
 Locally a task without a parent is a feature (`spec.md`), and a task with a parent is a ticket in that feature. Blockers can only be tickets of the same feature. On GitHub any open issue can be a parent or a blocker.
 
-If some sub-tasks fail to be created, the form names them and the reason; the main task stays.
+If some sub-tasks fail to be created, the form names them and the reason; the main task stays. Closing a form you have filled in asks **Discard this task?** first.
 
 ### Type and state from your Small Model
 
@@ -60,7 +62,7 @@ Tasks made elsewhere (by the CLI, an agent or on GitHub) without a type get one 
 
 A click on a card, or Enter on the selected card, opens the task. From top to bottom:
 
-- **Header**: title, id, state and type badges. **Open session** opens the task's agent session if it has one that is not archived. **Edit** turns the task into a title and description form. **Delete** removes the task for good after a confirm.
+- **Header**: title, id, state and type badges. **Open session** opens the task's agent session if it has one that is not archived; otherwise the header says **Session archived** or **Session not listed in OpenChamber**. **Edit** turns the task into a title and description form. **Delete** removes the task for good after a confirm.
 - **State, Type, Parent and Move to**: change the state, type or parent, or move the card to a column. On a local task, **Publish to GitHub** sits at the end of this row. A GitHub task shows **Open on GitHub ↗** under its title.
 - **Summary**: the card's summary, or a **Summarise** button.
 - **Task**: the description as formatted Markdown. Raw HTML is shown as text, images are shown as links, and only `http` and `https` links open.

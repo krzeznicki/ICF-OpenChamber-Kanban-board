@@ -1,6 +1,6 @@
 # Keyboard shortcuts
 
-⌘ is Ctrl outside macOS. Press `?` on the board to see the bindings currently in use; button tooltips show them too. The ⌘ shortcuts can be rebound in **Settings → Global → Keyboard shortcuts**; a new binding must use ⌘ and must not clash with another one in the same place. The same key can mean different things on the board, in an open task and in Add task.
+⌘ is Ctrl outside macOS. Press `?` on the board to see the shortcuts currently in use; button tooltips show them too. The ⌘ shortcuts can be given other keys in **Settings → Global → Keyboard shortcuts**; the arrows, Enter, Esc and `?` are fixed. A new key must use ⌘ and must not be taken in the same Shortcut context. The contexts are the Board, an Open task and Add task, and the same key can do different things in each.
 
 ## Board
 
@@ -40,3 +40,7 @@ In the search field, ↓ selects the first matching card.
 | ⌘Enter | Create the task |
 
 In text fields, ⌘A, the arrows and ⌘⌫ keep their usual meaning.
+
+## In the chat
+
+`/kanban` in OpenChamber's chat composer opens the board panel.
