@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.1
 
 - **Marked cards**: Cmd+click (Ctrl+click elsewhere) marks a card, Shift+click marks a range across columns, as in a file list. Dragging a marked card moves every marked card to the column (a count on the dragged card); Mod+Shift+←/→ moves them too. Refusals are said once, close and start questions come one at a time, starts respect the agent limit. A plain click, a click on the background or Escape clears the marks (`marks.ts`, `GLOSSARY.md`).
 
