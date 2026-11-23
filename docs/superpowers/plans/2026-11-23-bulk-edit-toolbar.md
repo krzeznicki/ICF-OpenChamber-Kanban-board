@@ -110,4 +110,4 @@ Consumes Task 2 controller/model, Task 1 API adapter and existing SDK controls.
 - [x] Verify layout at narrow panel and full-page widths: footer visible during scroll, cards unobscured, controls wrap; verify keyboard and SDK popup clicks do not clear marks.
 - [x] Run `npm run typecheck`, then full `npm test` once, then `npm run build`. Review generated diffs against repository conventions.
 - [x] Invoke `code-review` against starting commit; resolve findings with targeted red-green regressions and rerun affected checks.
-- [ ] Commit completed changes, mark each tracker sub-task done, then parent done. Report what changed and actual verification results.
+- [x] Commit completed changes, mark each tracker sub-task done, then parent done. Report what changed and actual verification results.
