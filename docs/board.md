@@ -16,6 +16,9 @@ Done shows tasks finished in the last 30 days.
 
 The board reads `docs/agents/issue-tracker.md`, the file Matt Pocock's `setup-matt-pocock-skills` writes. When a project has none, the board offers to write it:
 
+![The setup wizard](screenshots/wizard.png)
+
+
 - **Local** keeps tasks as Markdown in the repository. A feature is `.scratch/<feature>/spec.md` and its tickets are `.scratch/<feature>/issues/NN-slug.md`. Each file carries `**Status:**`, `**Blocked by:**` and an optional `**Type:**` line.
 - **GitHub** uses the repository's Issues. It needs a github.com remote and `gh` 2.94 or later, logged in. The board creates the state labels and the `bug` and `enhancement` labels the repository lacks. Parents are issues with sub-issues, and blockers are GitHub issue dependencies.
 
@@ -29,7 +32,7 @@ With several sources, a switcher next to the project switcher shows **All**, **L
 
 ## Types
 
-The default types are `enhancement`, `bug`, `chore` and `research`; edit the list in Settings. Locally a type is the `**Type:**` line; on GitHub it is the `bug` or `enhancement` label, or a `type:<name>` label for the others. A task's type picks its default preset when it starts (see [Agents](agents.md#which-preset-a-card-gets)).
+The default types are `enhancement`, `bug`, `chore` and `research`; edit the list in Settings. Locally a type is the `**Type:**` line; on GitHub it is the `bug` or `enhancement` label, or a `type:<name>` label for the others. A task's type picks its default preset when it starts (see [Agents](sessions.md#which-preset-a-card-gets)).
 
 ## Moving cards
 
@@ -61,6 +64,9 @@ Tasks made elsewhere (by the CLI, an agent or on GitHub) without a type get one 
 ## The task modal
 
 A click on a card, or Enter on the selected card, opens the task. From top to bottom:
+
+![The task modal](screenshots/card-detail.png)
+
 
 - **Header**: title, id, state and type badges. **Open session** opens the task's agent session if it has one that is not archived; otherwise the header says **Session archived** or **Session not listed in OpenChamber**. **Edit** turns the task into a title and description form. **Delete** removes the task for good after a confirm.
 - **State, Type, Parent and Move to**: change the state, type or parent, or move the card to a column. On a local task, **Publish to GitHub** sits at the end of this row. A GitHub task shows **Open on GitHub ↗** under its title.

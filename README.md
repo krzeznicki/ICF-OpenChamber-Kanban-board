@@ -4,7 +4,7 @@ Kanban Board is an [OpenChamber](https://github.com/openchamber/openchamber) ext
 
 Requires OpenChamber 2.7.1 or later. MIT licence.
 
-<!-- Screenshot of the board goes here once taken: docs/screenshots/board.png -->
+![The board with cards in every column](docs/screenshots/board.png)
 
 ## Highlights
 
@@ -30,7 +30,7 @@ The repository is private for now, so install from a local clone:
 
 Once the repository is public, you can install it from **Settings → Extensions** with the URL `https://github.com/krzeznicki/ICF-OpenChamber-Kanban-board` (or the link `openchamber://extensions/install?url=https://github.com/krzeznicki/ICF-OpenChamber-Kanban-board`), and OpenChamber will offer updates.
 
-The board opens from the **Kanban Board** icon in the side rail, or full screen from the sidebar's Extension pages menu.
+The board opens from the **Kanban Board** icon in the side rail (<img src="docs/screenshots/rail-icon.png" alt="Kanban Board icon" width="24" align="center">), or full screen from the sidebar's Extension pages menu.
 
 ## Quick start
 
@@ -55,7 +55,7 @@ In Progress and Review are never written to the repository ([full rules](docs/bo
 ## Documentation
 
 - [The board](docs/board.md): cards, the task modal, sub-tasks, sources, search, archiving and summaries.
-- [Agents](docs/agents.md): how sessions start, presets and preset sets, the queue, known limits.
+- [Agents](docs/sessions.md): how sessions start, presets and preset sets, the queue, known limits.
 - [Settings](docs/settings.md): the three settings layers, sources, model and agent pickers, defaults.
 - [Keyboard shortcuts](docs/keyboard.md)
 - [Agent skills and the `task-board` CLI](docs/cli.md)
@@ -67,7 +67,7 @@ In Progress and Review are never written to the repository ([full rules](docs/bo
 
 - More task sources: Linear, Jira, Asana and ClickUp, each connected through the tool's own MCP server or official CLI ([ADR 0001](docs/adr/0001-several-sources-one-primary.md)).
 - A public repository, so the board installs and updates from its git URL.
-- Screenshots, and the manual checks listed in [docs/development.md](docs/development.md) before the first public release.
+- The manual checks listed in [docs/development.md](docs/development.md) before the first public release.
 
 ## Development
 

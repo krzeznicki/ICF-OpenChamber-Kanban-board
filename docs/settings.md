@@ -8,6 +8,8 @@ Settings come in three layers. Each layer overrides the one before it, field by 
 
 All three are stored per user in OpenChamber, not in the repository.
 
+![The Settings sheet](screenshots/settings.png)
+
 | Setting | Default |
 |---|---|
 | Start at once | on |
@@ -33,7 +35,7 @@ These three are picked from lists wherever start options appear. The lists come 
 - **Thinking** lists the chosen model's thinking levels (OpenCode's variants, such as low, high or max). It is disabled until a model is set or inherited.
 - **Agent** lists OpenCode's session agents, such as Build and Plan.
 
-The first entry, **Default (…)**, means "not set here" and names the value it falls back to; with nothing to inherit it reads **Default — OpenChamber's current selection**. Setting any of the three makes the extension start the session itself instead of OpenChamber (see [Agents](agents.md#how-a-session-starts)). To use a model for one project only, set it in **This project**.
+The first entry, **Default (…)**, means "not set here" and names the value it falls back to; with nothing to inherit it reads **Default — OpenChamber's current selection**. Setting any of the three makes the extension start the session itself instead of OpenChamber (see [Agents](sessions.md#how-a-session-starts)). To use a model for one project only, set it in **This project**.
 
 A layer that sets a model also owns the thinking level, so a level is never carried over to a different model. If a card's level is not offered by the model in force when it starts, the session starts without it and a notice says so. A value that is no longer offered still shows, marked "not in the list".
 

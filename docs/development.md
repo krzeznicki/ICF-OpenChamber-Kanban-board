@@ -52,12 +52,6 @@ Each check needs the extension installed in OpenChamber. None has been done yet.
 13. Search and filters in the rail and the page: a sub-task match shows its parent, Escape clears, the completion list works with the arrows, Enter and Tab, and dragging still works while filtered.
 14. The rail panel beside a chat: a chat started from a card opens that card; an orchestrator chat shows the list; a chat started by hand shows the banner; a chat in a worktree shows its own project.
 
-## Screenshots to take
+## Screenshots
 
-Saved in [`docs/screenshots/`](screenshots/), with the extension running:
-
-- [ ] `board.png`: the board with cards in every column (used in the README)
-- [ ] `rail-icon.png`: the **Kanban Board** icon in the side rail
-- [ ] `card-detail.png`: the task modal
-- [ ] `settings.png`: the Settings sheet
-- [ ] `wizard.png`: the setup wizard
+The images in [`docs/screenshots/`](screenshots/) show a demo project with made-up tasks. Retake them with the extension running when the UI changes: `board.png` (the board, in the README), `card-detail.png`, `settings.png`, `wizard.png` and `rail-icon.png`.
