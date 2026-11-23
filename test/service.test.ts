@@ -6,6 +6,8 @@ import { isAbsolute, join } from 'node:path';
 import { withAdditionalSources, writeConfig } from '../src/core/config.ts';
 import type { Exec, Task } from '../src/core/types.ts';
 import { handle } from '../src/service/routes.ts';
+import { planBulk, runBulk } from '../src/panel/bulkEdit.ts';
+import type { TaskState } from '../src/core/types.ts';
 
 type T = { after: (fn: () => Promise<void>) => void };
 type Err = { error: { code: string; message: string } };
@@ -77,6 +79,39 @@ test('close with children closes the feature and its tickets', async (t) => {
   const tasks = (closed.json as { tasks: Task[] }).tasks;
   assert.equal(tasks.length, 2);
   assert.ok(tasks.every((x) => x.state === 'done'));
+});
+
+test('bulk state/type writes round trip without closing unselected children or dropping links and queue', async (t) => {
+  const directory = await local(t);
+  const files = await tmp(t);
+  const d = { exec: noExec, linksFile: join(files, 'links.json'), queueFile: join(files, 'queue.json') };
+  const call = async (path: string, body: object): Promise<Task> => {
+    const result = await handle('POST', path, { directory, ...body }, d);
+    if (result.status !== 200) throw new Error(JSON.stringify(result.json));
+    return (result.json as { task: Task }).task;
+  };
+  const parent = await call('/tasks/create', { input: { title: 'Feature', type: 'enhancement' } });
+  const child = await call('/tasks/create', { input: { title: 'Child', parentId: parent.id } });
+  assert.equal((await handle('POST', '/links/add', { directory, taskId: parent.id, sessionId: 'ses_bulk' }, d)).status, 200);
+  assert.equal((await handle('POST', '/queue/add', { directory, entry: { taskId: parent.id, title: 'Feature', prompt: 'p', location: 'project' } }, d)).status, 200);
+  let refuseState = true;
+  const api = {
+    get: (id: string) => call('/tasks/get', { id }),
+    setType: (id: string, type: string) => call('/tasks/type', { id, type }),
+    setState: (id: string, state: TaskState) => call('/tasks/state', { id, state: refuseState ? 'invalid' : state }),
+  };
+  const plan = planBulk([parent, child], [parent.id], { type: 'bug', state: 'done', withChildren: false });
+  const failed = await runBulk(plan, api, () => {});
+  assert.deepEqual(failed.failures.map(f => f.field), ['state']);
+  assert.equal((await api.get(parent.id)).type, 'bug');
+  refuseState = false;
+  assert.equal((await runBulk(plan, api, () => {}, [parent.id])).failures.length, 0);
+  assert.equal((await api.get(parent.id)).state, 'done');
+  assert.equal((await api.get(child.id)).state, 'needs-triage');
+  const links = (await handle('POST', '/links/list', { directory }, d)).json as { links: { taskId: string }[] };
+  const queue = (await handle('POST', '/queue/list', { directory }, d)).json as { queue: { taskId: string }[] };
+  assert.deepEqual(links.links.map(l => l.taskId), [parent.id]);
+  assert.deepEqual(queue.queue.map(q => q.taskId), [parent.id]);
 });
 
 test('relative or missing directory is 400 INVALID', async (t) => {
