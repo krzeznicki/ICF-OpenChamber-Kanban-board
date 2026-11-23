@@ -1,4 +1,4 @@
-# Kanban Board
+# Kanban Board for OpenChamber
 
 Kanban Board is an [OpenChamber](https://github.com/openchamber/openchamber) extension that shows your project's tasks as a board and starts agent sessions on them. The tasks stay where they already are: Markdown files in the repository's `.scratch/` folder, GitHub Issues, or both. The board uses the task format of Matt Pocock's agent skills, so you, the board and your agents all edit the same files.
 
