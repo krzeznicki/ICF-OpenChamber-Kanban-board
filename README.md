@@ -30,13 +30,19 @@ Also:
 
 ## Install
 
-The repository is private for now, so install from a local clone:
+In OpenChamber, open **Settings → Extensions**, choose to install from a git URL and enter:
 
-1. Clone this repository somewhere outside the projects you will use the board on.
-2. In OpenChamber, open **Settings → Extensions** and install from that folder. Inside a chat, a link with the folder's absolute path shows an install button: `openchamber://extensions/install?path=/absolute/path/to/ICF-OpenChamber-Kanban-board`
-3. Approve the permissions OpenChamber lists. [docs/permissions.md](docs/permissions.md) explains each one.
+```
+https://github.com/krzeznicki/ICF-OpenChamber-Kanban-board
+```
 
-Once the repository is public, you can install it from **Settings → Extensions** with the URL `https://github.com/krzeznicki/ICF-OpenChamber-Kanban-board` (or the link `openchamber://extensions/install?url=https://github.com/krzeznicki/ICF-OpenChamber-Kanban-board`), and OpenChamber will offer updates.
+Inside an OpenChamber chat, this link shows an install button instead:
+
+```
+openchamber://extensions/install?url=https://github.com/krzeznicki/ICF-OpenChamber-Kanban-board
+```
+
+OpenChamber asks you to approve the extension's permissions; [docs/permissions.md](docs/permissions.md) explains each one. It offers an update when a new version is released. Nothing is built on install, because the built files are committed.
 
 The board opens from the **Kanban Board** icon in the side rail (<img src="docs/screenshots/rail-icon.png" alt="Kanban Board icon" width="24" align="center">), or full screen from the sidebar's Extension pages menu.
 
@@ -74,8 +80,6 @@ In Progress and Review are never written to the repository ([full rules](docs/bo
 ## Roadmap
 
 - More task sources: Linear, Jira, Asana and ClickUp, each connected through the tool's own MCP server or official CLI ([ADR 0001](docs/adr/0001-several-sources-one-primary.md)).
-- A public repository, so the board installs and updates from its git URL.
-- The manual checks listed in [docs/development.md](docs/development.md) before the first public release.
 
 ## Development
 

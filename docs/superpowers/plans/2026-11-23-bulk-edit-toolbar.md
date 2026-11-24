@@ -16,7 +16,7 @@
 - Existing six TASK_STATES; reuse taskTypes for configured and observed types.
 - No changes outside explicit fields. No new dependencies unless existing test infrastructure proves insufficient.
 - Red then green, one behavior at a time at approved public seams; typecheck regularly.
-- Tracker writes use Kanban TEST CLI at `/Users/kamilagents/projects/ICF-OpenChamber-Kanban-board`, never this worktree.
+- Tracker writes use Kanban TEST CLI at `<project root>`, never this worktree.
 - Review against starting commit `b2d1240830cb43ce65a6c9d2817869a5a2d7bb7b`; commit implementation on current branch.
 
 ## Review Focus

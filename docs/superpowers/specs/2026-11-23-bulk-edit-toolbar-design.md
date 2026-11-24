@@ -5,7 +5,7 @@
 Edytować status i typ wielu zaznaczonych kart bez otwierania każdej osobno.
 Uzgodnione podczas grillowania Q1–Q20 i potwierdzone przez użytkownika.
 Źródłowy ticket: `.scratch/pasek-narzedzi-na-dole-do-edycji-zaznaczonych-zadan-jako-gru/spec.md`
-w głównym checkoutcie `/Users/kamilagents/projects/ICF-OpenChamber-Kanban-board`.
+w głównym checkoutcie `<project root>`.
 
 ## Podejścia
 
