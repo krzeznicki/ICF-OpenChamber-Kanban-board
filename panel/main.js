@@ -8,12 +8,12 @@
 
   // src/panel/optimistic.ts
   var createPending = () => {
-    let next = 0;
+    let next2 = 0;
     const writes = /* @__PURE__ */ new Map();
     return {
       /** States a write is about to save; returns the key to settle it with. */
       add: (states) => {
-        const key = next++;
+        const key = next2++;
         writes.set(key, new Map(states));
         return key;
       },
@@ -321,7 +321,7 @@
     const text3 = request.text?.trim().slice(0, GUEST_ATTACH_TEXT_MAX);
     const author = request.author?.trim().slice(0, GUEST_ATTACH_AUTHOR_MAX);
     const kind = request.kind === "pull" ? "pull" : "issue";
-    const next = {
+    const next2 = {
       providerId: request.providerId.trim(),
       id,
       title: title || id,
@@ -329,42 +329,42 @@
       kind
     };
     if (text3) {
-      next.text = text3;
+      next2.text = text3;
     }
     if (author) {
-      next.author = author;
+      next2.author = author;
     }
     if (kind === "pull") {
       const head = clampBranch(request.branches?.head);
       const base2 = clampBranch(request.branches?.base);
       if (head && base2) {
-        next.branches = { head, base: base2 };
+        next2.branches = { head, base: base2 };
       }
     }
     if (isAttachData(request.data)) {
-      next.data = request.data;
+      next2.data = request.data;
     }
-    return next;
+    return next2;
   };
   var clampStartSessionRequest = (request) => {
-    const next = clampAttachRequest(request);
+    const next2 = clampAttachRequest(request);
     if (request.projectId)
-      next.projectId = request.projectId;
+      next2.projectId = request.projectId;
     if (request.navigation)
-      next.navigation = request.navigation;
+      next2.navigation = request.navigation;
     if (request.worktree) {
-      next.worktree = request.worktree;
+      next2.worktree = request.worktree;
     }
-    return next;
+    return next2;
   };
   var clampPromptRequest = (request) => {
-    const next = {
+    const next2 = {
       text: request.text.trim().slice(0, GUEST_COMPOSE_TEXT_MAX)
     };
     if (request.send) {
-      next.send = true;
+      next2.send = true;
     }
-    return next;
+    return next2;
   };
   var clampBadgeCount = (count) => {
     if (count === null || !Number.isFinite(count))
@@ -669,10 +669,10 @@
         return;
       }
       if (message2.type === "file-open") {
-        const next = message2.payload;
-        if (lastFile && sameFileEditorDocument(lastFile, next))
+        const next2 = message2.payload;
+        if (lastFile && sameFileEditorDocument(lastFile, next2))
           return;
-        lastFile = next;
+        lastFile = next2;
         emit(fileOpenListeners, message2.payload);
         return;
       }
@@ -1911,9 +1911,9 @@ ${GUEST_UI_LOOK_CSS}`;
     return node;
   };
   var setText = (node, text3) => {
-    const next = text3 ?? "";
-    if (node.textContent !== next) {
-      node.textContent = next;
+    const next2 = text3 ?? "";
+    if (node.textContent !== next2) {
+      node.textContent = next2;
     }
   };
   var setAttr = (node, name, value) => {
@@ -1973,8 +1973,8 @@ ${GUEST_UI_LOOK_CSS}`;
     node.addEventListener("click", onClick);
     paint2();
     return {
-      update: (next) => {
-        props = { ...props, ...next };
+      update: (next2) => {
+        props = { ...props, ...next2 };
         paint2();
       },
       dispose: () => {
@@ -2021,8 +2021,8 @@ ${GUEST_UI_LOOK_CSS}`;
     input.addEventListener("input", onInput);
     paint2();
     return {
-      update: (next) => {
-        props = { ...props, ...next };
+      update: (next2) => {
+        props = { ...props, ...next2 };
         paint2();
       },
       dispose: () => {
@@ -2106,8 +2106,8 @@ ${GUEST_UI_LOOK_CSS}`;
       input.focus();
     }
     return {
-      update: (next) => {
-        props = { ...props, ...next };
+      update: (next2) => {
+        props = { ...props, ...next2 };
         paint2();
       },
       dispose: () => {
@@ -2121,8 +2121,8 @@ ${GUEST_UI_LOOK_CSS}`;
 
   // node_modules/@openchamber/sdk/dist/ui/navigation.js
   var navigationKey = (event, axis = "vertical") => {
-    const [next, previous] = axis === "vertical" ? ["ArrowDown", "ArrowUp"] : ["ArrowRight", "ArrowLeft"];
-    if (event.key === next || event.ctrlKey && event.key.toLowerCase() === "n")
+    const [next2, previous] = axis === "vertical" ? ["ArrowDown", "ArrowUp"] : ["ArrowRight", "ArrowLeft"];
+    if (event.key === next2 || event.ctrlKey && event.key.toLowerCase() === "n")
       return "next";
     if (event.key === previous || event.ctrlKey && event.key.toLowerCase() === "p")
       return "previous";
@@ -2374,8 +2374,8 @@ ${GUEST_UI_LOOK_CSS}`;
     wrap.addEventListener("focusout", onFocusOut);
     paint2();
     return {
-      update: (next) => {
-        props = { ...props, ...next };
+      update: (next2) => {
+        props = { ...props, ...next2 };
         paint2();
       },
       dispose: () => {
@@ -2421,8 +2421,8 @@ ${GUEST_UI_LOOK_CSS}`;
     node.addEventListener("click", onClick);
     paint2();
     return {
-      update: (next) => {
-        props = { ...props, ...next };
+      update: (next2) => {
+        props = { ...props, ...next2 };
         paint2();
       },
       dispose: () => {
@@ -2471,11 +2471,11 @@ ${GUEST_UI_LOOK_CSS}`;
       if (!step2) {
         return;
       }
-      const next = moveListSelection(props.items, props.activeId, step2);
-      if (next && next !== props.activeId) {
+      const next2 = moveListSelection(props.items, props.activeId, step2);
+      if (next2 && next2 !== props.activeId) {
         event.preventDefault();
-        props.onChange(next);
-        const tab = track.querySelector(`[data-id="${CSS.escape(next)}"]`);
+        props.onChange(next2);
+        const tab = track.querySelector(`[data-id="${CSS.escape(next2)}"]`);
         if (tab instanceof HTMLElement)
           tab.focus();
       }
@@ -2483,8 +2483,8 @@ ${GUEST_UI_LOOK_CSS}`;
     track.addEventListener("keydown", onKeyDown);
     paint2();
     return {
-      update: (next) => {
-        props = { ...props, ...next };
+      update: (next2) => {
+        props = { ...props, ...next2 };
         paint2();
       },
       dispose: () => {
@@ -2509,8 +2509,8 @@ ${GUEST_UI_LOOK_CSS}`;
     };
     paint2();
     return {
-      update: (next) => {
-        props = { ...props, ...next };
+      update: (next2) => {
+        props = { ...props, ...next2 };
         paint2();
       },
       dispose: () => {
@@ -2596,8 +2596,8 @@ ${GUEST_UI_LOOK_CSS}`;
     list2.addEventListener("keydown", onKeyDown);
     paint2();
     return {
-      update: (next) => {
-        props = { ...props, ...next };
+      update: (next2) => {
+        props = { ...props, ...next2 };
         paint2();
       },
       dispose: () => {
@@ -2628,17 +2628,17 @@ ${GUEST_UI_LOOK_CSS}`;
         action = null;
         return;
       }
-      const next = { label: props.action.label, onClick: props.action.onClick };
+      const next2 = { label: props.action.label, onClick: props.action.onClick };
       if (action) {
-        action.update(next);
+        action.update(next2);
       } else {
-        action = mountButton(slot, { ...next, variant: "outline", size: "sm" });
+        action = mountButton(slot, { ...next2, variant: "outline", size: "sm" });
       }
     };
     paint2();
     return {
-      update: (next) => {
-        props = { ...props, ...next };
+      update: (next2) => {
+        props = { ...props, ...next2 };
         paint2();
       },
       dispose: () => {
@@ -2668,8 +2668,8 @@ ${GUEST_UI_LOOK_CSS}`;
     };
     paint2();
     return {
-      update: (next) => {
-        props = { ...props, ...next };
+      update: (next2) => {
+        props = { ...props, ...next2 };
         paint2();
       },
       dispose: () => {
@@ -2703,17 +2703,17 @@ ${GUEST_UI_LOOK_CSS}`;
         action = null;
         return;
       }
-      const next = { label: props.action.label, onClick: props.action.onClick };
+      const next2 = { label: props.action.label, onClick: props.action.onClick };
       if (action) {
-        action.update(next);
+        action.update(next2);
       } else {
-        action = mountButton(slot, { ...next, variant: "outline", size: "xs" });
+        action = mountButton(slot, { ...next2, variant: "outline", size: "xs" });
       }
     };
     paint2();
     return {
-      update: (next) => {
-        props = { ...props, ...next };
+      update: (next2) => {
+        props = { ...props, ...next2 };
         paint2();
       },
       dispose: () => {
@@ -2763,8 +2763,8 @@ ${GUEST_UI_LOOK_CSS}`;
     };
     paint2();
     return {
-      update: (next) => {
-        props = { ...props, ...next };
+      update: (next2) => {
+        props = { ...props, ...next2 };
         paint2();
       },
       dispose: () => {
@@ -2803,19 +2803,19 @@ ${GUEST_UI_LOOK_CSS}`;
   var serializeArchived = (marks) => [...marks].sort((a, b) => a[1] - b[1]).slice(-ARCHIVE_MAX).map(([id, archivedAt]) => ({ id, archivedAt }));
   var archivableIds = (tasks, marks) => tasks.filter((t) => t.state === "done" && !marks.has(t.id)).map((t) => t.id);
   var archiveTasks = (marks, ids, at) => {
-    const next = new Map(marks);
-    for (const id of ids) next.set(id, at);
-    return next;
+    const next2 = new Map(marks);
+    for (const id of ids) next2.set(id, at);
+    return next2;
   };
   var unarchiveTask = (marks, id) => {
-    const next = new Map(marks);
-    next.delete(id);
-    return next;
+    const next2 = new Map(marks);
+    next2.delete(id);
+    return next2;
   };
   var reconcileArchived = (marks, tasks, unlisted = () => false) => {
     const done = new Set(tasks.filter((t) => t.state === "done").map((t) => t.id));
-    const next = new Map([...marks].filter(([id]) => done.has(id) || unlisted(id)));
-    return { marks: next, changed: next.size !== marks.size };
+    const next2 = new Map([...marks].filter(([id]) => done.has(id) || unlisted(id)));
+    return { marks: next2, changed: next2.size !== marks.size };
   };
   var archivedShown = (tasks, marks) => tasks.filter((t) => t.state === "done" && marks.has(t.id)).length;
   var isArchived = (task, marks) => task.state === "done" && marks.has(task.id);
@@ -2846,9 +2846,9 @@ ${GUEST_UI_LOOK_CSS}`;
   var archiveWriteJob = (snap, io, onWritten) => async () => {
     const stored2 = await io.load().catch(() => null);
     const merged = stored2 === null ? new Map(snap.marks) : mergeArchived(snap.marks, stored2, snap.removed);
-    const next = snap.tasks === null ? merged : reconcileArchived(merged, snap.tasks, snap.unlisted).marks;
-    await io.save(next);
-    onWritten(next);
+    const next2 = snap.tasks === null ? merged : reconcileArchived(merged, snap.tasks, snap.unlisted).marks;
+    await io.save(next2);
+    onWritten(next2);
   };
   var createPendingMarks = () => {
     const pending2 = /* @__PURE__ */ new Map();
@@ -2980,6 +2980,8 @@ ${GUEST_UI_LOOK_CSS}`;
       create: (input) => call("POST", "/tasks/create", { input }).then((r) => r.task),
       setState: (id, state2) => call("POST", "/tasks/state", { id, state: state2 }).then((r) => r.task),
       setType: (id, type) => call("POST", "/tasks/type", { id, type }).then((r) => r.task),
+      changeLabel: (id, label, mode) => call("POST", "/tasks/label", { id, label, mode }).then((r) => r.task),
+      addBlocker: (id, blockerId) => call("POST", "/tasks/blocker", { id, blockerId }).then((r) => r.task),
       /** Title and/or description; the id stays. */
       edit: (id, changes) => call("POST", "/tasks/edit", { id, ...changes }).then((r) => r.task),
       /**
@@ -3988,10 +3990,10 @@ ${GUEST_UI_LOOK_CSS}`;
   var shipped = (setId, presetId) => builtinSet(setId)?.presets.find((p) => p.id === presetId);
   var withBuiltin = (stored2, setId, change) => {
     const current2 = stored2.builtin[setId] ?? { texts: {}, custom: [] };
-    const next = change({ texts: { ...current2.texts }, custom: [...current2.custom] });
+    const next2 = change({ texts: { ...current2.texts }, custom: [...current2.custom] });
     const builtin = { ...stored2.builtin };
-    if (Object.keys(next.texts).length === 0 && next.custom.length === 0) delete builtin[setId];
-    else builtin[setId] = next;
+    if (Object.keys(next2.texts).length === 0 && next2.custom.length === 0) delete builtin[setId];
+    else builtin[setId] = next2;
     return { ...stored2, builtin };
   };
   var withOwn = (stored2, setId, change) => {
@@ -4073,8 +4075,8 @@ ${GUEST_UI_LOOK_CSS}`;
         try {
           return await fn();
         } finally {
-          const next = waiting.shift();
-          if (next !== void 0) next();
+          const next2 = waiting.shift();
+          if (next2 !== void 0) next2();
           else active2--;
         }
       }
@@ -4531,10 +4533,10 @@ ${ref}`,
     return out;
   };
   var withDetach = (marks, taskId, at, max = DETACHED_MAX) => {
-    const next = new Map(marks);
-    next.delete(taskId);
-    next.set(taskId, at);
-    return new Map([...next].sort((a, b) => a[1] - b[1]).slice(-max));
+    const next2 = new Map(marks);
+    next2.delete(taskId);
+    next2.set(taskId, at);
+    return new Map([...next2].sort((a, b) => a[1] - b[1]).slice(-max));
   };
   var isEmptyLayer = (layer) => Object.entries(layer).every(([, v2]) => v2 === void 0 || record3(v2) !== null && Object.keys(v2).length === 0);
   var createSettingsStore = (storage) => {
@@ -4629,9 +4631,9 @@ ${ref}`,
       const p = save(key, value).catch(onError).then(() => {
         running.delete(key);
         if (!waiting.has(key)) return;
-        const next = waiting.get(key);
+        const next2 = waiting.get(key);
         waiting.delete(key);
-        return pump(key, next);
+        return pump(key, next2);
       });
       running.set(key, p);
       return p;
@@ -4880,9 +4882,9 @@ ${ref}`,
     return plan;
   };
   var groupSteps = (ids, columns, by) => COLUMNS.flatMap(({ id: column }, i) => {
-    const next = COLUMNS[i + by];
+    const next2 = COLUMNS[i + by];
     const here = ids.filter((m) => columns.get(m) === column);
-    return next !== void 0 && here.length > 0 ? [{ ids: here, to: next.id }] : [];
+    return next2 !== void 0 && here.length > 0 ? [{ ids: here, to: next2.id }] : [];
   });
   var openChildren = (task, tasks) => tasks.filter((t) => t.parentId === task.id && t.state !== "done").length;
   var BASE_TYPES = ["enhancement", "bug", "chore", "research"];
@@ -5202,8 +5204,8 @@ ${ref}`,
       },
       context,
       keymap: () => keymap,
-      setKeymap: (next) => {
-        keymap = next;
+      setKeymap: (next2) => {
+        keymap = next2;
       },
       platform,
       dispose: () => {
@@ -5633,8 +5635,8 @@ ${ref}`,
         disposers,
         {
           get: () => layer.shortcuts ?? {},
-          set: (next) => {
-            layer.shortcuts = Object.keys(next).length === 0 ? void 0 : next;
+          set: (next2) => {
+            layer.shortcuts = Object.keys(next2).length === 0 ? void 0 : next2;
             emit();
           },
           platform: detectPlatform()
@@ -5907,10 +5909,10 @@ ${ref}`,
         rows: 5,
         onChange: (v2) => {
           text3.update({ value: v2 });
-          const next = setPresetText(getStored(), current2.id, preset.id, v2);
-          setStored(next);
-          reset?.update({ disabled: !isEdited(next, current2.id, preset.id) });
-          if (noteLine !== null) noteLine.textContent = presetSkillsNote(preset, current2.id, isEdited(next, current2.id, preset.id)) ?? "";
+          const next2 = setPresetText(getStored(), current2.id, preset.id, v2);
+          setStored(next2);
+          reset?.update({ disabled: !isEdited(next2, current2.id, preset.id) });
+          if (noteLine !== null) noteLine.textContent = presetSkillsNote(preset, current2.id, isEdited(next2, current2.id, preset.id)) ?? "";
         }
       });
       disposers.push(text3.dispose);
@@ -6089,11 +6091,11 @@ ${ref}`,
             if (busy) return;
             busy = true;
             body.setAttribute("aria-busy", "true");
-            void onSources(change).then((next) => {
+            void onSources(change).then((next2) => {
               busy = false;
               body.removeAttribute("aria-busy");
-              if (next === null || m.tab !== "sources") return;
-              m.sources = next;
+              if (next2 === null || m.tab !== "sources") return;
+              m.sources = next2;
               draw2();
             });
           });
@@ -6602,12 +6604,12 @@ ${ref}`,
     hintLastChild(actions, "add.create", "Create task");
     let createDisposed = false;
     const cancel = mountButton(actions, { label: "Cancel", variant: "outline", size: "sm", onClick: dismiss });
-    const setBusy = (next) => {
-      busy = next;
-      modal.setAttribute("aria-busy", String(next));
-      if (!createDisposed) create.update({ loading: next, disabled: next || finished });
-      cancel.update({ disabled: next });
-      for (const h of fixed) h.update({ disabled: next || finished });
+    const setBusy = (next2) => {
+      busy = next2;
+      modal.setAttribute("aria-busy", String(next2));
+      if (!createDisposed) create.update({ loading: next2, disabled: next2 || finished });
+      cancel.update({ disabled: next2 });
+      for (const h of fixed) h.update({ disabled: next2 || finished });
       drawBlockers();
       drawSubtasks();
       drawExisting();
@@ -6655,8 +6657,8 @@ ${ref}`,
     drawStart();
     titleSlot.querySelector("input")?.focus();
     return {
-      setStart: (next) => {
-        start2 = next;
+      setStart: (next2) => {
+        start2 = next2;
         drawStart();
       },
       submit,
@@ -12675,12 +12677,12 @@ ${ref}`,
       errorDispose = null;
       if (message2 !== null) errorDispose = mountBanner(errorSlot, { tone: "error", title: "Could not save the task", body: message2 }).dispose;
     };
-    const setBusy = (next) => {
-      busy = next;
-      save.update({ loading: next, disabled: next });
-      cancel.update({ disabled: next });
-      titleField.update({ disabled: next });
-      bodyField.update({ disabled: next });
+    const setBusy = (next2) => {
+      busy = next2;
+      save.update({ loading: next2, disabled: next2 });
+      cancel.update({ disabled: next2 });
+      titleField.update({ disabled: next2 });
+      bodyField.update({ disabled: next2 });
     };
     const submit = () => {
       if (busy) return;
@@ -13200,9 +13202,9 @@ ${ref}`,
             linkFilter = v2;
           },
           selected: picked,
-          onSelected: (next) => {
-            linkPicked = { taskId: task.id, ids: next };
-            button2.update({ label: label(), disabled: next.length === 0 });
+          onSelected: (next2) => {
+            linkPicked = { taskId: task.id, ids: next2 };
+            button2.update({ label: label(), disabled: next2.length === 0 });
           },
           disabled: locked
         })
@@ -13409,11 +13411,11 @@ ${ref}`,
       errorDispose = null;
       if (message2 !== null) errorDispose = mountBanner(errorSlot, { tone: "error", title: "Could not add the sub-task", body: message2 }).dispose;
     };
-    const setBusy = (next) => {
-      busy = next;
-      add2.update({ loading: next, disabled: next });
-      titleField.update({ disabled: next });
-      typeSelect.update({ disabled: next });
+    const setBusy = (next2) => {
+      busy = next2;
+      add2.update({ loading: next2, disabled: next2 });
+      titleField.update({ disabled: next2 });
+      typeSelect.update({ disabled: next2 });
     };
     const submit = () => {
       if (busy) return;
@@ -13462,7 +13464,7 @@ ${ref}`,
       case "down": {
         const stale = end(press);
         if (input.button !== 0 || input.taskId === null) return stale;
-        const next = {
+        const next2 = {
           pointerId: input.pointerId,
           taskId: input.taskId,
           from: input.from,
@@ -13472,7 +13474,7 @@ ${ref}`,
           ...input.mark !== void 0 ? { mark: input.mark } : {},
           ...input.group !== void 0 && input.group.length > 1 ? { group: input.group } : {}
         };
-        return { press: next, effect: stale.effect };
+        return { press: next2, effect: stale.effect };
       }
       case "move": {
         if (press === null || input.pointerId !== press.pointerId) return { press, effect: NONE3 };
@@ -13546,8 +13548,8 @@ ${ref}`,
       const cards = cardsOf(column);
       const before = insertionBefore(y, cards, p.taskId);
       const at = cards.findIndex((c) => c.id === p.taskId);
-      const next = cards.slice(at + 1).find((c) => c.id !== p.taskId)?.id ?? null;
-      if (at !== -1 && next === before) return { before, mark: null };
+      const next2 = cards.slice(at + 1).find((c) => c.id !== p.taskId)?.id ?? null;
+      if (at !== -1 && next2 === before) return { before, mark: null };
       const target = cards.find((c) => c.id === before)?.node;
       const list2 = column.querySelector(".kb-cards");
       const mark = target !== void 0 ? { node: target, kind: "is-insert-before" } : list2 !== null ? { node: list2, kind: "is-insert-end" } : null;
@@ -13607,10 +13609,10 @@ ${ref}`,
     };
     const feed = (input, at) => {
       const before = press;
-      const { press: next, effect } = step(press, input);
-      press = next;
-      if (before !== null && (next === null || input.type === "down")) cleanup(before.pointerId, before.taskId);
-      if (effect.kind === "start" && next !== null && at !== void 0) startGhost(next, at.x, at.y);
+      const { press: next2, effect } = step(press, input);
+      press = next2;
+      if (before !== null && (next2 === null || input.type === "down")) cleanup(before.pointerId, before.taskId);
+      if (effect.kind === "start" && next2 !== null && at !== void 0) startGhost(next2, at.x, at.y);
       else if (effect.kind === "follow" && at !== void 0) follow2(at.x, at.y);
       else if (effect.kind === "open") callbacks.onOpen(effect.taskId);
       else if (effect.kind === "mark") callbacks.onMark(effect.taskId, effect.how);
@@ -13620,6 +13622,7 @@ ${ref}`,
       return effect;
     };
     const onDown = (e) => {
+      if (callbacks.locked?.()) return;
       const target = e.target instanceof Element ? e.target : null;
       const card = target?.closest(".kb-card") ?? null;
       const col = columnOf(card);
@@ -13662,6 +13665,10 @@ ${ref}`,
       if (effect.kind === "start" || effect.kind === "follow") e.preventDefault();
     };
     const onUp = (e) => {
+      if (callbacks.locked?.()) {
+        feed({ type: "abort" });
+        return;
+      }
       const hit = press?.dragging === true ? document.elementFromPoint(e.clientX, e.clientY) : null;
       const to = columnOf(hit);
       const onto = press !== null && hit !== null ? linkTarget(hit, press, e.clientY)?.dataset.taskId ?? null : null;
@@ -13675,6 +13682,7 @@ ${ref}`,
       if (e.key === "Escape" && press !== null) feed({ type: "abort" });
     };
     const onKey = (e) => {
+      if (callbacks.locked?.()) return;
       if (e.key !== "Enter" && e.key !== " ") return;
       if (!(e.target instanceof HTMLElement) || !e.target.classList.contains("kb-card")) return;
       const id = e.target.dataset.taskId;
@@ -13971,11 +13979,13 @@ ${ref}`,
       }
     };
     const move = (id, from, to) => {
+      if (deps.blocked?.()) return;
       const task = find(id);
       if (task === null || moving.has(id) || from === to) return;
       void apply(task, from, planMove(task, from, to, openChildren(task, deps.tasks())));
     };
     const moveGroup = async (ids, to) => {
+      if (deps.blocked?.()) return;
       const cards = ids.flatMap((id) => {
         const task = find(id);
         const from = deps.columnOf(id);
@@ -14048,6 +14058,7 @@ ${ref}`,
       d?.handle.dispose();
     };
     const showDetail = (openId) => {
+      if (deps.blocked?.()) return;
       let id = openId;
       const task = find(id);
       if (task === null) return;
@@ -14119,7 +14130,7 @@ ${ref}`,
           deps.onOpenTaskClosed?.(id, "dismissed");
         }
       }, { sections: deps.sections.get() });
-      detail = { id, handle, onFollow: (next) => id = next };
+      detail = { id, handle, onFollow: (next2) => id = next2 };
       deps.onOpenTaskShown?.(id);
     };
     const closeAdd = () => {
@@ -14196,6 +14207,7 @@ ${ref}`,
       };
     };
     const showAdd = () => {
+      if (deps.blocked?.()) return;
       if (addModal !== null) return;
       const tasks = deps.tasks();
       const types = taskTypes(tasks, deps.baseTypes()).filter((t) => t !== MODEL_PICK);
@@ -14217,6 +14229,7 @@ ${ref}`,
       );
     };
     const detachDrag = attachDrag(deps.board.columns, {
+      locked: () => deps.blocked?.() ?? false,
       canDrag: (id) => !moving.has(id),
       group: (id) => deps.marks.group(id, moving),
       onDrop: (id, from, to, group) => {
@@ -14242,6 +14255,12 @@ ${ref}`,
     return {
       /** Ids whose write is in flight; the board draws them busy. */
       busy: moving,
+      setBulkBusy: (ids, value) => {
+        for (const id of ids) {
+          if (value) moving.add(id);
+          else moving.delete(id);
+        }
+      },
       showAdd,
       /** Add task's Create task (Mod+Enter); false when no form is open or it is busy. */
       submitAddForm: () => addModal?.submit() ?? false,
@@ -14344,21 +14363,31 @@ ${ref}`,
 
   // src/panel/launcher.ts
   var SETTLE_MS = 6e4;
+  var uncertainHostStart = async (start2) => {
+    try {
+      return await start2();
+    } catch {
+      return { sessionId: null, pending: true };
+    }
+  };
   var createLauncher = (deps) => {
     const now = deps.now ?? Date.now;
     const waiting = /* @__PURE__ */ new Map();
     const inFlight = /* @__PURE__ */ new Set();
     const launch = async (task, opts, prompt) => {
+      if (waiting.get(task.id)?.needsMessage) return "needs-message";
       if (deps.isStarting.has(task.id) || deps.hasLiveSession(task.id)) return "already";
       deps.isStarting.add(task.id);
       inFlight.add(task.id);
       let sessionId = null;
       let pending2 = false;
+      let needsMessage2 = false;
       try {
         const text3 = prompt ?? await deps.prompt(task, opts);
         const r = await deps.start(task, opts, text3);
         sessionId = r.sessionId;
         pending2 = sessionId === null && r.pending === true;
+        needsMessage2 = r.needsMessage === true;
       } catch (e) {
         deps.onError(task, e);
       } finally {
@@ -14368,14 +14397,15 @@ ${ref}`,
         deps.isStarting.delete(task.id);
         return "failed";
       }
-      waiting.set(task.id, { sessionId, at: now() });
-      return pending2 ? "pending" : "started";
+      waiting.set(task.id, { sessionId, at: now(), needsMessage: needsMessage2 });
+      return pending2 ? "pending" : needsMessage2 ? "needs-message" : "started";
     };
     const settle = (known, taskKnown) => {
       let changed = false;
       for (const [taskId, w] of waiting) {
+        if (w.needsMessage) continue;
         const found = w.sessionId !== null ? known(w.sessionId) : taskKnown?.(taskId, w.at) ?? false;
-        if (!found && now() - w.at < SETTLE_MS) continue;
+        if (!found && (w.sessionId === null || now() - w.at < SETTLE_MS)) continue;
         waiting.delete(taskId);
         deps.isStarting.delete(taskId);
         changed = true;
@@ -14388,7 +14418,8 @@ ${ref}`,
       deps.isStarting.clear();
     };
     const starting = () => [...inFlight];
-    return { launch, settle, reset, starting };
+    const needsMessage = (id) => waiting.get(id)?.needsMessage === true;
+    return { launch, settle, reset, starting, needsMessage };
   };
 
   // src/panel/prompt.ts
@@ -14615,18 +14646,18 @@ ${note}` : note;
           return { sessionId: null, pending: true };
         }
       }
-      const result = await host2.startSession(
-        clampStartSessionRequest({
-          providerId: panelId(VARIANT),
-          id: task.id,
-          title: task.title,
-          url: task.url ?? `https://icf-kanban.local/t/${encodeURIComponent(task.id)}`,
-          text: prompt,
-          projectId: p.id,
-          worktree: opts.location === "worktree" ? true : false,
-          navigation: "preserve"
-        })
-      );
+      const request = clampStartSessionRequest({
+        providerId: panelId(VARIANT),
+        id: task.id,
+        title: task.title,
+        url: task.url ?? `https://icf-kanban.local/t/${encodeURIComponent(task.id)}`,
+        text: prompt,
+        projectId: p.id,
+        worktree: opts.location === "worktree" ? true : false,
+        navigation: "preserve"
+      });
+      const result = await uncertainHostStart(() => host2.startSession(request));
+      if ("pending" in result) return result;
       if (result.sessionId === null) {
         const what = result.failure === "bootstrap-failed" ? "setting up the worktree failed" : "the session could not be created";
         void host2.toast({
@@ -14645,7 +14676,7 @@ ${note}` : note;
       const sessionId = result.sessionId;
       void api.addLink(task.id, sessionId, result.directory ?? result.worktree?.directory ?? null).then(() => reloadLinks(p.id, p.directory)).catch(() => {
       });
-      return { sessionId };
+      return { sessionId, needsMessage: result.sent === "no-model" || result.sent === "failed" };
     };
     const buildFor = async (task, opts) => {
       const p = deps.project();
@@ -14734,13 +14765,13 @@ ${note}` : note;
     };
     const enqueue = async (task, opts, ctx) => {
       const p = deps.project();
-      if (p === null || p.id !== ctx.projectId) return;
+      if (p === null || p.id !== ctx.projectId) return { kind: "cancelled", id: task.id };
       let prompt;
       try {
         prompt = await buildFor(task, opts);
       } catch (e) {
         fail2(`Could not queue \u201C${task.title}\u201D: ${errorMessage(e)}`);
-        return;
+        return { kind: "failed", id: task.id, message: errorMessage(e) };
       }
       const entry = {
         taskId: task.id,
@@ -14754,49 +14785,54 @@ ${note}` : note;
       };
       try {
         const fresh = await createApi(host2, p.directory).addToQueue(entry, ctx.settings.maxParallel);
-        if (currentId() !== p.id) return;
+        if (currentId() !== p.id) return { kind: "success", id: task.id };
         queue = fresh;
         shown = p.id;
       } catch (e) {
         fail2(`Could not queue \u201C${task.title}\u201D: ${errorMessage(e)}`);
-        return;
+        return { kind: "failed", id: task.id, message: errorMessage(e) };
       }
       deps.draw();
       await drain();
       if (queue.some((e) => e.taskId === task.id)) {
         info2(`\u201C${task.title}\u201D is queued; it starts when fewer than ${ctx.settings.maxParallel} agents are running`);
       }
+      return { kind: "success", id: task.id };
     };
-    const onStart = async (task) => {
+    const startTaskAction = async (id, mode) => {
+      const deliveryFailure = { kind: "failed", id, message: "Session created, but the task message was not delivered. Open the existing session and send it there; do not start another agent." };
+      if (launcher.needsMessage(id)) return deliveryFailure;
+      const task = deps.tasks()?.find((t) => t.id === id);
+      if (!task || task.state === "done") return { kind: "failed", id, message: "Reopen the task before starting it" };
       if (ledByOrchestrator(task, deps.sessions(), markArchived(links, deps.archived()), deps.detached())) {
         info2("The orchestrator leads this task");
-        return;
+        return { kind: "failed", id, message: "The orchestrator leads this task" };
       }
       const ctx = deps.context();
       if (ctx === null) {
         info2("Settings are loading, try again in a moment");
-        return;
+        return { kind: "failed", id, message: "Settings are loading" };
       }
       if (isStarting.has(task.id) || hasLiveSession(task.id)) {
         info2(`\u201C${task.title}\u201D already has an agent working on it`);
-        return;
+        return hasLiveSession(id) ? { kind: "success", id } : { kind: "pending", id, message: "Waiting for the existing start to be confirmed" };
       }
       if (queuedIds().has(task.id)) {
         info2(`\u201C${task.title}\u201D is already queued`);
-        return;
+        return { kind: "success", id };
       }
       let card;
       try {
         card = await deps.loadCard(ctx.projectId, task.id);
       } catch (e) {
         fail2(`Could not read the card's start options: ${errorMessage(e)}`);
-        return;
+        return { kind: "failed", id, message: errorMessage(e) };
       }
       const subtasks = (deps.tasks() ?? []).some((t) => t.parentId === task.id);
       let opts = resolveStart(ctx.settings, { type: task.type, subtasks }, card, ctx.presets);
       if (!ctx.settings.autoStart) {
         const picked = await askStart(task.title, opts, ctx.presets, deps.lists);
-        if (picked === null) return;
+        if (picked === null) return { kind: "cancelled", id };
         opts = picked;
       }
       if (opts.variant !== null) {
@@ -14805,17 +14841,19 @@ ${note}` : note;
         if (checked.dropped !== null) info2(`${opts.model ?? "The model"} does not offer the thinking level \u201C${checked.dropped}\u201D; starting without it`);
         opts = checked.opts;
       }
-      if (currentId() !== ctx.projectId) return;
-      if (queuedIds().size > 0 || occupied() >= ctx.settings.maxParallel) {
-        await enqueue(task, opts, ctx);
-        return;
+      if (currentId() !== ctx.projectId) return { kind: "cancelled", id };
+      if (mode === "queue" || queuedIds().size > 0 || occupied() >= ctx.settings.maxParallel) {
+        return enqueue(task, opts, ctx);
       }
       const pending2 = launcher.launch(task, opts);
       deps.draw();
-      void pending2.then((result) => {
-        report(task, result);
-        deps.draw();
-      });
+      const result = await pending2;
+      report(task, result);
+      deps.draw();
+      return result === "started" ? { kind: "success", id } : result === "needs-message" ? deliveryFailure : result === "failed" ? { kind: "failed", id, message: "Agent could not start; see the reported start error" } : { kind: "pending", id, message: "Waiting for the existing start to be confirmed" };
+    };
+    const onStart = async (task) => {
+      await startTaskAction(task.id, "start");
     };
     const leaveQueue = async (taskId) => {
       const p = deps.project();
@@ -14861,6 +14899,7 @@ ${note}` : note;
       queueErrors,
       hasLiveSession,
       onStart,
+      startTaskAction,
       leaveQueue,
       refresh,
       onSnapshot,
@@ -15297,8 +15336,18 @@ ${listKey(projects)}`;
     const sessionNote = div3("kb-session-note");
     const sourceNotes = div3("kb-source-notes");
     const columns = div3("kb-columns");
-    shell.append(toolbar, status, sourceNotes, sessionNote, columns);
+    const bulkSlot = div3("kb-bulk");
+    bulkSlot.hidden = true;
+    shell.append(toolbar, status, sourceNotes, sessionNote, columns, bulkSlot);
     root.replaceChildren(shell);
+    let interactionLocked = false;
+    for (const event of ["click", "pointerdown", "keydown", "input", "change"]) {
+      shell.addEventListener(event, (e) => {
+        if (!interactionLocked || e.target instanceof Node && bulkSlot.contains(e.target)) return;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+      }, true);
+    }
     const project2 = mountSelect(projectSlot, {
       value: null,
       options: [],
@@ -15418,6 +15467,13 @@ ${listKey(projects)}`;
     return {
       /** The persistent container the cards are drawn in; drag listeners live here. */
       columns,
+      bulkSlot,
+      /** The save's footer stays usable; every other control/card is temporarily inert. */
+      setInteractionLocked: (locked) => {
+        interactionLocked = locked;
+        for (const node of [toolbar, status, sourceNotes, sessionNote, columns]) node.inert = locked;
+        shell.setAttribute("aria-busy", String(locked));
+      },
       /** "Add task" works only while a board is shown. */
       setCanAdd: (enabled) => add2.update({ disabled: !enabled }),
       /** The "Hide sub-tasks" switch follows the project's settings when they load. */
@@ -15460,24 +15516,24 @@ ${listKey(projects)}`;
         else trigger.click();
         return true;
       },
-      setStatus: (next) => {
+      setStatus: (next2) => {
         statusDispose?.();
         statusDispose = null;
         status.replaceChildren();
-        if (next.kind === "loading") {
+        if (next2.kind === "loading") {
           const wrap = div3("kb-loading");
           status.append(wrap);
           statusDispose = mountSpinner(wrap, { label: "Loading tasks" }).dispose;
-        } else if (next.kind === "banner") {
+        } else if (next2.kind === "banner") {
           statusDispose = mountBanner(status, {
-            tone: next.tone,
-            title: next.title,
-            ...next.body !== void 0 ? { body: next.body } : {}
+            tone: next2.tone,
+            title: next2.title,
+            ...next2.body !== void 0 ? { body: next2.body } : {}
           }).dispose;
-        } else if (next.kind === "empty") {
-          statusDispose = mountEmpty(status, { title: next.title, body: next.body }).dispose;
-        } else if (next.kind === "custom") {
-          statusDispose = next.mount(status);
+        } else if (next2.kind === "empty") {
+          statusDispose = mountEmpty(status, { title: next2.title, body: next2.body }).dispose;
+        } else if (next2.kind === "custom") {
+          statusDispose = next2.mount(status);
         }
       },
       /** Draws the columns; null hides them (no project, no tracker, or an error). */
@@ -15660,8 +15716,12 @@ ${listKey(projects)}`;
     const range = i === -1 || j === -1 ? [id] : flat.slice(Math.min(i, j), Math.max(i, j) + 1);
     return { ids: inOrder(layout, /* @__PURE__ */ new Set([...marks.base, ...range])), anchor, base: marks.base };
   };
-  var keepMarks = (marks, layout) => {
-    const flat = new Set(order(layout));
+  var allMarks = (layout) => {
+    const ids = order(layout);
+    return { ids, anchor: null, base: ids };
+  };
+  var keepMarks = (marks, layout, retained = []) => {
+    const flat = /* @__PURE__ */ new Set([...order(layout), ...retained]);
     const ids = marks.ids.filter((id) => flat.has(id));
     const base2 = marks.base.filter((id) => flat.has(id));
     const anchor = marks.anchor !== null && flat.has(marks.anchor) ? marks.anchor : null;
@@ -15671,19 +15731,63 @@ ${listKey(projects)}`;
     if (!marks.ids.includes(pressed)) return [pressed];
     return inOrder(layout, new Set(marks.ids.filter((id) => id === pressed || !busy.has(id))));
   };
+  var createMarks = (changed) => {
+    let marks = NO_MARKS;
+    let layout = [];
+    let retained = [];
+    let locked = false;
+    const update = (next2) => {
+      const previous = marks.ids;
+      marks = next2;
+      if (previous.length !== next2.ids.length || previous.some((id, i) => id !== next2.ids[i])) changed(next2.ids);
+    };
+    return {
+      get: () => marks,
+      set: (ids) => {
+        const unique2 = [...new Set(ids)];
+        update({ ids: unique2, anchor: null, base: unique2 });
+      },
+      mark: (id, how, fallback = null) => {
+        if (!locked) update(clickMarks(marks, layout, id, how, fallback));
+      },
+      clear: () => {
+        if (!locked) {
+          retained = [];
+          update(NO_MARKS);
+        }
+      },
+      selectAll: () => {
+        if (!locked) update(allMarks(layout));
+      },
+      retain: (ids) => {
+        retained = [...ids];
+      },
+      setLocked: (value) => {
+        locked = value;
+      },
+      rendered: (next2) => {
+        layout = next2;
+        update(keepMarks(marks, layout, retained));
+      },
+      group: (id, busy) => locked ? [] : dragGroup(marks, layout, id, busy)
+    };
+  };
 
   // src/panel/ui/selection.ts
   var createSelection = (container, options) => {
     let selected = null;
     let layout = [];
     let refocus = false;
-    let marks = NO_MARKS;
+    const marks = createMarks((ids) => {
+      paint2();
+      options.onMarksChanged?.(ids);
+    });
     const cardOf = (id) => container.querySelector(`.kb-card[data-task-id="${CSS.escape(id)}"]`);
     const paint2 = () => {
       for (const el7 of container.querySelectorAll(".kb-card.is-selected")) el7.classList.remove("is-selected");
       if (selected !== null) cardOf(selected.id)?.classList.add("is-selected");
       for (const el7 of container.querySelectorAll(".kb-card.is-marked")) el7.classList.remove("is-marked");
-      for (const id of marks.ids) cardOf(id)?.classList.add("is-marked");
+      for (const id of marks.get().ids) cardOf(id)?.classList.add("is-marked");
     };
     const focus = (scroll) => {
       if (selected === null || !options.canFocus()) return;
@@ -15714,9 +15818,9 @@ ${listKey(projects)}`;
       },
       layout: () => layout,
       step: (direction) => {
-        const next = nextSelected(layout, selected, direction);
-        if (next === null) return false;
-        selected = next;
+        const next2 = nextSelected(layout, selected, direction);
+        if (next2 === null) return false;
+        selected = next2;
         paint2();
         focus(true);
         return true;
@@ -15724,29 +15828,780 @@ ${listKey(projects)}`;
       beforeRender: () => {
         refocus = document.hasFocus() && focusOnBoard();
       },
-      rendered: (next) => {
-        layout = next;
+      rendered: (next2) => {
+        layout = next2;
         selected = keepSelected(layout, selected);
-        marks = keepMarks(marks, layout);
+        marks.rendered(layout);
         paint2();
         if (refocus) focus(false);
         refocus = false;
       },
       focusOnBoard,
-      marked: () => marks.ids,
+      marked: () => marks.get().ids,
       mark: (id, how) => {
-        marks = clickMarks(marks, layout, id, how, selected?.id ?? null);
+        marks.mark(id, how, selected?.id ?? null);
         selected = locate(layout, id) ?? selected;
         paint2();
       },
-      clearMarks: () => {
-        if (marks === NO_MARKS) return;
-        marks = NO_MARKS;
-        paint2();
-      },
-      group: (id, busy) => dragGroup(marks, layout, id, busy),
+      clearMarks: marks.clear,
+      setMarked: marks.set,
+      selectAll: marks.selectAll,
+      retain: marks.retain,
+      setLocked: marks.setLocked,
+      group: marks.group,
       dispose: () => container.removeEventListener("focusin", onFocusIn)
     };
+  };
+
+  // src/panel/bulkEdit.ts
+  var planBulk = (tasks, ids, draft) => {
+    const selectedIds = [...new Set(ids)];
+    const known = new Set(tasks.map((t) => t.id));
+    const byId = new Map(tasks.map((t) => [t.id, t]));
+    for (const id of selectedIds) if (!known.has(id)) throw new Error(`Task not found: ${id}`);
+    const children = /* @__PURE__ */ new Map();
+    for (const task of tasks) {
+      if (task.parentId !== null) children.set(task.parentId, [...children.get(task.parentId) ?? [], task.id]);
+    }
+    const closeIds = [];
+    const visited = /* @__PURE__ */ new Set();
+    const visiting = /* @__PURE__ */ new Set();
+    const visit = (id) => {
+      if (visiting.has(id)) throw new Error("Cycle in sub-task hierarchy.");
+      if (visited.has(id)) return;
+      const task = byId.get(id);
+      if (task.source === "github" && (task.childCount === void 0 || task.childCount !== (children.get(id)?.length ?? 0))) {
+        throw new Error(`Sub-task tree for ${id} is not fully loaded. Turn off \u201CClose sub-tasks\u201D to edit only marked tasks.`);
+      }
+      visiting.add(id);
+      for (const child of children.get(id) ?? []) visit(child);
+      visiting.delete(id);
+      visited.add(id);
+      closeIds.push(id);
+    };
+    if (draft.state === "done" && draft.withChildren) for (const id of selectedIds) visit(id);
+    return { selectedIds, typeIds: draft.type === null ? [] : selectedIds, closeIds, children, draft: { ...draft } };
+  };
+  var runBulk = async (plan, api, progress, retryIds) => {
+    const succeeded = [];
+    const failures = [];
+    const ids = (plan.closeIds.length ? plan.closeIds : plan.selectedIds).filter((id) => retryIds === void 0 || retryIds.includes(id));
+    for (const id of ids) {
+      let field2 = "read";
+      try {
+        const task = await api.get(id);
+        field2 = "type";
+        if (plan.typeIds.includes(id) && plan.draft.type !== null && task.type !== plan.draft.type) await api.setType(id, plan.draft.type);
+        field2 = "state";
+        if (plan.closeIds.length && (plan.children.get(id) ?? []).some((child) => failures.some((f) => f.id === child))) {
+          throw new Error("A sub-task could not be closed. Retry its closure before closing this task.");
+        }
+        if (plan.draft.state !== null && task.state !== plan.draft.state) await api.setState(id, plan.draft.state);
+        succeeded.push(id);
+      } catch (e) {
+        failures.push({ id, field: field2, message: errorMessage(e) });
+      }
+      progress({ completed: succeeded.length + failures.length, total: ids.length });
+    }
+    return { succeeded, failures };
+  };
+
+  // src/panel/bulkActions.ts
+  var matchingMigration = (migrations, id, action) => {
+    const migration = migrations?.get(id);
+    return migration && JSON.stringify(migration.action) === JSON.stringify(action) ? migration : null;
+  };
+  var previewAction = (action, tasks, selected, context, migrations) => {
+    const out = { eligible: [], excluded: [], additional: [] };
+    const byId = new Map(tasks.map((t) => [t.id, t]));
+    const relation = action.kind === "parent" ? action.parentId : action.kind === "blocker" ? action.blockerId : null;
+    const reason = (task) => {
+      if (action.kind === "copy") return null;
+      if (!context.complete) return "Task sources are not fully loaded. Refresh first.";
+      const seen = /* @__PURE__ */ new Set();
+      for (let at = task.id; at && !seen.has(at); at = byId.get(at)?.parentId ?? null) {
+        if (context.busy.has(at)) return "This task or its parent is being changed.";
+        seen.add(at);
+      }
+      const cap = context.sources.find((s) => s.id === task.source)?.capabilities;
+      if (matchingMigration(migrations, task.id, action)) return null;
+      if (action.kind === "label" && !cap?.labels) return "This source does not support labels.";
+      if (action.kind === "delete" && !cap?.delete) return "This source does not support deletion.";
+      if (action.kind === "blocker" && !cap?.blockedBy) return "This source does not support blockers.";
+      if ((action.kind === "parent" || action.kind === "unparent") && !cap?.subtasks) return "This source does not support parent changes.";
+      if (action.kind === "unparent" && task.parentId === null) return "This task has no parent.";
+      if ((action.kind === "start" || action.kind === "queue" || action.kind === "move" && action.to === "in_progress") && task.state === "done") return "Reopen this task before starting it.";
+      if (action.kind === "move" && action.to === "review") return "Review is set by the agent session.";
+      if (action.kind === "archive" && (task.state !== "done" || context.archived.has(task.id))) return "Only completed, unarchived tasks can be archived.";
+      if (action.kind === "restore" && !context.archived.has(task.id)) return "This task is not archived.";
+      if (relation !== null) {
+        const target = byId.get(relation);
+        if (!target) return "Choose an existing target task.";
+        if (selected.includes(relation)) return "The target must be outside the selected group.";
+        if (target.source !== task.source) return "Tasks from different sources cannot be linked.";
+        if (action.kind === "parent") {
+          if (task.source === "local" && (target.kind !== "parent" || tasks.some((t) => t.parentId === task.id))) return "Local tasks can only move under a feature and cannot carry their own sub-tasks.";
+          const visited = /* @__PURE__ */ new Set();
+          for (let p = target.id; p && !visited.has(p); p = byId.get(p)?.parentId ?? null) {
+            if (p === task.id) return "This parent would create a cycle.";
+            visited.add(p);
+          }
+        }
+        if (action.kind === "blocker" && task.source === "local" && (task.kind !== "ticket" || target.kind !== "ticket" || task.parentId !== target.parentId)) return "Local blockers must be tickets in the same feature.";
+      }
+      return null;
+    };
+    for (const id of new Set(selected)) {
+      const task = byId.get(id);
+      const why = task ? reason(task) : "Task is no longer listed.";
+      if (why) out.excluded.push({ id, reason: why });
+      else out.eligible.push(id);
+    }
+    if (action.kind === "delete" && action.withChildren && out.eligible.length) {
+      try {
+        const plan = planBulk(tasks, out.eligible, { state: "done", type: null, withChildren: true });
+        if (plan.closeIds.some((id) => context.busy.has(id))) throw new Error("A sub-task is being changed.");
+        out.additional = plan.closeIds.filter((id) => !selected.includes(id));
+      } catch (e) {
+        out.excluded.push(...out.eligible.map((id) => ({ id, reason: errorMessage(e) })));
+        out.eligible = [];
+      }
+    }
+    return out;
+  };
+  var runAction = async (action, ids, deps, progress = () => {
+  }) => {
+    const out = { succeeded: [], failures: [], pending: [], remapped: [] };
+    const preview = previewAction(action, deps.tasks(), ids, deps.context(), deps.migrations);
+    out.failures.push(...preview.excluded.map((f) => ({ id: f.id, message: f.reason })));
+    const recursive = action.kind === "delete" && action.withChildren;
+    const plan = recursive ? planBulk(deps.tasks(), preview.eligible, { state: "done", type: null, withChildren: true }) : null;
+    const targets = plan?.closeIds ?? preview.eligible;
+    if (action.kind === "copy" || action.kind === "archive" || action.kind === "restore") {
+      try {
+        if (!targets.length) return out;
+        if (action.kind === "copy") {
+          const tasks = await Promise.all(targets.map((id) => deps.api.get(id)));
+          await deps.copy(tasks.map((t) => action.format === "titles" ? t.title : t.url ?? t.id).join("\n"));
+        } else await deps.archive(targets, action.kind === "restore");
+        out.succeeded.push(...targets);
+      } catch (e) {
+        out.failures.push(...targets.map((id) => ({ id, message: errorMessage(e) })));
+      }
+      progress({ completed: targets.length, total: targets.length });
+      return out;
+    }
+    for (const original of targets) {
+      let id = original;
+      try {
+        const migration = matchingMigration(deps.migrations, id, action);
+        if (migration) {
+          await migration.repair();
+          deps.migrations.delete(id);
+          out.succeeded.push(id);
+          progress({ completed: out.succeeded.length + out.failures.length + out.pending.length, total: targets.length });
+          continue;
+        }
+        if (plan && (plan.children.get(id) ?? []).some((child) => out.failures.some((f) => f.id === child))) throw new Error("A sub-task could not be deleted; its parent was kept.");
+        const task = await deps.api.get(id);
+        let next2 = null;
+        let result = null;
+        switch (action.kind) {
+          case "label":
+            await deps.api.changeLabel(id, action.label, action.mode);
+            break;
+          case "blocker":
+            await deps.api.addBlocker(id, action.blockerId);
+            break;
+          case "parent":
+            if (task.parentId !== action.parentId) next2 = await deps.api.setParent(id, action.parentId);
+            break;
+          case "unparent":
+            if (task.parentId !== null) next2 = await deps.api.removeParent(id);
+            break;
+          case "move":
+            result = await deps.move(id, action.to);
+            break;
+          case "start":
+          case "queue":
+            result = await deps.start(id, action.kind);
+            break;
+          case "delete": {
+            if (plan && task.source === "github" && task.childCount !== 0) throw new Error("Sub-tasks changed since confirmation. Refresh before deleting.");
+            const deleted = await deps.api.remove(id, false);
+            await deps.deleted(deleted);
+            break;
+          }
+        }
+        if (next2 && next2.id !== id) {
+          out.remapped.push({ from: id, to: next2.id });
+          id = next2.id;
+          const to = id;
+          const repair = () => deps.remap(original, to);
+          deps.migrations?.set(id, { action, repair });
+          await repair();
+          deps.migrations?.delete(id);
+        }
+        if (result?.kind === "pending") out.pending.push({ id, message: result.message });
+        else if (result?.kind === "failed") out.failures.push({ id, message: result.message });
+        else if (result?.kind === "cancelled") out.failures.push({ id, message: "Cancelled; no change was made." });
+        else out.succeeded.push(id);
+      } catch (e) {
+        out.failures.push({ id, message: errorMessage(e) });
+      }
+      progress({ completed: out.succeeded.length + out.failures.length + out.pending.length, total: targets.length });
+    }
+    return out;
+  };
+
+  // src/panel/bulkToolbar.ts
+  var emptyDraft2 = () => ({ state: null, type: null, withChildren: true });
+  var createBulkToolbar = (deps) => {
+    let ids = [];
+    let draft = emptyDraft2();
+    let saving = false;
+    let retry = null;
+    let failures = [];
+    let progress = null;
+    let notice = null;
+    let actionFailures = [];
+    let lastAction = null;
+    const migrations = /* @__PURE__ */ new Map();
+    const actionPreview = (action) => {
+      const a = deps.actions?.();
+      return a ? previewAction(action, deps.tasks(), ids, a.context(), migrations) : { eligible: [], excluded: ids.map((id) => ({ id, reason: "Actions are unavailable." })), additional: [] };
+    };
+    const currentPlan = () => retry ?? planBulk(deps.tasks(), ids, draft);
+    const targets = (plan) => retry ? ids : plan.closeIds.length ? plan.closeIds : plan.selectedIds;
+    const blockReason = () => {
+      if (deps.api() === null) return "No project is open.";
+      if (!deps.complete()) return "Task sources could not be fully loaded. Refresh before editing the group.";
+      try {
+        const parents = new Map(deps.tasks().map((t) => [t.id, t.parentId]));
+        const busy = deps.busy();
+        const overlaps = (id) => {
+          const seen = /* @__PURE__ */ new Set();
+          for (let at = id; at !== null && !seen.has(at); at = parents.get(at) ?? null) {
+            if (busy.has(at)) return true;
+            seen.add(at);
+          }
+          return false;
+        };
+        return targets(currentPlan()).some(overlaps) ? "A selected task or sub-task is being changed. Wait for that save to finish." : null;
+      } catch (e) {
+        return errorMessage(e);
+      }
+    };
+    const canApply = () => !saving && ids.length > 0 && (draft.state !== null || draft.type !== null) && blockReason() === null;
+    const clear = () => {
+      if (saving) return;
+      ids = [];
+      draft = emptyDraft2();
+      retry = null;
+      failures = [];
+      progress = null;
+      notice = null;
+      actionFailures = [];
+      lastAction = null;
+      deps.retain([]);
+      deps.replace([]);
+      deps.changed();
+    };
+    return {
+      actionPreview,
+      executeAction: async (action, confirmedIds) => {
+        const a = deps.actions?.();
+        if (saving || !a || !confirmedIds.length || confirmedIds.some((id) => !ids.includes(id))) return;
+        const preview = actionPreview(action);
+        if (confirmedIds.some((id) => !preview.eligible.includes(id))) {
+          notice = "The selection or available actions changed. Check the preview and try again.";
+          deps.changed();
+          return;
+        }
+        const context = a.context();
+        const targetIds = [.../* @__PURE__ */ new Set([...confirmedIds, ...preview.additional])];
+        const excluded = ids.filter((id) => !confirmedIds.includes(id));
+        saving = true;
+        notice = null;
+        failures = [];
+        actionFailures = [];
+        lastAction = action;
+        progress = { completed: 0, total: targetIds.length };
+        deps.retain(ids);
+        deps.lock(true, targetIds);
+        deps.changed();
+        try {
+          const result = await runAction(action, confirmedIds, { ...a, migrations, context: () => context }, (p) => {
+            progress = p;
+            deps.changed();
+          });
+          actionFailures = [...result.failures, ...result.pending];
+          if (action.kind !== "copy") {
+            ids = [.../* @__PURE__ */ new Set([...excluded, ...actionFailures.map((f) => f.id)])];
+            retry = null;
+            deps.retain(ids);
+            deps.replace(ids);
+          }
+          notice = action.kind === "copy" && !actionFailures.length ? "Copied to clipboard." : `${result.succeeded.length} completed${result.pending.length ? `, ${result.pending.length} awaiting confirmation` : ""}${excluded.length ? `, ${excluded.length} excluded` : ""}.`;
+          await deps.reload();
+          if (ids.length === 0) draft = emptyDraft2();
+        } catch (e) {
+          notice = errorMessage(e);
+        } finally {
+          saving = false;
+          deps.lock(false, targetIds);
+          deps.changed();
+        }
+      },
+      model: () => {
+        let extraCloseCount = 0;
+        try {
+          const plan = currentPlan();
+          extraCloseCount = plan.closeIds.filter((id) => !plan.selectedIds.includes(id)).length;
+        } catch {
+        }
+        return {
+          count: ids.length,
+          draft: { ...draft },
+          canApply: canApply(),
+          failures,
+          locked: saving,
+          progress,
+          notice,
+          blockReason: saving ? null : blockReason(),
+          hiddenCount: ids.filter((id) => !deps.visible().includes(id)).length,
+          extraCloseCount,
+          actionFailures,
+          lastAction
+        };
+      },
+      selectionChanged: (next2) => {
+        if (saving || ids.length === next2.length && ids.every((id, i) => id === next2[i])) return;
+        ids = [...next2];
+        retry = null;
+        failures = [];
+        actionFailures = [];
+        lastAction = null;
+        deps.retain([]);
+        if (ids.length === 0) draft = emptyDraft2();
+        deps.changed();
+      },
+      setDraft: (change) => {
+        if (saving) return;
+        draft = { ...draft, ...change };
+        retry = null;
+        failures = [];
+        deps.changed();
+      },
+      apply: async () => {
+        const api = deps.api();
+        if (!canApply() || api === null) return;
+        const plan = currentPlan();
+        const targetIds = targets(plan);
+        saving = true;
+        notice = null;
+        progress = { completed: 0, total: targetIds.length };
+        deps.retain(ids);
+        deps.lock(true, targetIds);
+        deps.changed();
+        try {
+          const result = await runBulk(plan, api, (value) => {
+            progress = value;
+            deps.changed();
+          }, retry ? ids : void 0);
+          failures = result.failures;
+          if (failures.length) {
+            retry = plan;
+            ids = failures.map((f) => f.id);
+            deps.retain(ids);
+            deps.replace(ids);
+          }
+          await deps.reload();
+          if (result.failures.length === 0) {
+            ids = [];
+            draft = emptyDraft2();
+            retry = null;
+            deps.retain([]);
+            deps.replace([]);
+          }
+        } catch (e) {
+          notice = errorMessage(e);
+        } finally {
+          saving = false;
+          deps.lock(false, targetIds);
+          deps.changed();
+        }
+      },
+      clear,
+      reset: () => {
+        if (!saving) {
+          migrations.clear();
+          clear();
+        }
+      }
+    };
+  };
+
+  // src/panel/ui/bulkIcons.ts
+  var shapes = {
+    all: '<rect x="7" y="7" width="13" height="13" rx="2"/><path d="M16 4H5a1 1 0 0 0-1 1v11m6-3 3 3 4-5"/>',
+    clear: '<path d="m6 6 12 12M18 6 6 18"/>',
+    move: '<path d="M4 5h5v14H4zm11 0h5v14h-5M8 12h8m-3-3 3 3-3 3"/>',
+    label: '<path d="M20 13 11 22 2 13V3h10l8 8z"/><circle cx="7" cy="8" r="1"/>',
+    parent: '<rect x="8" y="2" width="8" height="5" rx="1"/><path d="M12 7v5M5 16v-4h14v4"/><rect x="2" y="16" width="6" height="5" rx="1"/><rect x="16" y="16" width="6" height="5" rx="1"/>',
+    unparent: '<path d="m9 15-2 2a4 4 0 0 1-6-6l3-3m11 1 2-2a4 4 0 0 1 6 6l-3 3M8 12l8-8M3 2l19 20"/>',
+    blocker: '<path d="M10 13a5 5 0 0 0 7 0l4-4a5 5 0 0 0-7-7l-2 2M14 11a5 5 0 0 0-7 0l-4 4a5 5 0 0 0 7 7l2-2"/>',
+    start: '<path d="m7 4 14 8-14 8z"/>',
+    queue: '<path d="M4 5h16M4 11h9M4 17h9m5-4v8m-4-4h8"/>',
+    archive: '<rect x="3" y="3" width="18" height="5" rx="1"/><path d="M5 8v13h14V8M9 12h6"/>',
+    restore: '<path d="M5 9a8 8 0 1 1-1 8M5 3v6h6M12 8v5l3 2"/>',
+    copy: '<rect x="8" y="8" width="13" height="13" rx="2"/><path d="M16 8V3H3v13h5"/>',
+    delete: '<path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7"/>'
+  };
+  var next = 0;
+  var bulkIconButton = (root, name, label, onClick) => {
+    const wrap = document.createElement("span");
+    wrap.className = "kb-bulk-icon-wrap";
+    const button2 = document.createElement("button");
+    button2.type = "button";
+    button2.className = `kb-bulk-icon${name === "delete" ? " is-danger" : ""}`;
+    button2.setAttribute("aria-label", label);
+    const tip = document.createElement("span");
+    tip.className = "kb-bulk-tip";
+    tip.id = `bulk-tip-${++next}`;
+    tip.setAttribute("role", "tooltip");
+    tip.textContent = label;
+    button2.setAttribute("aria-describedby", tip.id);
+    button2.innerHTML = `<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${shapes[name]}</svg>`;
+    button2.addEventListener("click", onClick);
+    wrap.append(button2, tip);
+    root.append(wrap);
+    return {
+      button: button2,
+      update: (disabled, reason) => {
+        button2.disabled = disabled;
+        tip.textContent = reason ? `${label} \u2014 ${reason}` : label;
+        wrap.title = tip.textContent;
+      }
+    };
+  };
+
+  // src/panel/ui/bulkActionForm.ts
+  var ACTION_LABELS = {
+    move: "Move to column",
+    label: "Labels",
+    parent: "Set parent",
+    unparent: "Unlink parent",
+    blocker: "Add blocker",
+    start: "Start Task",
+    queue: "Add to queue",
+    archive: "Archive",
+    restore: "Restore",
+    copy: "Copy",
+    delete: "Delete"
+  };
+  var mountBulkActionForm = (root, deps) => {
+    root.className = "kb-bulk-popover";
+    root.hidden = true;
+    root.setAttribute("role", "dialog");
+    let action = null;
+    let locked = false;
+    let opener = null;
+    let handles = [];
+    let submit = null;
+    let controlsLocked = null;
+    const head = document.createElement("div");
+    head.className = "kb-bulk-popover-head";
+    const title = document.createElement("strong");
+    const close = bulkIconButton(head, "clear", "Close action", () => dismiss());
+    head.prepend(title);
+    const form = document.createElement("div");
+    form.className = "kb-bulk-form-fields";
+    const preview = document.createElement("div");
+    preview.className = "kb-bulk-preview";
+    preview.setAttribute("aria-live", "polite");
+    const footer = document.createElement("div");
+    root.append(head, form, preview, footer);
+    const dismiss = () => {
+      if (locked) return;
+      action = null;
+      root.hidden = true;
+      opener?.focus({ preventScroll: true });
+      deps.dismiss();
+    };
+    const slot = () => {
+      const div4 = document.createElement("div");
+      form.append(div4);
+      return div4;
+    };
+    const refresh = () => {
+      if (!action) return;
+      const p = deps.preview(action);
+      const invalid = action.kind === "label" && !action.label.trim() || action.kind === "parent" && !action.parentId || action.kind === "blocker" && !action.blockerId;
+      preview.textContent = `${p.eligible.length} eligible${p.additional.length ? ` + ${p.additional.length} sub-tasks` : ""}${p.excluded.length ? ` \xB7 ${p.excluded.length} excluded` : ""}`;
+      if (p.excluded.length) {
+        const why = document.createElement("div");
+        why.className = "kb-muted";
+        why.textContent = [...new Set(p.excluded.map((t) => t.reason))].join(" ");
+        preview.append(why);
+      }
+      submit?.update({ disabled: locked || invalid || !p.eligible.length, loading: locked });
+      close.update(locked);
+      if (controlsLocked !== locked) {
+        controlsLocked = locked;
+        for (const h of handles) h.update({ disabled: locked });
+      }
+    };
+    return {
+      open: (kind, trigger, previous = null) => {
+        if (locked) return;
+        opener = trigger;
+        handles.forEach((h) => h.dispose());
+        handles = [];
+        controlsLocked = null;
+        submit?.dispose();
+        form.replaceChildren();
+        footer.replaceChildren();
+        const initial = previous?.kind === kind ? { ...previous } : kind === "move" ? { kind, to: "ready" } : kind === "label" ? { kind, label: "", mode: "add" } : kind === "parent" ? { kind, parentId: "" } : kind === "blocker" ? { kind, blockerId: "" } : kind === "delete" ? { kind, withChildren: false } : kind === "copy" ? { kind, format: "titles" } : { kind };
+        action = initial;
+        root.hidden = false;
+        root.setAttribute("aria-label", ACTION_LABELS[kind]);
+        title.textContent = ACTION_LABELS[kind];
+        const select = (label, value, options, change) => {
+          handles.push(mountSelect(slot(), { label, value, options, onChange: (value2) => {
+            change(value2);
+            refresh();
+          } }));
+        };
+        if (kind === "move") select("Destination", initial.kind === "move" ? initial.to : "ready", COLUMNS.map((c) => ({ id: c.id, label: c.title })), (to) => {
+          action = { kind, to };
+        });
+        if (kind === "label") {
+          select("Operation", initial.kind === "label" ? initial.mode : "add", [{ id: "add", label: "Add label" }, { id: "remove", label: "Remove label" }], (mode) => {
+            if (action?.kind === kind) action = { ...action, mode };
+          });
+          handles.push(mountTextField(slot(), { label: "Label", value: initial.kind === "label" ? initial.label : "", placeholder: "e.g. urgent", onChange: (label) => {
+            if (action?.kind === kind) action = { ...action, label };
+            refresh();
+          } }));
+        }
+        if (kind === "parent" || kind === "blocker") {
+          select(kind === "parent" ? "Parent task" : "Blocking task", initial.kind === "parent" ? initial.parentId : initial.kind === "blocker" ? initial.blockerId : "", [
+            { id: "", label: "Choose a task\u2026" },
+            ...deps.tasks().map((t) => ({ id: t.id, label: `${t.title} \xB7 ${t.id}` }))
+          ], (id) => {
+            action = kind === "parent" ? { kind, parentId: id } : { kind, blockerId: id };
+          });
+        }
+        if (kind === "copy") select("Format", initial.kind === "copy" ? initial.format : "titles", [{ id: "titles", label: "Titles" }, { id: "links", label: "Links / local paths" }], (format2) => {
+          action = { kind, format: format2 };
+        });
+        if (kind === "delete") {
+          const warning = document.createElement("p");
+          warning.className = "kb-muted";
+          warning.textContent = "Permanently deletes tasks from their source. This cannot be undone.";
+          form.append(warning);
+          handles.push(mountSwitch(slot(), { label: "Also delete sub-tasks", checked: initial.kind === "delete" && initial.withChildren, onChange: (withChildren) => {
+            action = { kind, withChildren };
+            refresh();
+          } }));
+        }
+        if (kind === "start" || kind === "queue") {
+          const note = document.createElement("p");
+          note.className = "kb-muted";
+          note.textContent = "Uses each task\u2019s start settings and the project\u2019s agent limit. Queued tasks may start as soon as a slot is available.";
+          form.append(note);
+        }
+        submit = mountButton(footer, {
+          label: kind === "delete" ? "Delete eligible tasks" : kind === "copy" ? "Copy" : "Apply to eligible tasks",
+          variant: kind === "delete" ? "destructive" : "default",
+          size: "sm",
+          onClick: () => {
+            if (!action || locked) return;
+            const chosen = action;
+            const p = deps.preview(chosen);
+            if (!p.eligible.length) return;
+            locked = true;
+            refresh();
+            void deps.submit(chosen, p.eligible).finally(() => {
+              locked = false;
+              dismiss();
+            });
+          }
+        });
+        refresh();
+        (form.querySelector("input, button") ?? footer.querySelector("button"))?.focus();
+      },
+      update: (saving) => {
+        locked = saving;
+        refresh();
+      },
+      dismiss,
+      isOpen: () => action !== null,
+      dispose: () => {
+        handles.forEach((h) => h.dispose());
+        submit?.dispose();
+        root.replaceChildren();
+      }
+    };
+  };
+
+  // src/panel/ui/bulkToolbar.ts
+  var mountBulkToolbar = (root, callbacks) => {
+    root.classList.add("kb-bulk");
+    root.hidden = true;
+    root.setAttribute("role", "region");
+    root.setAttribute("aria-label", "Edit marked tasks");
+    const slot = (className, parent = root) => {
+      const node = document.createElement("div");
+      node.className = className;
+      parent.append(node);
+      return node;
+    };
+    const top = slot("kb-bulk-top");
+    const head = slot("kb-bulk-head", top);
+    const count = slot("kb-bulk-count", head);
+    count.setAttribute("aria-live", "polite");
+    const all = bulkIconButton(head, "all", "Select all", callbacks.onSelectAll);
+    const clear = bulkIconButton(head, "clear", "Clear", callbacks.onClear);
+    const fields = slot("kb-bulk-fields", top);
+    const stateSlot = slot("kb-bulk-field", fields);
+    stateSlot.dataset.bulkField = "state";
+    const typeSlot = slot("kb-bulk-field", fields);
+    typeSlot.dataset.bulkField = "type";
+    const state2 = mountSelect(stateSlot, {
+      label: "State",
+      value: "",
+      options: [{ id: "", label: "No change" }, ...TASK_STATES.map((id) => ({ id, label: id }))],
+      onChange: (id) => callbacks.onDraft({ state: id === "" ? null : id })
+    });
+    const type = mountSelect(typeSlot, {
+      label: "Type",
+      value: "",
+      options: [{ id: "", label: "No change" }],
+      onChange: (id) => callbacks.onDraft({ type: id || null })
+    });
+    const apply = mountButton(slot("kb-bulk-apply", fields), { label: "Apply", size: "sm", disabled: true, onClick: callbacks.onApply });
+    const actionRow = slot("kb-bulk-actions");
+    const groups = [["move", "label"], ["parent", "unparent", "blocker"], ["start"], ["archive", "restore", "copy"], ["delete"]];
+    const actionButtons = [];
+    let lastAction = null;
+    const popover = slot("kb-bulk-popover");
+    const actionForm = mountBulkActionForm(popover, {
+      tasks: () => callbacks.actions?.tasks() ?? [],
+      preview: (action) => callbacks.actions?.preview(action) ?? { eligible: [], excluded: [], additional: [] },
+      submit: async (action, ids) => {
+        await callbacks.actions?.submit(action, ids);
+      },
+      dismiss: () => {
+      }
+    });
+    for (const group of groups) {
+      const wrap = slot("kb-bulk-action-group", actionRow);
+      for (const kind of group) {
+        const handle = bulkIconButton(wrap, kind, ACTION_LABELS[kind], () => actionForm.open(kind, handle.button, lastAction));
+        actionButtons.push({ kind, handle });
+      }
+    }
+    const childrenSlot = slot("kb-bulk-children");
+    const children = mountSwitch(childrenSlot, {
+      label: "Close sub-tasks",
+      checked: true,
+      onChange: (checked) => callbacks.onDraft({ withChildren: checked })
+    });
+    const extra = slot("kb-muted", childrenSlot);
+    const status = slot("kb-bulk-status");
+    status.setAttribute("role", "status");
+    const errors2 = slot("kb-bulk-errors");
+    errors2.setAttribute("aria-live", "polite");
+    let previousState = "";
+    let previousType = "";
+    let previousErrors = "";
+    const onKey = (event) => {
+      if (event.key !== "Escape" || root.querySelector('[role="listbox"]')) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (actionForm.isOpen()) actionForm.dismiss();
+      else callbacks.onClear();
+    };
+    root.addEventListener("keydown", onKey);
+    const measure = () => root.parentElement?.style.setProperty("--kb-bulk-space", root.hidden ? "0px" : `${root.getBoundingClientRect().height + 28}px`);
+    const observer = new ResizeObserver(measure);
+    observer.observe(root);
+    return {
+      isActionOpen: actionForm.isOpen,
+      update: (model, types) => {
+        lastAction = model.lastAction;
+        root.hidden = model.count === 0;
+        if (root.hidden) actionForm.dismiss();
+        count.textContent = `${model.count} marked${model.hiddenCount ? ` (${model.hiddenCount} hidden by filters)` : ""}`;
+        all.update(model.locked);
+        clear.update(model.locked);
+        for (const { kind, handle } of actionButtons) {
+          const action = kind === "parent" || kind === "blocker" ? null : kind === "move" ? { kind, to: "ready" } : kind === "label" ? { kind, label: "", mode: "add" } : kind === "copy" ? { kind, format: "titles" } : kind === "delete" ? { kind, withChildren: false } : { kind };
+          const preview = action ? callbacks.actions?.preview(action) : void 0;
+          const unavailable = preview !== void 0 && preview.eligible.length === 0;
+          handle.update(model.locked || unavailable, unavailable ? preview.excluded[0]?.reason : void 0);
+        }
+        actionForm.update(model.locked);
+        apply.update({ disabled: !model.canApply, label: model.locked ? "Saving\u2026" : "Apply" });
+        const stateKey = JSON.stringify([model.draft.state, model.locked]);
+        if (stateKey !== previousState) {
+          previousState = stateKey;
+          state2.update({ value: model.draft.state ?? "", disabled: model.locked });
+        }
+        const options = [.../* @__PURE__ */ new Set([...types, ...model.draft.type ? [model.draft.type] : []])];
+        const typeKey = JSON.stringify([options, model.draft.type, model.locked]);
+        if (typeKey !== previousType) {
+          previousType = typeKey;
+          type.update({ value: model.draft.type ?? "", disabled: model.locked, options: [{ id: "", label: "No change" }, ...options.map((id) => ({ id, label: id }))] });
+        }
+        childrenSlot.hidden = model.draft.state !== "done";
+        children.update({ checked: model.draft.withChildren, disabled: model.locked });
+        extra.textContent = model.draft.withChildren ? `${model.extraCloseCount} additional sub-task${model.extraCloseCount === 1 ? "" : "s"} to close` : "Only marked tasks will be closed";
+        status.textContent = model.locked && model.progress ? `Saving ${model.progress.completed} of ${model.progress.total} tasks\u2026` : model.notice ?? model.blockReason ?? "";
+        const errorText2 = [...model.failures.map((f) => `${f.id} \u2014 ${f.field}: ${f.message}`), ...model.actionFailures.map((f) => `${f.id} \u2014 ${f.message}`)].join("\n");
+        if (errorText2 !== previousErrors) {
+          previousErrors = errorText2;
+          errors2.textContent = errorText2;
+        }
+        measure();
+      },
+      dispose: () => {
+        observer.disconnect();
+        root.removeEventListener("keydown", onKey);
+        actionForm.dispose();
+        state2.dispose();
+        type.dispose();
+        apply.dispose();
+        children.dispose();
+        root.replaceChildren();
+      }
+    };
+  };
+
+  // src/panel/actionResult.ts
+  var executeMove = async (task, from, to, children, deps) => {
+    try {
+      const move = planMove(task, from, to, children);
+      if (move.kind === "none") return { kind: "failed", id: task.id, message: move.reason };
+      if (move.kind === "start") return await deps.start();
+      let withChildren = false;
+      if (move.kind === "close" && move.askChildren) {
+        const answer = await deps.chooseChildren();
+        if (answer === null) return { kind: "cancelled", id: task.id };
+        withChildren = answer;
+      }
+      if (!await deps.before()) throw new Error("Could not remove the task from the queue");
+      if (move.kind === "close") await deps.close(task.id, withChildren);
+      else {
+        await deps.setState(task.id, move.state);
+        await deps.after();
+      }
+      return { kind: "success", id: task.id };
+    } catch (e) {
+      return { kind: "failed", id: task.id, message: errorMessage(e) };
+    }
   };
 
   // src/panel/ui/styles.ts
@@ -15755,6 +16610,54 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
 * { box-sizing: border-box; }
 .kb { display: flex; flex-direction: column; gap: 0.75rem; padding: 0.75rem; min-height: 100vh; }
 .kb-toolbar { display: flex; flex-direction: column; gap: 0.5rem; }
+.kb:has(> .kb-bulk:not([hidden])) { padding-bottom: var(--kb-bulk-space, 160px); }
+.kb-bulk { position: fixed; z-index: 40; bottom: 12px; left: 0; right: 0; margin-inline: auto;
+  width: max-content; max-width: min(620px, calc(100% - 24px)); display: flex; flex-direction: column; gap: 0.625rem;
+  padding: 0.75rem; border: 1px solid var(--oc-border); border-radius: calc(var(--oc-radius) + 6px);
+  color: var(--oc-elevated-fg, var(--oc-fg)); background: var(--oc-elevated, var(--oc-bg));
+  box-shadow: 0 8px 32px rgb(0 0 0 / 0.16), 0 2px 6px rgb(0 0 0 / 0.08); }
+.kb-bulk[hidden], .kb-bulk-children[hidden], .kb-bulk-popover[hidden] { display: none; }
+.kb-bulk-top, .kb-bulk-head, .kb-bulk-fields, .kb-bulk-children { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
+.kb-bulk-top { gap: 0.75rem; }
+.kb-bulk-count { font-size: 0.8em; font-weight: 600; font-variant-numeric: tabular-nums; max-width: 9rem; }
+.kb-bulk-field { width: 8.25rem; min-width: 0; }
+.kb-bulk-apply { align-self: flex-end; padding-bottom: 0.125rem; }
+.kb-bulk-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 0.5rem; padding-top: 0.5rem; border-top: 1px solid var(--oc-border); }
+.kb-bulk-action-group { display: flex; gap: 2px; }
+.kb-bulk-action-group + .kb-bulk-action-group { border-left: 1px solid var(--oc-border); padding-left: 0.5rem; }
+.kb-bulk-icon-wrap { position: relative; display: inline-flex; }
+.kb-bulk-icon { width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center;
+  border: 0; border-radius: var(--oc-radius); background: transparent; color: inherit; cursor: pointer; }
+.kb-bulk-icon:hover, .kb-bulk-icon:focus-visible { background: var(--oc-muted-surface); }
+.kb-bulk-icon:focus-visible { outline: 2px solid var(--oc-focus, var(--oc-primary)); outline-offset: 2px; }
+.kb-bulk-icon:disabled { opacity: 0.4; cursor: default; }
+.kb-bulk-icon.is-danger { color: var(--oc-error-text, #dc5050); }
+.kb-bulk-tip { position: absolute; bottom: calc(100% + 6px); left: 50%; transform: translateX(-50%);
+  display: none; z-index: 80; padding: 0.35rem 0.5rem; border: 1px solid var(--oc-border); border-radius: var(--oc-radius);
+  background: var(--oc-elevated, var(--oc-bg)); color: var(--oc-fg); box-shadow: 0 2px 8px rgb(0 0 0 / 0.15);
+  font-size: 0.75rem; white-space: nowrap; pointer-events: none; }
+.kb-bulk-icon-wrap:hover > .kb-bulk-tip, .kb-bulk-icon-wrap:focus-within > .kb-bulk-tip { display: block; }
+.kb-bulk-popover { position: absolute; bottom: calc(100% + 8px); left: 0; width: 100%; min-width: 0;
+  max-height: max(120px, calc(100dvh - var(--kb-bulk-space, 200px) - 32px)); overflow: auto;
+  display: flex; flex-direction: column; gap: 0.75rem; padding: 0.875rem;
+  background: var(--oc-elevated, var(--oc-bg)); color: var(--oc-fg); border: 1px solid var(--oc-border);
+  border-radius: calc(var(--oc-radius) + 4px); box-shadow: 0 8px 32px rgb(0 0 0 / 0.16); }
+.kb-bulk-popover-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; font-size: 0.9rem; }
+.kb-bulk-form-fields { display: flex; flex-direction: column; gap: 0.65rem; }
+.kb-bulk-form-fields p { margin: 0; font-size: 0.8rem; line-height: 1.5; }
+.kb-bulk-preview { font-size: 0.8rem; line-height: 1.5; overflow-wrap: anywhere; }
+.kb-bulk-children { font-size: 0.8rem; }
+@media (max-width: 480px) {
+  .kb-bulk { padding: 0.625rem; }
+  .kb-bulk-top { flex-direction: column; align-items: flex-start; gap: 0.5rem; }
+  .kb-bulk-field { width: 7.25rem; }
+  .kb-bulk-icon { width: 30px; height: 30px; }
+  .kb-bulk-actions { gap: 0.375rem; }
+}
+.kb-bulk-status { font-size: 0.85em; color: var(--oc-muted); overflow-wrap: anywhere; }
+.kb-bulk-errors { max-height: 5rem; overflow-y: auto; white-space: pre-wrap; overflow-wrap: anywhere;
+  font-size: 0.8em; color: var(--oc-error-text, var(--oc-fg)); }
+.kb-bulk-status:empty, .kb-bulk-errors:empty { display: none; }
 .kb-toolbar-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 0.75rem; }
 .kb-project { flex: 1 1 12rem; min-width: 10rem; max-width: 28rem; }
 .kb-source { flex: 0 0 auto; }
@@ -16025,9 +16928,9 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
       }
     });
     return {
-      setBusy: (next) => {
-        busy = next;
-        button2.update({ loading: next, disabled: next });
+      setBusy: (next2) => {
+        busy = next2;
+        button2.update({ loading: next2, disabled: next2 });
       },
       dispose: () => {
         list2.dispose();
@@ -16134,6 +17037,12 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
   var board;
   var editor;
   var selection2;
+  var bulk = null;
+  var bulkUi = null;
+  var bulkLocked = false;
+  var paintBulk = () => {
+    if (bulk !== null) bulkUi?.update(bulk.model(), boardTypes());
+  };
   var shortcuts;
   var unsubscribeSessions = null;
   var generation = 0;
@@ -16246,15 +17155,15 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
         onSources: async (change) => {
           if (p === null) return null;
           try {
-            const next = await changeSource(
+            const next2 = await changeSource(
               createApi(host, p.directory),
               change,
               async (message2) => await askChoice("Replace the edited tracker instructions?", message2, [
                 { id: "replace", label: "Replace", variant: "destructive" }
               ]) === "replace"
             );
-            if (next !== null && project()?.id === p.id) void load();
-            return next;
+            if (next2 !== null && project()?.id === p.id) void load();
+            return next2;
           } catch (e) {
             fail(`Could not change the sources: ${errorMessage(e)}`);
             return null;
@@ -16312,6 +17221,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
       (task) => sourceBadge(task, view, sources)
     );
     selection2.rendered(layoutOf(shown));
+    paintBulk();
     auditLinks();
     focusSession();
     const emptyKind = view === "all" ? primary2 : view;
@@ -16479,7 +17389,9 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     if (state.view !== "wizard") void load();
   };
   var selectProject = async (id) => {
+    if (bulkLocked) return;
     if (id === state.projectId) return;
+    bulk?.reset();
     state.projectId = id;
     editor.reset();
     selection2.set(null);
@@ -16646,18 +17558,18 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     saver.save(STORAGE_KEYS.detached(id), () => store.saveDetached(id, saved));
     info("Moved; the agent session keeps running \u2014 open it from the session list");
   };
-  var setOrder = (projectId, next) => {
-    state.order = next;
+  var setOrder = (projectId, next2) => {
+    state.order = next2;
     state.orderFor = projectId;
     const n = orderSync.edit();
-    saver.save(STORAGE_KEYS.taskOrder(projectId), () => store.saveOrder(projectId, next).then(() => orderSync.written(n)));
+    saver.save(STORAGE_KEYS.taskOrder(projectId), () => store.saveOrder(projectId, next2).then(() => orderSync.written(n)));
   };
   var reorderCard = (taskId, column, before) => {
     const id = state.projectId;
     if (id === null || state.tasks === null) return;
     const ids = [...state.columns].filter(([, c]) => c === column).map(([t]) => t);
-    const next = pruneOrder(reorder(order2(), ids, taskId, before), state.tasks, state.unlisted);
-    setOrder(id, next);
+    const next2 = pruneOrder(reorder(order2(), ids, taskId, before), state.tasks, state.unlisted);
+    setOrder(id, next2);
     draw();
   };
   var forgetOrdered = (ids) => {
@@ -16674,13 +17586,13 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     const snapshot = pendingMarks.queue(projectId, marks, removed, n);
     const job = archiveWriteJob(
       { marks: snapshot, removed, tasks, unlisted: state.unlisted },
-      { load: () => store.loadArchivedTasks(projectId), save: (next) => store.saveArchivedTasks(projectId, next) },
-      (next) => {
+      { load: () => store.loadArchivedTasks(projectId), save: (next2) => store.saveArchivedTasks(projectId, next2) },
+      (next2) => {
         archiveSync.written(n);
         pendingMarks.written(projectId, n);
         if (state.archivedTasksFor !== projectId || state.tasks === null) return;
         const current2 = state.archivedTasks;
-        const shown = reconcileArchived(mergeArchived(current2, next, removedFor(projectId)), state.tasks, state.unlisted).marks;
+        const shown = reconcileArchived(mergeArchived(current2, next2, removedFor(projectId)), state.tasks, state.unlisted).marks;
         if (sameMarks(current2, shown)) return;
         state.archivedTasks = shown;
         draw();
@@ -16696,6 +17608,86 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     writeArchivedTasks(projectId, marks, state.tasks);
     draw();
     editor.refresh();
+  };
+  var persistBulkArchive = async (projectId, marks, removed) => {
+    await saver.idle();
+    const n = archiveSync.edit();
+    await archiveWriteJob(
+      { marks, removed, tasks: state.tasks, unlisted: state.unlisted },
+      { load: () => store.loadArchivedTasks(projectId), save: (value) => store.saveArchivedTasks(projectId, value) },
+      (value) => {
+        archiveSync.written(n);
+        unarchivedAt.set(projectId, removed);
+        state.archivedTasks = value;
+        state.archivedTasksFor = projectId;
+      }
+    )();
+  };
+  var bulkActionDeps = () => {
+    const p = project();
+    if (!p || state.view !== "board") return null;
+    const api = createApi(host, p.directory);
+    const originalArchive = new Map(archivedTasks());
+    return {
+      api,
+      tasks: () => state.tasks ?? [],
+      context: () => ({
+        sources: state.config?.sources ?? [],
+        archived: new Set(archivedTasks().keys()),
+        busy: new Set(editor.busy),
+        complete: state.tasks !== null && state.sourceErrors.length === 0
+      }),
+      copy: (text3) => host.writeClipboard(text3),
+      start: (id, mode) => starter.startTaskAction(id, mode),
+      move: async (id, to) => {
+        const task = await api.get(id);
+        const from = state.columns.get(id) ?? (task.state === "done" ? "done" : task.state === "ready-for-agent" ? "ready" : "backlog");
+        return executeMove(task, from, to, openChildren(task, state.tasks ?? []), {
+          before: () => starter.leaveQueue(id),
+          after: () => detach(task, from),
+          setState: api.setState,
+          close: api.close,
+          start: () => starter.startTaskAction(id, "start"),
+          chooseChildren: async () => {
+            const answer = await askChoice(`Close \u201C${task.title}\u201D?`, "This task has open sub-tasks.", [
+              { id: "one", label: "Only this task" },
+              { id: "all", label: "With sub-tasks", variant: "destructive" }
+            ]);
+            return answer === null ? null : answer === "all";
+          }
+        });
+      },
+      archive: async (ids, restore) => {
+        const tasks = await Promise.all(ids.map((id) => api.get(id)));
+        if (tasks.some((t) => t.state !== "done")) throw new Error("Only completed tasks can be archived or restored.");
+        let marks = new Map(archivedTasks());
+        const removed = new Map(removedFor(p.id));
+        if (restore) for (const id of ids) {
+          marks.delete(id);
+          removed.set(id, Date.now());
+        }
+        else marks = archiveTasks(marks, ids, Date.now());
+        await persistBulkArchive(p.id, marks, removed);
+      },
+      remap: async (from, to) => {
+        state.tasks = state.tasks?.map((t) => t.id === from ? { ...t, id: to } : t) ?? null;
+        renameOrdered(from, to);
+        await saver.idle();
+        await store.moveCard(p.id, from, to);
+        await store.moveNoType(p.id, from, to);
+        const marks = new Map(archivedTasks());
+        const at = originalArchive.get(from);
+        if (at !== void 0) {
+          marks.delete(from);
+          marks.set(to, at);
+          await persistBulkArchive(p.id, marks, new Map(removedFor(p.id)).set(from, Date.now()));
+        }
+      },
+      deleted: async (ids) => {
+        forgetOrdered(ids);
+        for (const id of ids) await forgetStartOptions(p.id, id);
+      }
+    };
   };
   var archiveDone = async () => {
     const id = state.projectId;
@@ -16810,10 +17802,10 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
   };
   var checkSession = async (sessionId) => (await checkSessions([sessionId])).get(sessionId) ?? "missing";
   var noteArchived = (projectId, ids) => {
-    const next = pruneArchived(/* @__PURE__ */ new Set([...archived(), ...ids]), starter.links());
-    state.archived = next;
+    const next2 = pruneArchived(/* @__PURE__ */ new Set([...archived(), ...ids]), starter.links());
+    state.archived = next2;
     state.archivedFor = projectId;
-    saver.save(STORAGE_KEYS.archivedSessions(projectId), () => store.saveArchived(projectId, next));
+    saver.save(STORAGE_KEYS.archivedSessions(projectId), () => store.saveArchived(projectId, next2));
     draw();
     editor.refresh();
   };
@@ -16830,9 +17822,9 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     });
   };
   var sections = { ...DEFAULT_SECTIONS };
-  var saveSections = (next) => {
-    sections = next;
-    saver.save(STORAGE_KEYS.detailSections, () => store.saveSections(next));
+  var saveSections = (next2) => {
+    sections = next2;
+    saver.save(STORAGE_KEYS.detailSections, () => store.saveSections(next2));
   };
   var setHideSubtasks = (hide) => {
     state.hideSubtasks = hide;
@@ -16903,6 +17895,8 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     installOpenTaskShortcuts(shortcuts);
     installToolbarShortcuts(shortcuts);
     installCheatSheet(shortcuts);
+    shortcuts.addLayer(() => bulkLocked ? "none" : null, { front: true });
+    shortcuts.addLayer(() => bulkUi?.isActionOpen() || board.bulkSlot.contains(document.activeElement) ? "none" : null, { front: true });
     applyKeymap();
   };
   var installOpenTaskShortcuts = (shortcuts2) => {
@@ -16934,7 +17928,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     shortcuts2.on("board.settings", () => showSettings());
     shortcuts2.on("board.search", () => board.focusSearch());
     shortcuts2.on("board.refresh", () => {
-      if (!board.busy()) void load();
+      if (!bulkLocked && !board.busy()) void load();
     });
     shortcuts2.reserve("board.refresh");
   };
@@ -16969,6 +17963,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     }
     board = createBoard(root, {
       onProject: (id) => {
+        if (bulkLocked) return;
         state.pinned = true;
         rememberProject(id);
         void selectProject(id);
@@ -17003,10 +17998,14 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
       },
       onClearArchive: () => void clearArchive()
     });
-    selection2 = createSelection(board.columns, { canFocus: () => shortcuts.context() === "board" });
+    selection2 = createSelection(board.columns, {
+      canFocus: () => !bulkLocked && shortcuts.context() === "board",
+      onMarksChanged: (ids) => bulk?.selectionChanged(ids)
+    });
     editor = createEditor({
       host,
       board,
+      blocked: () => bulkLocked,
       api: () => {
         const p = project();
         return p === null || state.view !== "board" ? null : createApi(host, p.directory);
@@ -17076,6 +18075,43 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
       // Global only; off until the global layer is read.
       suggest: { enabled: () => suggestEnabled(globalLoaded, state.globalSettings), suggester }
     });
+    bulkUi = mountBulkToolbar(board.bulkSlot, {
+      actions: {
+        tasks: () => state.tasks ?? [],
+        preview: (action) => bulk.actionPreview(action),
+        submit: (action, ids) => bulk.executeAction(action, ids)
+      },
+      onDraft: (change) => bulk?.setDraft(change),
+      onApply: () => void bulk?.apply(),
+      onClear: () => bulk?.clear(),
+      onSelectAll: () => selection2.selectAll()
+    });
+    bulk = createBulkToolbar({
+      actions: bulkActionDeps,
+      api: () => {
+        const p = project();
+        return p === null || state.view !== "board" ? null : createApi(host, p.directory);
+      },
+      tasks: () => state.tasks ?? [],
+      visible: () => selection2.layout().flat(),
+      busy: () => editor.busy,
+      complete: () => state.tasks !== null && state.sourceErrors.length === 0,
+      changed: paintBulk,
+      replace: selection2.setMarked,
+      retain: selection2.retain,
+      lock: (locked, ids) => {
+        bulkLocked = locked;
+        selection2.setLocked(locked);
+        board.setInteractionLocked(locked);
+        editor.setBulkBusy(ids, locked);
+        draw();
+      },
+      reload: async () => {
+        await load();
+        if (state.view !== "board") throw new Error("Changes were saved, but the board could not reload. Refresh to retry loading.");
+      }
+    });
+    paintBulk();
     installShortcuts();
     if (ctx.features?.lateGenerateResults === true) host.onLateGenerateResult((late) => void summaries.acceptLate(late));
     void loadGlobalSettings();

@@ -9,7 +9,7 @@
 // - dispose removes the focusin listener; the panel has no teardown today, so main.ts never calls it.
 import { keepSelected, locate, nextSelected, type Direction, type Layout, type Selected } from '../navigation.ts';
 import { activeElement } from '../shortcuts.ts';
-import { clickMarks, dragGroup, keepMarks, NO_MARKS, type MarkHow, type Marks } from '../marks.ts';
+import { createMarks, type MarkHow } from '../marks.ts';
 
 export type Selection = {
   /** The Selected card's task id, or null. */
@@ -32,16 +32,20 @@ export type Selection = {
   mark: (id: string, how: MarkHow) => void;
   /** Unmark every card (a plain click, a press on the background, Escape). */
   clearMarks: () => void;
+  setMarked: (ids: readonly string[]) => void;
+  selectAll: () => void;
+  retain: (ids: readonly string[]) => void;
+  setLocked: (locked: boolean) => void;
   /** What a drag of `id` carries (marks.ts dragGroup). */
   group: (id: string, busy: ReadonlySet<string>) => readonly string[];
   dispose: () => void;
 };
 
-export const createSelection = (container: HTMLElement, options: { canFocus: () => boolean }): Selection => {
+export const createSelection = (container: HTMLElement, options: { canFocus: () => boolean; onMarksChanged?: (ids: readonly string[]) => void }): Selection => {
   let selected: Selected | null = null;
   let layout: Layout = [];
   let refocus = false;
-  let marks: Marks = NO_MARKS;
+  const marks = createMarks(ids => { paint(); options.onMarksChanged?.(ids); });
 
   const cardOf = (id: string): HTMLElement | null =>
     container.querySelector<HTMLElement>(`.kb-card[data-task-id="${CSS.escape(id)}"]`);
@@ -51,7 +55,7 @@ export const createSelection = (container: HTMLElement, options: { canFocus: () 
     for (const el of container.querySelectorAll('.kb-card.is-selected')) el.classList.remove('is-selected');
     if (selected !== null) cardOf(selected.id)?.classList.add('is-selected');
     for (const el of container.querySelectorAll('.kb-card.is-marked')) el.classList.remove('is-marked');
-    for (const id of marks.ids) cardOf(id)?.classList.add('is-marked');
+    for (const id of marks.get().ids) cardOf(id)?.classList.add('is-marked');
   };
 
   const focus = (scroll: boolean): void => {
@@ -101,25 +105,25 @@ export const createSelection = (container: HTMLElement, options: { canFocus: () 
     rendered: (next) => {
       layout = next;
       selected = keepSelected(layout, selected);
-      marks = keepMarks(marks, layout);
+      marks.rendered(layout);
       paint();
       if (refocus) focus(false);
       refocus = false;
     },
     focusOnBoard,
-    marked: () => marks.ids,
+    marked: () => marks.get().ids,
     mark: (id, how) => {
-      marks = clickMarks(marks, layout, id, how, selected?.id ?? null);
+      marks.mark(id, how, selected?.id ?? null);
       // The clicked card is the Selected card too, so the keyboard goes on from it.
       selected = locate(layout, id) ?? selected;
       paint();
     },
-    clearMarks: () => {
-      if (marks === NO_MARKS) return;
-      marks = NO_MARKS;
-      paint();
-    },
-    group: (id, busy) => dragGroup(marks, layout, id, busy),
+    clearMarks: marks.clear,
+    setMarked: marks.set,
+    selectAll: marks.selectAll,
+    retain: marks.retain,
+    setLocked: marks.setLocked,
+    group: marks.group,
     dispose: () => container.removeEventListener('focusin', onFocusIn),
   };
 };

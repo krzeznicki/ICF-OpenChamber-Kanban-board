@@ -403,7 +403,7 @@ var createGithubTracker = (root, exec, labels) => {
     const custom = names.find((l) => l.toLowerCase().startsWith(TYPE_PREFIX));
     return custom === void 0 ? null : custom.slice(TYPE_PREFIX.length).trim() || null;
   };
-  const toTask = (issue, rel) => ({
+  const toTask = (issue, rel, childCount) => ({
     id: idOf(issue.number),
     kind: rel.childCount > 0 ? "parent" : "ticket",
     title: issue.title,
@@ -415,7 +415,9 @@ var createGithubTracker = (root, exec, labels) => {
     url: issue.url,
     updatedAt: Date.parse(issue.updatedAt) || 0,
     claimed: issue.assignees.length > 0,
-    source: "github"
+    source: "github",
+    labels: issue.labels,
+    ...childCount === void 0 ? {} : { childCount }
   });
   const load = async (n) => {
     const g = (await graph([n], true)).get(n) ?? null;
@@ -432,7 +434,7 @@ var createGithubTracker = (root, exec, labels) => {
       assignees: (g.assignees?.nodes ?? []).map((a) => a.login)
     };
     const rel = relationsOf(g);
-    return { task: toTask(issue, rel), issue, rel };
+    return { task: toTask(issue, rel, g.subIssues?.totalCount), issue, rel };
   };
   const get = async (id) => (await load(parseNumber(id))).task;
   const typeLabel = (type) => CATEGORIES.includes(type) ? type : `${TYPE_PREFIX}${type}`;
@@ -511,9 +513,44 @@ var createGithubTracker = (root, exec, labels) => {
       })).filter((i) => i.state === "OPEN" || i.closedAt !== null && now - Date.parse(i.closedAt) <= DONE_WINDOW_MS).sort((a, b) => a.number - b.number);
       if (issues.length === 0) return [];
       const rel = await graph(issues.map((i) => i.number), false);
-      return issues.map((i) => toTask(i, relationsOf(rel.get(i.number) ?? null)));
+      return issues.map((i) => {
+        const g = rel.get(i.number) ?? null;
+        return toTask(i, relationsOf(g), g?.subIssues?.totalCount);
+      });
     },
     get,
+    async changeLabel(id, label, mode) {
+      const name = label.trim();
+      if (!name || name.includes(",") || /[\r\n]/.test(name)) throw new TrackerError("INVALID", "Choose one non-empty label");
+      if (Object.values(labels).some((l) => l.toLowerCase() === name.toLowerCase()) || isTypeLabel(name.toLowerCase())) {
+        throw new TrackerError("INVALID", "Use the status or type control for workflow labels");
+      }
+      const { issue } = await load(parseNumber(id));
+      const present = issue.labels.find((l) => l.toLowerCase() === name.toLowerCase());
+      await swapLabels(issue.number, mode === "add" && !present ? name : null, mode === "remove" && present ? [present] : []);
+      return get(id);
+    },
+    async addBlocker(id, blockerId) {
+      const n = parseNumber(id);
+      const b = parseNumber(blockerId);
+      const seen = /* @__PURE__ */ new Set();
+      const visit = async (at) => {
+        if (at === n) throw new TrackerError("INVALID", "This dependency would create a cycle");
+        if (seen.has(at)) return;
+        seen.add(at);
+        const g = (await graph([at], true)).get(at);
+        if (!g) throw new TrackerError("NOT_FOUND", `Issue not found: #${at}`);
+        if (g.issueDependenciesSummary && g.issueDependenciesSummary.totalBlockedBy > (g.blockedBy?.nodes.length ?? 0)) {
+          throw new TrackerError("INVALID", "Dependencies are not fully loaded; cannot check for cycles");
+        }
+        const refs = relationsOf(g).blockedBy ?? bodyBlockers(g.body ?? "");
+        for (const ref of refs) await visit(ref);
+      };
+      const task = await get(id);
+      await visit(b);
+      if (!task.blockedBy.includes(idOf(b))) await run(["issue", "edit", String(n), "--add-blocked-by", String(b)]);
+      return get(id);
+    },
     async create(input) {
       if (typeof input.title !== "string" || input.title.trim() === "") throw new TrackerError("INVALID", "Title is required");
       const parent = input.parentId === void 0 ? null : parseNumber(input.parentId);
@@ -1284,6 +1321,26 @@ var createLocalTracker = (root) => {
     setType(id, type) {
       return patch(id, "Type", type.trim());
     },
+    async changeLabel() {
+      throw new TrackerError("UNSUPPORTED", "Local tasks do not support labels");
+    },
+    async addBlocker(id, blockerId) {
+      const task = await get(id);
+      const blocker = await get(blockerId);
+      if (task.id === blocker.id || task.kind !== "ticket" || blocker.kind !== "ticket" || task.parentId !== blocker.parentId) {
+        throw new TrackerError("INVALID", "A blocker must be another ticket of the same feature");
+      }
+      const seen = /* @__PURE__ */ new Set();
+      const visit = async (at) => {
+        if (at === task.id) throw new TrackerError("INVALID", "This dependency would create a cycle");
+        if (seen.has(at)) return;
+        seen.add(at);
+        for (const b of (await get(at)).blockedBy) await visit(b);
+      };
+      await visit(blocker.id);
+      const ids = [.../* @__PURE__ */ new Set([...task.blockedBy, blocker.id])];
+      return patch(task.id, "Blocked by", blockersValue(ids.map((b) => fileNumber(parseId(b).file))));
+    },
     async claim(id) {
       if (parseId(id).kind !== "ticket") throw new TrackerError("INVALID", `Only a ticket can be claimed, not a feature: ${id}`);
       if ((await get(id)).state !== "ready-for-agent") throw new TrackerError("INVALID", `Only a ready-for-agent task can be claimed: ${id}`);
@@ -1308,7 +1365,7 @@ var createLocalTracker = (root) => {
 var ALL = { create: true, subtasks: true, blockedBy: true, claim: true, delete: true };
 var SOURCES = {
   local: { label: "Local", capabilities: ALL },
-  github: { label: "GitHub", capabilities: ALL }
+  github: { label: "GitHub", capabilities: { ...ALL, labels: true } }
 };
 var sourceInfo = (id) => ({ id, ...SOURCES[id] });
 var availabilityOf = (e) => {
@@ -1420,6 +1477,11 @@ var createCombinedTracker = (primary, sources) => {
     create,
     setState: async (id, state) => sourceOf2(id).setState(id, state),
     setType: async (id, type) => sourceOf2(id).setType(id, type),
+    changeLabel: async (id, label, mode) => sourceOf2(id).changeLabel(id, label, mode),
+    addBlocker: async (id, blockerId) => {
+      if (sourceOf2(id) !== sourceOf2(blockerId)) throw new TrackerError("INVALID", NO_LINKS);
+      return sourceOf2(id).addBlocker(id, blockerId);
+    },
     edit: async (id, changes) => sourceOf2(id).edit(id, changes),
     claim: async (id) => sourceOf2(id).claim(id),
     setParent,

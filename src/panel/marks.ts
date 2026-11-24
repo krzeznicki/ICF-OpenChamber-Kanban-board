@@ -39,9 +39,18 @@ export const clickMarks = (marks: Marks, layout: Layout, id: string, how: MarkHo
   return { ids: inOrder(layout, new Set([...marks.base, ...range])), anchor, base: marks.base };
 };
 
-/** The marks still drawn after a redraw; the same object when nothing changed. */
-export const keepMarks = (marks: Marks, layout: Layout): Marks => {
-  const flat = new Set(order(layout));
+/** Select all: every card drawn (the Board's filters already applied), in board order, scrolled into view or not. */
+export const allMarks = (layout: Layout): Marks => {
+  const ids = order(layout);
+  return { ids, anchor: null, base: ids };
+};
+
+/**
+ * The marks still drawn after a redraw; the same object when nothing changed. `retained` stay marked
+ * even when not drawn (a bulk edit's targets and failures, which its own change may filter out).
+ */
+export const keepMarks = (marks: Marks, layout: Layout, retained: readonly string[] = []): Marks => {
+  const flat = new Set([...order(layout), ...retained]);
   const ids = marks.ids.filter((id) => flat.has(id));
   const base = marks.base.filter((id) => flat.has(id));
   const anchor = marks.anchor !== null && flat.has(marks.anchor) ? marks.anchor : null;
@@ -52,4 +61,33 @@ export const keepMarks = (marks: Marks, layout: Layout): Marks => {
 export const dragGroup = (marks: Marks, layout: Layout, pressed: string, busy: ReadonlySet<string>): string[] => {
   if (!marks.ids.includes(pressed)) return [pressed];
   return inOrder(layout, new Set(marks.ids.filter((id) => id === pressed || !busy.has(id))));
+};
+
+/** Public Marked-card state shared by the DOM selection and bulk edit form. */
+export const createMarks = (changed: (ids: readonly string[]) => void) => {
+  let marks = NO_MARKS;
+  let layout: Layout = [];
+  let retained: readonly string[] = [];
+  let locked = false;
+  const update = (next: Marks): void => {
+    const previous = marks.ids;
+    marks = next;
+    if (previous.length !== next.ids.length || previous.some((id, i) => id !== next.ids[i])) changed(next.ids);
+  };
+  return {
+    get: () => marks,
+    set: (ids: readonly string[]) => {
+      const unique = [...new Set(ids)];
+      update({ ids: unique, anchor: null, base: unique });
+    },
+    mark: (id: string, how: MarkHow, fallback: string | null = null) => {
+      if (!locked) update(clickMarks(marks, layout, id, how, fallback));
+    },
+    clear: () => { if (!locked) { retained = []; update(NO_MARKS); } },
+    selectAll: () => { if (!locked) update(allMarks(layout)); },
+    retain: (ids: readonly string[]) => { retained = [...ids]; },
+    setLocked: (value: boolean) => { locked = value; },
+    rendered: (next: Layout) => { layout = next; update(keepMarks(marks, layout, retained)); },
+    group: (id: string, busy: ReadonlySet<string>) => locked ? [] : dragGroup(marks, layout, id, busy),
+  };
 };

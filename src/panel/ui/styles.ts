@@ -6,6 +6,54 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
 * { box-sizing: border-box; }
 .kb { display: flex; flex-direction: column; gap: 0.75rem; padding: 0.75rem; min-height: 100vh; }
 .kb-toolbar { display: flex; flex-direction: column; gap: 0.5rem; }
+.kb:has(> .kb-bulk:not([hidden])) { padding-bottom: var(--kb-bulk-space, 160px); }
+.kb-bulk { position: fixed; z-index: 40; bottom: 12px; left: 0; right: 0; margin-inline: auto;
+  width: max-content; max-width: min(620px, calc(100% - 24px)); display: flex; flex-direction: column; gap: 0.625rem;
+  padding: 0.75rem; border: 1px solid var(--oc-border); border-radius: calc(var(--oc-radius) + 6px);
+  color: var(--oc-elevated-fg, var(--oc-fg)); background: var(--oc-elevated, var(--oc-bg));
+  box-shadow: 0 8px 32px rgb(0 0 0 / 0.16), 0 2px 6px rgb(0 0 0 / 0.08); }
+.kb-bulk[hidden], .kb-bulk-children[hidden], .kb-bulk-popover[hidden] { display: none; }
+.kb-bulk-top, .kb-bulk-head, .kb-bulk-fields, .kb-bulk-children { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
+.kb-bulk-top { gap: 0.75rem; }
+.kb-bulk-count { font-size: 0.8em; font-weight: 600; font-variant-numeric: tabular-nums; max-width: 9rem; }
+.kb-bulk-field { width: 8.25rem; min-width: 0; }
+.kb-bulk-apply { align-self: flex-end; padding-bottom: 0.125rem; }
+.kb-bulk-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 0.5rem; padding-top: 0.5rem; border-top: 1px solid var(--oc-border); }
+.kb-bulk-action-group { display: flex; gap: 2px; }
+.kb-bulk-action-group + .kb-bulk-action-group { border-left: 1px solid var(--oc-border); padding-left: 0.5rem; }
+.kb-bulk-icon-wrap { position: relative; display: inline-flex; }
+.kb-bulk-icon { width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center;
+  border: 0; border-radius: var(--oc-radius); background: transparent; color: inherit; cursor: pointer; }
+.kb-bulk-icon:hover, .kb-bulk-icon:focus-visible { background: var(--oc-muted-surface); }
+.kb-bulk-icon:focus-visible { outline: 2px solid var(--oc-focus, var(--oc-primary)); outline-offset: 2px; }
+.kb-bulk-icon:disabled { opacity: 0.4; cursor: default; }
+.kb-bulk-icon.is-danger { color: var(--oc-error-text, #dc5050); }
+.kb-bulk-tip { position: absolute; bottom: calc(100% + 6px); left: 50%; transform: translateX(-50%);
+  display: none; z-index: 80; padding: 0.35rem 0.5rem; border: 1px solid var(--oc-border); border-radius: var(--oc-radius);
+  background: var(--oc-elevated, var(--oc-bg)); color: var(--oc-fg); box-shadow: 0 2px 8px rgb(0 0 0 / 0.15);
+  font-size: 0.75rem; white-space: nowrap; pointer-events: none; }
+.kb-bulk-icon-wrap:hover > .kb-bulk-tip, .kb-bulk-icon-wrap:focus-within > .kb-bulk-tip { display: block; }
+.kb-bulk-popover { position: absolute; bottom: calc(100% + 8px); left: 0; width: 100%; min-width: 0;
+  max-height: max(120px, calc(100dvh - var(--kb-bulk-space, 200px) - 32px)); overflow: auto;
+  display: flex; flex-direction: column; gap: 0.75rem; padding: 0.875rem;
+  background: var(--oc-elevated, var(--oc-bg)); color: var(--oc-fg); border: 1px solid var(--oc-border);
+  border-radius: calc(var(--oc-radius) + 4px); box-shadow: 0 8px 32px rgb(0 0 0 / 0.16); }
+.kb-bulk-popover-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; font-size: 0.9rem; }
+.kb-bulk-form-fields { display: flex; flex-direction: column; gap: 0.65rem; }
+.kb-bulk-form-fields p { margin: 0; font-size: 0.8rem; line-height: 1.5; }
+.kb-bulk-preview { font-size: 0.8rem; line-height: 1.5; overflow-wrap: anywhere; }
+.kb-bulk-children { font-size: 0.8rem; }
+@media (max-width: 480px) {
+  .kb-bulk { padding: 0.625rem; }
+  .kb-bulk-top { flex-direction: column; align-items: flex-start; gap: 0.5rem; }
+  .kb-bulk-field { width: 7.25rem; }
+  .kb-bulk-icon { width: 30px; height: 30px; }
+  .kb-bulk-actions { gap: 0.375rem; }
+}
+.kb-bulk-status { font-size: 0.85em; color: var(--oc-muted); overflow-wrap: anywhere; }
+.kb-bulk-errors { max-height: 5rem; overflow-y: auto; white-space: pre-wrap; overflow-wrap: anywhere;
+  font-size: 0.8em; color: var(--oc-error-text, var(--oc-fg)); }
+.kb-bulk-status:empty, .kb-bulk-errors:empty { display: none; }
 .kb-toolbar-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 0.75rem; }
 .kb-project { flex: 1 1 12rem; min-width: 10rem; max-width: 28rem; }
 .kb-source { flex: 0 0 auto; }

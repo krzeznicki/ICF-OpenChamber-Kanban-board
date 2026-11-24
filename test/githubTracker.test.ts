@@ -4,8 +4,29 @@ import { parseLabels } from '../src/core/config.ts';
 import { createGithubTracker } from '../src/core/githubTracker.ts';
 import { TrackerError } from '../src/core/types.ts';
 import { fakeGh, type FakeGhOptions, type FakeIssue } from './fakeGh.ts';
+import { planBulk, runBulk } from '../src/panel/bulkEdit.ts';
 
 const LABELS = parseLabels(null);
+
+test('ordinary labels preserve workflow labels; native blockers are additive and reject cycles', async () => {
+  const { tracker } = setup([
+    { number: 1, title: 'One', labels: ['bug', 'ready-for-agent', 'keep'], blockedBy: [2] },
+    { number: 2, title: 'Two' },
+    { number: 3, title: 'Three' },
+  ]);
+  await tracker.changeLabel('#1', 'urgent', 'add');
+  await tracker.changeLabel('#1', 'urgent', 'add');
+  assert.deepEqual((await tracker.get('#1')).labels?.sort(), ['bug', 'keep', 'ready-for-agent', 'urgent']);
+  await tracker.changeLabel('#1', 'urgent', 'remove');
+  assert.equal((await tracker.get('#1')).state, 'ready-for-agent');
+  for (const label of ['bug', 'type:chore', 'ready-for-agent']) {
+    await assert.rejects(() => tracker.changeLabel('#1', label, 'remove'), /status|type/i);
+  }
+  await tracker.addBlocker('#1', '#3');
+  await tracker.addBlocker('#1', '#3');
+  assert.deepEqual((await tracker.get('#1')).blockedBy, ['#2', '#3']);
+  await assert.rejects(() => tracker.addBlocker('#3', '#1'), /cycle/i);
+});
 const DAY = 24 * 3600 * 1000;
 const ago = (days: number): string => new Date(Date.now() - days * DAY).toISOString();
 const ALL_LABELS = ['needs-triage', 'needs-info', 'ready-for-agent', 'ready-for-human', 'wontfix', 'bug', 'enhancement'];
@@ -66,6 +87,32 @@ test('list maps labels, parents, sub-issues and blockers; drops issues closed ov
     '--json', 'number,title,body,labels,state,updatedAt,url,closedAt,assignees',
   ]);
   assert.equal(gh.calls.filter((c) => c[1] === 'api' && c[2] === 'graphql').length, 1);
+});
+
+test('bulk closure refuses a listed GitHub tree with unlisted descendants', async () => {
+  const { tracker } = setup([
+    { number: 1, title: 'Parent' },
+    { number: 2, title: 'Older child', parent: 1, state: 'CLOSED', closedAt: ago(40) },
+    { number: 3, title: 'Open grandchild', parent: 2 },
+  ]);
+  const tasks = await tracker.list();
+  assert.deepEqual(tasks.map(t => t.id), ['#1', '#3']);
+  assert.throws(() => planBulk(tasks, ['#1'], { type: null, state: 'done', withChildren: true }), /sub-task.*not fully loaded/i);
+  assert.doesNotThrow(() => planBulk(tasks, ['#1'], { type: null, state: 'done', withChildren: false }));
+});
+
+test('a fully listed GitHub tree closes through every level, preserving implicit child types', async () => {
+  const { tracker } = setup([
+    { number: 1, title: 'Parent', labels: ['enhancement'] },
+    { number: 2, title: 'Child', parent: 1, labels: ['enhancement'] },
+    { number: 3, title: 'Grandchild', parent: 2, labels: ['enhancement'] },
+  ]);
+  const plan = planBulk(await tracker.list(), ['#1'], { type: 'bug', state: 'done', withChildren: true });
+  const result = await runBulk(plan, tracker, () => {});
+  assert.deepEqual(result, { succeeded: ['#3', '#2', '#1'], failures: [] });
+  assert.equal((await tracker.get('#3')).state, 'done');
+  assert.equal((await tracker.get('#3')).type, 'enhancement');
+  assert.equal((await tracker.get('#1')).type, 'bug');
 });
 
 test('custom label strings from triage-labels.md are used for state', async () => {

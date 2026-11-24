@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { clickMarks, dragGroup, keepMarks, NO_MARKS } from '../src/panel/marks.ts';
+import { allMarks, clickMarks, createMarks, dragGroup, keepMarks, NO_MARKS } from '../src/panel/marks.ts';
 
 // backlog: a b c · ready: (empty) · in progress: d e
 const layout = [['a', 'b', 'c'], [], ['d', 'e'], [], []];
@@ -53,4 +53,36 @@ test('a second Shift+click replaces the range from the same anchor (it can shrin
   // A Mod+click after a range keeps that range and starts a new anchor.
   const next = clickMarks(narrow, layout, 'd', 'toggle');
   assert.deepEqual(clickMarks(next, layout, 'e', 'range').ids, ['a', 'b', 'd', 'e']);
+});
+
+test('Select all marks every drawn card in board order, across all columns, and nothing filtered out', () => {
+  assert.deepEqual(allMarks(layout).ids, ['a', 'b', 'c', 'd', 'e']);
+  assert.deepEqual(allMarks([[], ['x'], []]).ids, ['x']);
+});
+
+test('a redraw keeps retained marks the filters hide, and still drops ordinary hidden marks', () => {
+  const marks = { ids: ['a', 'x', 'y'], anchor: 'a', base: ['a', 'x', 'y'] };
+  assert.deepEqual(keepMarks(marks, layout, ['x']).ids, ['a', 'x']);
+  assert.deepEqual(keepMarks(marks, layout).ids, ['a']);
+});
+
+test('locked marks ignore user changes, retain hidden failures and accept operation results', () => {
+  const observed: string[][] = [];
+  const marks = createMarks(ids => observed.push([...ids]));
+  marks.rendered(layout);
+  marks.selectAll();
+  assert.deepEqual(marks.get().ids, ['a', 'b', 'c', 'd', 'e']);
+  marks.retain(['a']);
+  marks.setLocked(true);
+  marks.clear();
+  marks.mark('b', 'toggle');
+  marks.rendered([['e']]);
+  marks.selectAll();
+  assert.deepEqual(marks.get().ids, ['a', 'e']);
+  marks.set(['a']);
+  assert.deepEqual(marks.get().ids, ['a']);
+  marks.setLocked(false);
+  marks.clear();
+  assert.deepEqual(marks.get().ids, []);
+  assert.deepEqual(observed.at(-1), []);
 });

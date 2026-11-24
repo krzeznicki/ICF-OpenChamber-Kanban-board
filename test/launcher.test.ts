@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Task } from '../src/core/types.ts';
-import { createLauncher, SETTLE_MS, type LauncherDeps } from '../src/panel/launcher.ts';
+import { createLauncher, uncertainHostStart, SETTLE_MS, type LauncherDeps } from '../src/panel/launcher.ts';
 import type { StartOptions } from '../src/panel/settings.ts';
 
 const task: Task = {
@@ -19,6 +19,25 @@ const task: Task = {
   source: 'github',
 };
 const opts: StartOptions = { presetId: 'implement', model: null, agent: null, variant: null, location: 'worktree' };
+
+test('host rejection after dispatch keeps an uncertain launch reserved', async () => {
+  const s = setup({ start: () => uncertainHostStart(async () => { throw new Error('Bridge timeout'); }) });
+  assert.equal(await s.launcher.launch(task, opts), 'pending');
+  s.tick(SETTLE_MS * 2);
+  s.launcher.settle(() => false);
+  assert.equal(await s.launcher.launch(task, opts), 'already');
+});
+
+test('created session with failed delivery is explicit and cannot launch a duplicate', async () => {
+  let dispatches = 0;
+  const s = setup({ start: async () => { dispatches++; return { sessionId: 'ses_1', needsMessage: true }; } });
+  assert.equal(await s.launcher.launch(task, opts), 'needs-message');
+  s.launcher.settle(() => true);
+  s.tick(SETTLE_MS * 2);
+  s.launcher.settle(() => false);
+  assert.equal(await s.launcher.launch(task, opts), 'needs-message');
+  assert.equal(dispatches, 1);
+});
 
 const setup = (over: Partial<LauncherDeps> = {}) => {
   const calls: Array<{ task: Task; opts: StartOptions; prompt: string }> = [];
@@ -116,6 +135,8 @@ test('a pending start (timed-out path B) keeps the task starting until a session
   assert.ok(isStarting.has('#7'));
   // A second drop does not start a second session.
   assert.equal(await launcher.launch(task, opts), 'already');
+  tick(SETTLE_MS * 2);
+  assert.equal(launcher.settle(() => false), false, 'uncertain starts must not become retryable just because time passed');
   assert.equal(launcher.settle(() => true), false, 'a session id check alone cannot release it');
   assert.equal(launcher.settle(() => false, (id, since) => id === '#7' && since === 100), true);
   assert.equal(isStarting.size, 0);

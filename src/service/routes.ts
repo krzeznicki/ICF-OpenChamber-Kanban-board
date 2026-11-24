@@ -486,6 +486,14 @@ const POST: Record<string, Route> = {
     const to = state(body.state, 'state');
     return { task: await (await tracker(dir, deps)).setState(id, to) };
   },
+  '/tasks/label': async (body, dir, deps) => {
+    const mode = body.mode;
+    if (mode !== 'add' && mode !== 'remove') return invalid('"mode" must be add or remove');
+    return { task: await (await tracker(dir, deps)).changeLabel(str(body, 'id'), str(body, 'label'), mode) };
+  },
+  '/tasks/blocker': async (body, dir, deps) => {
+    return { task: await (await tracker(dir, deps)).addBlocker(str(body, 'id'), str(body, 'blockerId')) };
+  },
   '/tasks/type': async (body, dir, deps) => {
     const id = str(body, 'id');
     const type = str(body, 'type');

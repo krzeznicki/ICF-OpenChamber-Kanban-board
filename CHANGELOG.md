@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.2
+
+- **Floating bulk action panel** for marked cards: state/type, column moves, GitHub labels, parent/unparent, shared blockers, Start Task, archive/restore, copy and delete. Compact centered icon groups, eligibility previews, disabled unavailable actions and explicit confirmation.
+- Partial failures stay selected for retry, including metadata migration after task IDs change. Uncertain starts and failed first-message delivery do not dispatch duplicate agents on retry.
+- Marking cards preserves page scrolling; action forms retain focus during refreshes and fit narrow screens.
+
 ## 0.5.1
 
 - **Marked cards**: Cmd+click (Ctrl+click elsewhere) marks a card, Shift+click marks a range across columns, as in a file list. Dragging a marked card moves every marked card to the column (a count on the dragged card); Mod+Shift+←/→ moves them too. Refusals are said once, close and start questions come one at a time, starts respect the agent limit. A plain click, a click on the background or Escape clears the marks (`marks.ts`, `GLOSSARY.md`).

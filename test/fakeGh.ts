@@ -146,6 +146,9 @@ export const fakeGh = (seed: FakeIssue[], options: FakeGhOptions = {}) => {
     if (a === 'issue' && issue === undefined) return fail(`could not find issue ${args[2]}\n`);
     if (a === 'issue' && b === 'edit') {
       const add = flagValues(args, '--add-label');
+      for (const n of flagValues(args, '--add-blocked-by').map(Number)) {
+        if (!issue!.blockedBy.includes(n)) issue!.blockedBy.push(n);
+      }
       const missing = add.find((l) => !labels.has(l));
       if (missing !== undefined) return fail(`'${missing}' not found\n`);
       const remove = new Set(flagValues(args, '--remove-label'));

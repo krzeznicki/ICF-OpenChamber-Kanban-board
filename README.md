@@ -90,6 +90,20 @@ Types: `bug` and `enhancement` (a feature), plus your own (`chore` and `research
 - Move several cards at once: **Cmd+click** (Ctrl+click on Windows and Linux) marks a card or unmarks it, **Shift+click** marks every card from the last Cmd-clicked one (or the selected one) to the clicked one, across columns in board order; another Shift+click replaces that range, as in Finder, and cards marked before it stay. Dragging a marked card carries all marked cards (the dragged card shows how many) and drops each of them on the column from its own; Mod+Shift+←/→ moves each marked card one column on. A group only moves between columns: no reordering and no linking under a card, and letting go in the dragged card's own column cancels the drag. Cards that cannot go there (Review, a done task to In Progress) stay, with the reason said once; parents with open sub-tasks ask one at a time, and starts go one after another (each waits only until the card is launched or queued), so the agent limit and the queue still hold. A plain click on a card, a click on the board's background or Escape clears the marks.
 - Drag a card up or down its own column to reorder it: a line shows where it goes. The order is kept in the board's own storage per project (nothing changes in the repository or on GitHub); cards never reordered keep the tracker's order, below the reordered ones. Deleted tasks, and tasks the tracker no longer lists, drop out of it. Sub-tasks stay right under their parent. In its own column, only the middle of a card makes the dragged card its sub-task; the top and bottom edges reorder.
 
+### Editing marked tasks
+
+Mark one or more cards to show the floating action panel. Its compact icon groups have hover/focus descriptions and open small forms above the panel. Choose **State**, **Type**, or both and press **Apply**; **No change** leaves a field alone. **Select all** includes every card left by the current filters, including cards outside the scroll position. Clearing all marks resets the draft; a successful save clears the marks and hides the panel.
+
+The panel also offers **Move to column**, **Labels**, **Set parent**, **Unlink parent**, **Add blocker**, **Start Task**, **Archive**, **Restore**, **Copy** and **Delete**. Forms show eligible/excluded counts and explain source limitations before you confirm. Labels are GitHub-only and cannot change workflow/type labels. Local blockers must be sibling tickets. Archive applies only to completed tasks; Restore removes the archive mark without reopening the task. Copy offers titles or URLs (local tasks use their paths) and keeps the selection.
+
+Column moves keep their existing behavior, including starting agents or detaching a card from its session. **Start Task** uses each card's settings and the project concurrency limit; it starts immediately when the queue is empty and a slot is free, otherwise it joins the end of the queue. An uncertain start waits for session reconciliation rather than starting a duplicate. Delete has a separate confirmation and an initially unchecked sub-task option. Escape closes a dropdown/form before clearing marks.
+
+For `done`, **Close sub-tasks** is on by default and shows the number of additional tasks. It closes the entire descendant tree from the leaves up; a failed child keeps its ancestors open. Only explicitly marked tasks receive the chosen type. Bulk edits preserve session links and queued work, including when closing tasks.
+
+If GitHub's list omits part of a selected tree, recursive closure is blocked with an explanation. Turn off **Close sub-tasks** to edit only the marked tasks.
+
+While saving, the board's other controls are locked. Partial failures keep the failed tasks marked for another **Apply**, with per-field errors and a count of any hidden by filters. Already-saved values are skipped on retry.
+
 ### Archiving done tasks
 
 **Archive done** in the Done column's header clears the column: after an in-panel confirm with the count, every done task (sub-tasks hidden by **Hide sub-tasks** too) leaves the board. Nothing changes in the repository or on GitHub — done tasks are already resolved or closed; the board only remembers the archived ids per project in the extension's storage (`archivedTasks:<projectId>`, `{ id, archivedAt }[]`, the newest 400 kept).
@@ -346,6 +360,8 @@ npm run check   # typecheck + tests + build
 ```
 
 The node tests have no layout, so drag and drop across columns of different lengths is checked separately, by hand, in headless Chrome (`CHROME` overrides the default macOS path): `sh scripts/debug/drag-across-columns/run.sh` must print only `PASS` lines (it also checks Cmd/Ctrl/Shift+click marking and a group drag).
+
+The bulk toolbar's real SDK controls, save locks, focus and footer layout are checked at narrow and desktop widths with `sh scripts/debug/bulk-toolbar/run.sh`; both lines must report `PASS`.
 
 `npm run build` bundles with esbuild: the panel to `panel/main.js` (IIFE), the service to `service/main.js` and the CLI to `build/cli/task-board.mjs` (ESM). Commit the built files with the sources: installs never build.
 
