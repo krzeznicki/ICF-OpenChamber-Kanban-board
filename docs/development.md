@@ -9,7 +9,7 @@ npm run check   # typecheck, tests and build
 
 The tests run in Node without a layout engine, so drag and drop between columns of different lengths is checked separately in headless Chrome. `sh scripts/debug/drag-across-columns/run.sh` must print only `PASS` lines; set `CHROME` if Chrome is not at the default macOS path. The same script checks ⌘/Ctrl/Shift-click marking and a group drag. `sh scripts/debug/bulk-toolbar/run.sh` checks the floating action panel at narrow and desktop widths; both lines must print `PASS`.
 
-Install the board from a separate clone, not from a project you use it on: a folder install runs from the folder itself, and any write inside the package reloads the extension.
+To run your own checkout, install it in **Settings → Extensions** from its folder (or open `openchamber://extensions/install?path=<absolute path>` in a chat). Use a separate clone, not a project you use the board on: a folder install runs from the folder itself, and any write inside the package reloads the extension.
 
 ## Trying a branch: the Kanban TEST build
 
@@ -33,9 +33,9 @@ echo '{"type":"module"}' > $D/package.json
 node $D/scripts/check-guest.ts $PWD   # must print "Package is ready"
 ```
 
-## Manual checks before the first public release
+## Manual checks before a release
 
-Each check needs the extension installed in OpenChamber. None has been done yet.
+Each check needs the extension installed in OpenChamber.
 
 1. Install from a folder and approve the permissions; the board opens in the rail and as a page.
 2. The setup wizard, for Local and for GitHub, including the `gh` checks and label creation.

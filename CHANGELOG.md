@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.0
+
+- First public release: the repository is public and the board installs from its git URL (`https://github.com/krzeznicki/ICF-OpenChamber-Kanban-board`).
+- The README is short and points to the detailed docs in `docs/` (board, sessions, settings, keyboard, CLI, permissions, development), with screenshots.
+
 ## 0.5.2
 
 - **Floating bulk action panel** for marked cards: state/type, column moves, GitHub labels, parent/unparent, shared blockers, Start Task, archive/restore, copy and delete. Compact centered icon groups, eligibility previews, disabled unavailable actions and explicit confirmation.
