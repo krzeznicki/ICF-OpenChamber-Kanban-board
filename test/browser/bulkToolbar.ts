@@ -40,6 +40,7 @@ let release: (() => void) | null = null;
 let saving = false;
 let finish: (() => void) | null = null;
 let copied = '';
+const archived = new Set<string>();
 const ui = mountBulkToolbar(board.bulkSlot, {
   actions: {
     tasks: () => tasks,
@@ -57,7 +58,7 @@ const get = async (id: string): Promise<Task> => {
 const controller = createBulkToolbar({
   actions: () => ({
     tasks: () => tasks,
-    context: () => ({ sources: [{ id: 'local', label: 'Local', capabilities: { create: true, subtasks: true, blockedBy: true, claim: true, delete: true } }], archived: new Set(), busy: new Set(), complete: true }),
+    context: () => ({ sources: [{ id: 'local', label: 'Local', capabilities: { create: true, subtasks: true, blockedBy: true, claim: true, delete: true } }], archived, busy: new Set(), complete: true }),
     api: {
       get,
       changeLabel: async () => { throw new Error('Unsupported'); },
@@ -104,6 +105,14 @@ report.style.cssText = 'position:fixed;top:0;right:0;margin:0;font-size:10px;poi
 root.before(report);
 try {
   check(Boolean(board.bulkSlot.hidden), 'No marks should hide the toolbar');
+  window.scrollTo(0, 700);
+  const scrollBeforeMark = window.scrollY;
+  check(scrollBeforeMark > 0, 'Regression fixture must scroll before selecting a lower card');
+  selection.mark('task-15', 'toggle');
+  check(window.scrollY === scrollBeforeMark, 'First mark must not replace page scrolling or jump to the top');
+  selection.clearMarks();
+  check(window.scrollY === scrollBeforeMark, 'Clearing marks must keep the scroll position');
+  window.scrollTo(0, 0);
   selection.mark('task-0', 'toggle');
   check(!board.bulkSlot.hidden, 'A mark should show the toolbar');
   for (const label of ['Move to column', 'Labels', 'Set parent', 'Unlink parent', 'Add blocker', 'Start agents', 'Add to queue', 'Archive', 'Restore', 'Copy', 'Delete']) {
@@ -111,6 +120,7 @@ try {
     check(button(label).getAttribute('aria-label') === label, `${label} must be accessible`);
   }
   check(button('Apply').disabled, 'No change should disable Apply');
+  check(button('Archive').disabled && button('Restore').disabled, 'Open unarchived tasks cannot be archived or restored');
   select('type', 'bug');
   check(selection.marked().length === 1, 'Picking an SDK option must retain marks');
   check(!button('Apply').disabled, 'Picking a type should enable Apply');
@@ -148,14 +158,11 @@ try {
   check(footer.bottom <= window.innerHeight, 'Footer must fit the viewport');
   check(footer.left >= 0 && footer.right <= window.innerWidth, 'Floating panel must fit horizontally');
   check(footer.width <= 640, 'Panel must not stretch across the full page');
-  check(board.columns.getBoundingClientRect().bottom <= footer.top, 'Footer must not cover the cards');
-  board.columns.scrollTop = board.columns.scrollHeight;
+  window.scrollTo(0, document.documentElement.scrollHeight);
+  check(board.columns.getBoundingClientRect().bottom <= footer.top, 'Last card must scroll above the floating panel');
   check(board.bulkSlot.getBoundingClientRect().top === footer.top, 'Scrolling cards must keep the footer in place');
-  button('Labels').click();
-  check(board.bulkSlot.querySelector('.kb-bulk-preview')!.textContent!.includes('does not support labels'), 'Unavailable label operation must explain the source limitation');
-  check(button('Apply to eligible tasks').disabled, 'Unavailable action must not submit');
-  board.bulkSlot.querySelector('.kb-bulk-popover')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-  check(selection.marked().length === 30, 'Escape closes the form before clearing marks');
+  check(button('Labels').disabled, 'Local-only groups must disable labels immediately');
+  check(button('Labels').parentElement!.title.includes('does not support labels'), 'Disabled labels explain the source limitation');
   button('Set parent').click();
   const focused = document.activeElement;
   ui.update(controller.model(), ['enhancement', 'bug', 'chore']);
@@ -179,6 +186,15 @@ try {
   button('Copy').click();
   check(board.bulkSlot.querySelector('.kb-bulk-popover [aria-haspopup="listbox"]')!.textContent!.includes('Links / local paths'), 'Reopening an action must keep its last parameters');
   button('Close action').click();
+  tasks[0]!.state = 'done';
+  ui.update(controller.model(), ['enhancement', 'bug', 'chore']);
+  check(!button('Archive').disabled && button('Restore').disabled, 'A completed unarchived task enables only Archive');
+  archived.add('task-0');
+  ui.update(controller.model(), ['enhancement', 'bug', 'chore']);
+  check(button('Archive').disabled && !button('Restore').disabled, 'An archived task enables only Restore');
+  tasks[1]!.state = 'done';
+  ui.update(controller.model(), ['enhancement', 'bug', 'chore']);
+  check(!button('Archive').disabled && !button('Restore').disabled, 'Mixed groups allow both actions for their eligible subsets');
   report.textContent = 'PASS: bulk toolbar integration checks';
   report.dataset.result = 'pass';
 } catch (e) {

@@ -16500,7 +16500,7 @@ ${listKey(projects)}`;
       const wrap = slot("kb-bulk-action-group", actionRow);
       for (const kind of group) {
         const handle = bulkIconButton(wrap, kind, ACTION_LABELS[kind], () => actionForm.open(kind, handle.button, lastAction));
-        actionButtons.push(handle);
+        actionButtons.push({ kind, handle });
       }
     }
     const childrenSlot = slot("kb-bulk-children");
@@ -16537,7 +16537,12 @@ ${listKey(projects)}`;
         count.textContent = `${model.count} marked${model.hiddenCount ? ` (${model.hiddenCount} hidden by filters)` : ""}`;
         all.update(model.locked);
         clear.update(model.locked);
-        for (const button2 of actionButtons) button2.update(model.locked);
+        for (const { kind, handle } of actionButtons) {
+          const action = kind === "parent" || kind === "blocker" ? null : kind === "move" ? { kind, to: "ready" } : kind === "label" ? { kind, label: "", mode: "add" } : kind === "copy" ? { kind, format: "titles" } : kind === "delete" ? { kind, withChildren: false } : { kind };
+          const preview = action ? callbacks.actions?.preview(action) : void 0;
+          const unavailable = preview !== void 0 && preview.eligible.length === 0;
+          handle.update(model.locked || unavailable, unavailable ? preview.excluded[0]?.reason : void 0);
+        }
         actionForm.update(model.locked);
         apply.update({ disabled: !model.canApply, label: model.locked ? "Saving\u2026" : "Apply" });
         const stateKey = JSON.stringify([model.draft.state, model.locked]);
@@ -16605,8 +16610,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
 * { box-sizing: border-box; }
 .kb { display: flex; flex-direction: column; gap: 0.75rem; padding: 0.75rem; min-height: 100vh; }
 .kb-toolbar { display: flex; flex-direction: column; gap: 0.5rem; }
-.kb:has(> .kb-bulk:not([hidden])) { height: 100dvh; min-height: 0; padding-bottom: var(--kb-bulk-space, 160px); }
-.kb:has(> .kb-bulk:not([hidden])) > .kb-columns { flex: 1 1 0; min-height: 0; overflow: auto; }
+.kb:has(> .kb-bulk:not([hidden])) { padding-bottom: var(--kb-bulk-space, 160px); }
 .kb-bulk { position: fixed; z-index: 40; bottom: 12px; left: 0; right: 0; margin-inline: auto;
   width: max-content; max-width: min(620px, calc(100% - 24px)); display: flex; flex-direction: column; gap: 0.625rem;
   padding: 0.75rem; border: 1px solid var(--oc-border); border-radius: calc(var(--oc-radius) + 6px);

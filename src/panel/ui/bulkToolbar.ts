@@ -48,7 +48,7 @@ export const mountBulkToolbar = (root: HTMLElement, callbacks: BulkToolbarCallba
   const apply = mountButton(slot('kb-bulk-apply', fields), { label: 'Apply', size: 'sm', disabled: true, onClick: callbacks.onApply });
   const actionRow = slot('kb-bulk-actions');
   const groups: BulkAction['kind'][][] = [['move', 'label'], ['parent', 'unparent', 'blocker'], ['start', 'queue'], ['archive', 'restore', 'copy'], ['delete']];
-  const actionButtons: ReturnType<typeof bulkIconButton>[] = [];
+  const actionButtons: { kind: BulkAction['kind']; handle: ReturnType<typeof bulkIconButton> }[] = [];
   let lastAction: BulkAction | null = null;
   const popover = slot('kb-bulk-popover');
   const actionForm = mountBulkActionForm(popover, {
@@ -61,7 +61,7 @@ export const mountBulkToolbar = (root: HTMLElement, callbacks: BulkToolbarCallba
     const wrap = slot('kb-bulk-action-group', actionRow);
     for (const kind of group) {
       const handle = bulkIconButton(wrap, kind, ACTION_LABELS[kind], () => actionForm.open(kind, handle.button, lastAction));
-      actionButtons.push(handle);
+      actionButtons.push({ kind, handle });
     }
   }
   const childrenSlot = slot('kb-bulk-children');
@@ -95,7 +95,17 @@ export const mountBulkToolbar = (root: HTMLElement, callbacks: BulkToolbarCallba
       count.textContent = `${model.count} marked${model.hiddenCount ? ` (${model.hiddenCount} hidden by filters)` : ''}`;
       all.update(model.locked);
       clear.update(model.locked);
-      for (const button of actionButtons) button.update(model.locked);
+      for (const { kind, handle } of actionButtons) {
+        // Relationship actions need a target chosen in their form before eligibility is known.
+        const action: BulkAction | null = kind === 'parent' || kind === 'blocker' ? null
+          : kind === 'move' ? { kind, to: 'ready' }
+          : kind === 'label' ? { kind, label: '', mode: 'add' }
+          : kind === 'copy' ? { kind, format: 'titles' }
+          : kind === 'delete' ? { kind, withChildren: false } : { kind };
+        const preview = action ? callbacks.actions?.preview(action) : undefined;
+        const unavailable = preview !== undefined && preview.eligible.length === 0;
+        handle.update(model.locked || unavailable, unavailable ? preview.excluded[0]?.reason : undefined);
+      }
       actionForm.update(model.locked);
       apply.update({ disabled: !model.canApply, label: model.locked ? 'Saving…' : 'Apply' });
       const stateKey = JSON.stringify([model.draft.state, model.locked]);

@@ -6,8 +6,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
 * { box-sizing: border-box; }
 .kb { display: flex; flex-direction: column; gap: 0.75rem; padding: 0.75rem; min-height: 100vh; }
 .kb-toolbar { display: flex; flex-direction: column; gap: 0.5rem; }
-.kb:has(> .kb-bulk:not([hidden])) { height: 100dvh; min-height: 0; padding-bottom: var(--kb-bulk-space, 160px); }
-.kb:has(> .kb-bulk:not([hidden])) > .kb-columns { flex: 1 1 0; min-height: 0; overflow: auto; }
+.kb:has(> .kb-bulk:not([hidden])) { padding-bottom: var(--kb-bulk-space, 160px); }
 .kb-bulk { position: fixed; z-index: 40; bottom: 12px; left: 0; right: 0; margin-inline: auto;
   width: max-content; max-width: min(620px, calc(100% - 24px)); display: flex; flex-direction: column; gap: 0.625rem;
   padding: 0.75rem; border: 1px solid var(--oc-border); border-radius: calc(var(--oc-radius) + 6px);
