@@ -39,7 +39,13 @@ selection.rendered([tasks.map(t => t.id)]);
 let release: (() => void) | null = null;
 let saving = false;
 let finish: (() => void) | null = null;
+let copied = '';
 const ui = mountBulkToolbar(board.bulkSlot, {
+  actions: {
+    tasks: () => tasks,
+    preview: action => controller.actionPreview(action),
+    submit: (action, ids) => controller.executeAction(action, ids),
+  },
   onDraft: change => controller.setDraft(change),
   onApply: () => void controller.apply().then(() => finish?.()),
   onClear: () => controller.clear(), onSelectAll: () => selection.selectAll(),
@@ -49,6 +55,19 @@ const get = async (id: string): Promise<Task> => {
   return { ...tasks.find(t => t.id === id)! };
 };
 const controller = createBulkToolbar({
+  actions: () => ({
+    tasks: () => tasks,
+    context: () => ({ sources: [{ id: 'local', label: 'Local', capabilities: { create: true, subtasks: true, blockedBy: true, claim: true, delete: true } }], archived: new Set(), busy: new Set(), complete: true }),
+    api: {
+      get,
+      changeLabel: async () => { throw new Error('Unsupported'); },
+      addBlocker: async id => get(id), setParent: async id => get(id), removeParent: async id => get(id),
+      remove: async id => [id],
+    },
+    move: async id => ({ kind: 'success', id }), start: async id => ({ kind: 'success', id }),
+    archive: async () => {}, remap: async () => {}, deleted: async () => {},
+    copy: async text => { copied = text; },
+  }),
   api: () => ({
     get, setType: async (id, type) => { const t = tasks.find(t => t.id === id)!; t.type = type; return t; },
     setState: async (id, state: TaskState) => { const t = tasks.find(t => t.id === id)!; t.state = state; return t; },
@@ -68,7 +87,7 @@ attachDrag(board.columns, {
 });
 ui.update(controller.model(), ['enhancement', 'bug', 'chore']);
 const button = (label: string): HTMLButtonElement => {
-  const found = [...board.bulkSlot.querySelectorAll('button')].find(b => b.textContent?.trim() === label);
+  const found = [...board.bulkSlot.querySelectorAll('button')].find(b => b.getAttribute('aria-label') === label || b.textContent?.trim() === label);
   if (!found) throw new Error(`Missing button: ${label}`);
   return found;
 };
@@ -87,6 +106,10 @@ try {
   check(Boolean(board.bulkSlot.hidden), 'No marks should hide the toolbar');
   selection.mark('task-0', 'toggle');
   check(!board.bulkSlot.hidden, 'A mark should show the toolbar');
+  for (const label of ['Move to column', 'Labels', 'Set parent', 'Unlink parent', 'Add blocker', 'Start agents', 'Add to queue', 'Archive', 'Restore', 'Copy', 'Delete']) {
+    check(!!button(label).querySelector('svg'), `${label} must have a compact icon`);
+    check(button(label).getAttribute('aria-label') === label, `${label} must be accessible`);
+  }
   check(button('Apply').disabled, 'No change should disable Apply');
   select('type', 'bug');
   check(selection.marked().length === 1, 'Picking an SDK option must retain marks');
@@ -123,9 +146,39 @@ try {
   check(board.bulkSlot.querySelector('[role="switch"]')?.getAttribute('aria-checked') === 'true', 'Close sub-tasks defaults on');
   const footer = board.bulkSlot.getBoundingClientRect();
   check(footer.bottom <= window.innerHeight, 'Footer must fit the viewport');
+  check(footer.left >= 0 && footer.right <= window.innerWidth, 'Floating panel must fit horizontally');
+  check(footer.width <= 640, 'Panel must not stretch across the full page');
   check(board.columns.getBoundingClientRect().bottom <= footer.top, 'Footer must not cover the cards');
   board.columns.scrollTop = board.columns.scrollHeight;
   check(board.bulkSlot.getBoundingClientRect().top === footer.top, 'Scrolling cards must keep the footer in place');
+  button('Labels').click();
+  check(board.bulkSlot.querySelector('.kb-bulk-preview')!.textContent!.includes('does not support labels'), 'Unavailable label operation must explain the source limitation');
+  check(button('Apply to eligible tasks').disabled, 'Unavailable action must not submit');
+  board.bulkSlot.querySelector('.kb-bulk-popover')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  check(selection.marked().length === 30, 'Escape closes the form before clearing marks');
+  button('Set parent').click();
+  const focused = document.activeElement;
+  ui.update(controller.model(), ['enhancement', 'bug', 'chore']);
+  check(document.activeElement === focused, 'Poll must not steal action-form focus');
+  const popup = board.bulkSlot.querySelector<HTMLElement>('.kb-bulk-popover')!.getBoundingClientRect();
+  check(popup.top >= 0 && popup.right <= window.innerWidth, 'Action form must fit viewport');
+  board.bulkSlot.querySelector<HTMLButtonElement>('.kb-bulk-popover [aria-haspopup="listbox"]')!.click();
+  const optionsPopup = board.bulkSlot.querySelector<HTMLElement>('.kb-bulk-popover .oc-sdk-popup')!.getBoundingClientRect();
+  check(optionsPopup.top >= 0 && optionsPopup.bottom <= window.innerHeight, 'SDK task picker must stay in viewport inside the floating panel');
+  board.bulkSlot.querySelector<HTMLElement>('.kb-bulk-popover [role="listbox"]')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  button('Close action').click();
+  button('Copy').click();
+  board.bulkSlot.querySelector<HTMLButtonElement>('.kb-bulk-popover [aria-haspopup="listbox"]')!.click();
+  [...board.bulkSlot.querySelectorAll<HTMLElement>('[role="option"]')].find(o => o.textContent?.trim() === 'Links / local paths')!.click();
+  const submitCopy = [...board.bulkSlot.querySelectorAll<HTMLButtonElement>('.kb-bulk-popover button')].find(b => b.textContent === 'Copy')!;
+  submitCopy.click();
+  // The service/clipboard fixture resolves in microtasks; wait on the actual controller lock.
+  for (let i = 0; i < 100 && controller.model().locked; i++) await Promise.resolve();
+  check(copied.startsWith('task-0\ntask-1'), 'Copy must reach the clipboard adapter');
+  check(selection.marked().length === 30, 'Copy must keep marks');
+  button('Copy').click();
+  check(board.bulkSlot.querySelector('.kb-bulk-popover [aria-haspopup="listbox"]')!.textContent!.includes('Links / local paths'), 'Reopening an action must keep its last parameters');
+  button('Close action').click();
   report.textContent = 'PASS: bulk toolbar integration checks';
   report.dataset.result = 'pass';
 } catch (e) {

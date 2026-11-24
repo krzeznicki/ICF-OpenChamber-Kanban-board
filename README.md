@@ -92,7 +92,11 @@ Types: `bug` and `enhancement` (a feature), plus your own (`chore` and `research
 
 ### Editing marked tasks
 
-Mark one or more cards to show the bottom toolbar. Choose **State**, **Type**, or both and press **Apply**; **No change** leaves a field alone. **Select all** includes every card left by the current filters, including cards outside the scroll position. Clearing all marks resets the draft; a successful save clears the marks and hides the toolbar.
+Mark one or more cards to show the floating action panel. Its compact icon groups have hover/focus descriptions and open small forms above the panel. Choose **State**, **Type**, or both and press **Apply**; **No change** leaves a field alone. **Select all** includes every card left by the current filters, including cards outside the scroll position. Clearing all marks resets the draft; a successful save clears the marks and hides the panel.
+
+The panel also offers **Move to column**, **Labels**, **Set parent**, **Unlink parent**, **Add blocker**, **Start agents**, **Add to queue**, **Archive**, **Restore**, **Copy** and **Delete**. Forms show eligible/excluded counts and explain source limitations before you confirm. Labels are GitHub-only and cannot change workflow/type labels. Local blockers must be sibling tickets. Archive applies only to completed tasks; Restore removes the archive mark without reopening the task. Copy offers titles or URLs (local tasks use their paths) and keeps the selection.
+
+Column moves keep their existing behavior, including starting agents or detaching a card from its session. Start and queue use each card's settings and the project concurrency limit; queued work may start as soon as a slot opens. An uncertain start waits for session reconciliation rather than starting a duplicate. Delete has a separate confirmation and an initially unchecked sub-task option. Escape closes a dropdown/form before clearing marks.
 
 For `done`, **Close sub-tasks** is on by default and shows the number of additional tasks. It closes the entire descendant tree from the leaves up; a failed child keeps its ancestors open. Only explicitly marked tasks receive the chosen type. Bulk edits preserve session links and queued work, including when closing tasks.
 

@@ -1306,6 +1306,7 @@ const installShortcuts = (): void => {
   installToolbarShortcuts(shortcuts);
   installCheatSheet(shortcuts);
   shortcuts.addLayer(() => bulkLocked ? 'none' : null, { front: true });
+  shortcuts.addLayer(() => bulkUi?.isActionOpen() || board.bulkSlot.contains(document.activeElement) ? 'none' : null, { front: true });
   applyKeymap();
 };
 
@@ -1508,6 +1509,11 @@ const start = (ctx: HostReadyContext): void => {
     suggest: { enabled: () => suggestEnabled(globalLoaded, state.globalSettings), suggester },
   });
   bulkUi = mountBulkToolbar(board.bulkSlot, {
+    actions: {
+      tasks: () => state.tasks ?? [],
+      preview: action => bulk!.actionPreview(action),
+      submit: (action, ids) => bulk!.executeAction(action, ids),
+    },
     onDraft: change => bulk?.setDraft(change),
     onApply: () => void bulk?.apply(),
     onClear: () => bulk?.clear(),

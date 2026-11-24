@@ -58,6 +58,12 @@ test('parent changes return new IDs, preserve failures and reject selected desti
   assert.equal(previewAction({ kind: 'parent', parentId: 'p' }, tasks, ['a', 'p'], context).eligible.length, 0);
   assert.equal(previewAction({ kind: 'parent', parentId: 'child' }, [t('p'), t('child', 'p')], ['p'], context).eligible.length, 0);
 });
+
+test('an empty local feature can become a sub-task but a feature with children cannot', () => {
+  const action = { kind: 'parent' as const, parentId: 'destination' };
+  assert.deepEqual(previewAction(action, [t('empty'), t('destination')], ['empty'], context).eligible, ['empty']);
+  assert.equal(previewAction(action, [t('p'), t('child', 'p'), t('destination')], ['p'], context).eligible.length, 0);
+});
 test('recursive deletion deduplicates parent and child and blocks ancestors after a child failure', async () => {
   const s = setup([t('p'), t('c', 'p'), t('g', 'c')]);
   const deleted: string[] = [];

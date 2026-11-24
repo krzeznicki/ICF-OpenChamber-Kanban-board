@@ -65,7 +65,7 @@ export const previewAction = (action: BulkAction, tasks: readonly Task[], select
       if (selected.includes(relation)) return 'The target must be outside the selected group.';
       if (target.source !== task.source) return 'Tasks from different sources cannot be linked.';
       if (action.kind === 'parent') {
-        if (task.source === 'local' && (target.kind !== 'parent' || task.kind === 'parent')) return 'Local parent changes require a ticket and a feature.';
+        if (task.source === 'local' && (target.kind !== 'parent' || tasks.some(t => t.parentId === task.id))) return 'Local tasks can only move under a feature and cannot carry their own sub-tasks.';
         const visited = new Set<string>();
         for (let p: string | null = target.id; p && !visited.has(p); p = byId.get(p)?.parentId ?? null) {
           if (p === task.id) return 'This parent would create a cycle.';
