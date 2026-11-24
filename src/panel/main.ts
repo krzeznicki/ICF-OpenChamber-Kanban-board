@@ -62,6 +62,9 @@ import { columnNeighbour } from './openTask.ts';
 import { createSelection, type Selection } from './ui/selection.ts';
 import { createBulkToolbar, type BulkToolbar } from './bulkToolbar.ts';
 import { mountBulkToolbar } from './ui/bulkToolbar.ts';
+import type { ActionDeps } from './bulkActions.ts';
+import { executeMove } from './actionResult.ts';
+import { openChildren } from './moves.ts';
 import { setHintKeymap } from './ui/shortcutHints.ts';
 import { openSettings } from './ui/settingsView.ts';
 import { injectStyles } from './ui/styles.ts';
@@ -948,6 +951,81 @@ const setArchivedTasks = (projectId: string, marks: Map<string, number>): void =
   editor.refresh();
 };
 
+/** Awaited storage path for bulk actions: no success until persistence confirms it. */
+const persistBulkArchive = async (projectId: string, marks: Map<string, number>, removed: Map<string, number>): Promise<void> => {
+  await saver.idle();
+  const n = archiveSync.edit();
+  await archiveWriteJob(
+    { marks, removed, tasks: state.tasks, unlisted: state.unlisted },
+    { load: () => store.loadArchivedTasks(projectId), save: value => store.saveArchivedTasks(projectId, value) },
+    value => {
+      archiveSync.written(n);
+      unarchivedAt.set(projectId, removed);
+      state.archivedTasks = value;
+      state.archivedTasksFor = projectId;
+    },
+  )();
+};
+
+const bulkActionDeps = (): ActionDeps | null => {
+  const p = project();
+  if (!p || state.view !== 'board') return null;
+  const api = createApi(host, p.directory);
+  return {
+    api,
+    tasks: () => state.tasks ?? [],
+    context: () => ({
+      sources: state.config?.sources ?? [], archived: new Set(archivedTasks().keys()),
+      busy: new Set(editor.busy), complete: state.tasks !== null && state.sourceErrors.length === 0,
+    }),
+    copy: text => host.writeClipboard(text),
+    start: (id, mode) => starter.startTaskAction(id, mode),
+    move: async (id, to) => {
+      const task = await api.get(id);
+      const from = state.columns.get(id) ?? (task.state === 'done' ? 'done' : task.state === 'ready-for-agent' ? 'ready' : 'backlog');
+      return executeMove(task, from, to, openChildren(task, state.tasks ?? []), {
+        before: () => starter.leaveQueue(id),
+        after: () => detach(task, from),
+        setState: api.setState, close: api.close,
+        start: () => starter.startTaskAction(id, 'start'),
+        chooseChildren: async () => {
+          const answer = await askChoice(`Close “${task.title}”?`, 'This task has open sub-tasks.', [
+            { id: 'one', label: 'Only this task' }, { id: 'all', label: 'With sub-tasks', variant: 'destructive' },
+          ]);
+          return answer === null ? null : answer === 'all';
+        },
+      });
+    },
+    archive: async (ids, restore) => {
+      const tasks = await Promise.all(ids.map(id => api.get(id)));
+      if (tasks.some(t => t.state !== 'done')) throw new Error('Only completed tasks can be archived or restored.');
+      let marks = new Map(archivedTasks());
+      const removed = new Map(removedFor(p.id));
+      if (restore) for (const id of ids) { marks.delete(id); removed.set(id, Date.now()); }
+      else marks = archiveTasks(marks, ids, Date.now());
+      await persistBulkArchive(p.id, marks, removed);
+    },
+    remap: async (from, to) => {
+      // Follow immediately even if a subsequent storage write needs reporting.
+      state.tasks = state.tasks?.map(t => t.id === from ? { ...t, id: to } : t) ?? null;
+      renameOrdered(from, to);
+      await saver.idle();
+      await store.moveCard(p.id, from, to);
+      await store.moveNoType(p.id, from, to);
+      const marks = new Map(archivedTasks());
+      const at = marks.get(from);
+      if (at !== undefined) {
+        marks.delete(from); marks.set(to, at);
+        await persistBulkArchive(p.id, marks, new Map(removedFor(p.id)).set(from, Date.now()));
+      }
+    },
+    deleted: async ids => {
+      forgetOrdered(ids);
+      for (const id of ids) await forgetStartOptions(p.id, id);
+    },
+  };
+};
+
 const archiveDone = async (): Promise<void> => {
   const id = state.projectId;
   if (id === null || viewTasks() === null) return;
@@ -1436,6 +1514,7 @@ const start = (ctx: HostReadyContext): void => {
     onSelectAll: () => selection.selectAll(),
   });
   bulk = createBulkToolbar({
+    actions: bulkActionDeps,
     api: () => {
       const p = project();
       return p === null || state.view !== 'board' ? null : createApi(host, p.directory);

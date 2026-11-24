@@ -2,12 +2,13 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createBulkToolbar } from '../src/panel/bulkToolbar.ts';
 import type { Task, TaskState } from '../src/core/types.ts';
+import type { ActionDeps } from '../src/panel/bulkActions.ts';
 
 const task = (id: string, parentId: string | null = null): Task => ({
   id, parentId, kind: 'ticket', title: id, body: '', state: 'needs-triage',
   type: 'enhancement', blockedBy: [], url: null, updatedAt: 0, claimed: false, source: 'local',
 });
-const setup = (tasks = [task('a'), task('b')]) => {
+const setup = (tasks = [task('a'), task('b')], actions?: () => ActionDeps | null) => {
   const data = new Map(tasks.map(t => [t.id, { ...t }]));
   let visible = tasks.map(t => t.id);
   let marked: readonly string[] = [];
@@ -30,6 +31,7 @@ const setup = (tasks = [task('a'), task('b')]) => {
     return t;
   };
   const controller = createBulkToolbar({
+    actions,
     api: () => ({ get, setType: (id: string, type: string) => write(id, 'type', type),
       setState: (id: string, state: TaskState) => write(id, 'state', state) }),
     tasks: () => [...data.values()], visible: () => visible, busy: () => busy,
@@ -51,6 +53,37 @@ test('toolbar requires marks and a chosen change before Apply', () => {
   assert.equal(c.model().canApply, false);
   c.setDraft({ type: 'bug' });
   assert.equal(c.model().canApply, true);
+});
+
+test('action saves lock once, preserve partial failures and keep marks when copying', async () => {
+  let release: () => void = () => {};
+  const wait = new Promise<void>(r => { release = r; });
+  const tasks = [task('a'), task('b')];
+  let calls = 0;
+  const actions: ActionDeps = {
+    api: {
+      get: async id => tasks.find(t => t.id === id)!,
+      changeLabel: async () => tasks[0]!,
+      setParent: async () => tasks[0]!, removeParent: async () => tasks[0]!,
+      addBlocker: async () => tasks[0]!, remove: async id => [id],
+    },
+    tasks: () => tasks,
+    context: () => ({ sources: [], archived: new Set(), busy: new Set(), complete: true }),
+    move: async id => { calls++; await wait; return id === 'a' ? { kind: 'success', id } : { kind: 'failed', id, message: 'Denied' }; },
+    start: async id => ({ kind: 'pending', id, message: 'Waiting' }),
+    archive: async () => {}, remap: async () => {}, deleted: async () => {}, copy: async () => {},
+  };
+  const s = setup(tasks, () => actions);
+  s.controller.selectionChanged(['a', 'b']);
+  const job = s.controller.executeAction({ kind: 'move', to: 'ready' }, ['a', 'b']);
+  assert.equal(s.locked(), true);
+  await s.controller.executeAction({ kind: 'move', to: 'ready' }, ['a', 'b']);
+  release(); await job;
+  assert.equal(calls, 2);
+  assert.deepEqual(s.marks(), ['b']);
+  assert.equal(s.controller.model().actionFailures.length, 1);
+  await s.controller.executeAction({ kind: 'copy', format: 'titles' }, ['b']);
+  assert.deepEqual(s.marks(), ['b']);
 });
 
 test('selection changes keep the draft, clearing resets it and successful Apply hides the toolbar', async () => {

@@ -3,8 +3,10 @@
 // under node:test; ui/bulkToolbar.ts draws the model and main.ts wires the deps.
 import { errorMessage, type Task } from '../core/types.ts';
 import { planBulk, runBulk, type BulkApi, type BulkDraft, type BulkFailure, type BulkPlan, type BulkProgress } from './bulkEdit.ts';
+import { previewAction, runAction, type BulkAction, type ActionDeps, type ActionPreview } from './bulkActions.ts';
 
 export type BulkToolbarDeps = {
+  actions?: () => ActionDeps | null;
   /** The current project's API (null: no project). */
   api: () => BulkApi | null;
   /** Every task of the project, as last listed. */
@@ -37,6 +39,13 @@ export const createBulkToolbar = (deps: BulkToolbarDeps) => {
   let failures: BulkFailure[] = [];
   let progress: BulkProgress | null = null;
   let notice: string | null = null;
+  let actionFailures: { id: string; message: string }[] = [];
+  let lastAction: BulkAction | null = null;
+  const actionPreview = (action: BulkAction): ActionPreview => {
+    const a = deps.actions?.();
+    return a ? previewAction(action, deps.tasks(), ids, a.context())
+      : { eligible: [], excluded: ids.map(id => ({ id, reason: 'Actions are unavailable.' })), additional: [] };
+  };
 
   const currentPlan = (): BulkPlan => retry ?? planBulk(deps.tasks(), ids, draft);
   const targets = (plan: BulkPlan): readonly string[] => retry ? ids : plan.closeIds.length ? plan.closeIds : plan.selectedIds;
@@ -71,12 +80,56 @@ export const createBulkToolbar = (deps: BulkToolbarDeps) => {
     failures = [];
     progress = null;
     notice = null;
+    actionFailures = [];
+    lastAction = null;
     deps.retain([]);
     deps.replace([]);
     deps.changed();
   };
 
   return {
+    actionPreview,
+    executeAction: async (action: BulkAction, confirmedIds: readonly string[]): Promise<void> => {
+      const a = deps.actions?.();
+      if (saving || !a || !confirmedIds.length || confirmedIds.some(id => !ids.includes(id))) return;
+      const preview = actionPreview(action);
+      if (confirmedIds.some(id => !preview.eligible.includes(id))) {
+        notice = 'The selection or available actions changed. Check the preview and try again.';
+        deps.changed();
+        return;
+      }
+      const context = a.context();
+      const targetIds = [...new Set([...confirmedIds, ...preview.additional])];
+      const excluded = ids.filter(id => !confirmedIds.includes(id));
+      saving = true;
+      notice = null;
+      failures = [];
+      actionFailures = [];
+      lastAction = action;
+      progress = { completed: 0, total: targetIds.length };
+      deps.retain(ids);
+      deps.lock(true, targetIds);
+      deps.changed();
+      try {
+        const result = await runAction(action, confirmedIds, { ...a, context: () => context }, p => { progress = p; deps.changed(); });
+        actionFailures = [...result.failures, ...result.pending];
+        if (action.kind !== 'copy') {
+          ids = [...new Set([...excluded, ...actionFailures.map(f => f.id)])];
+          retry = null;
+          deps.retain(ids);
+          deps.replace(ids);
+        }
+        notice = action.kind === 'copy' && !actionFailures.length ? 'Copied to clipboard.'
+          : `${result.succeeded.length} completed${result.pending.length ? `, ${result.pending.length} awaiting confirmation` : ''}${excluded.length ? `, ${excluded.length} excluded` : ''}.`;
+        await deps.reload();
+        if (ids.length === 0) draft = emptyDraft();
+      } catch (e) { notice = errorMessage(e); }
+      finally {
+        saving = false;
+        deps.lock(false, targetIds);
+        deps.changed();
+      }
+    },
     model: () => {
       let extraCloseCount = 0;
       try {
@@ -87,6 +140,7 @@ export const createBulkToolbar = (deps: BulkToolbarDeps) => {
         count: ids.length, draft: { ...draft }, canApply: canApply(), failures, locked: saving, progress, notice, blockReason: saving ? null : blockReason(),
         hiddenCount: ids.filter(id => !deps.visible().includes(id)).length,
         extraCloseCount,
+        actionFailures, lastAction,
       };
     },
     selectionChanged: (next: readonly string[]): void => {
@@ -94,6 +148,8 @@ export const createBulkToolbar = (deps: BulkToolbarDeps) => {
       ids = [...next];
       retry = null;
       failures = [];
+      actionFailures = [];
+      lastAction = null;
       deps.retain([]);
       if (ids.length === 0) draft = emptyDraft();
       deps.changed();
