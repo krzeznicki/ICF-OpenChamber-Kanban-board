@@ -17,6 +17,7 @@ export type SourceCapabilities = {
   blockedBy: boolean;
   claim: boolean;
   delete: boolean;
+  labels?: boolean;
 };
 
 /** Whether a source answers: `needs-login` the user can fix by logging in; `unavailable` anything else. */
@@ -60,7 +61,7 @@ const ALL: SourceCapabilities = { create: true, subtasks: true, blockedBy: true,
 
 export const SOURCES: Record<SourceId, Omit<SourceInfo, 'id'>> = {
   local: { label: 'Local', capabilities: ALL },
-  github: { label: 'GitHub', capabilities: ALL },
+  github: { label: 'GitHub', capabilities: { ...ALL, labels: true } },
 };
 
 export const sourceInfo = (id: SourceId): SourceInfo => ({ id, ...SOURCES[id] });
@@ -192,6 +193,11 @@ export const createCombinedTracker = (primary: SourceId, sources: readonly Sourc
     create,
     setState: async (id, state) => sourceOf(id).setState(id, state),
     setType: async (id, type) => sourceOf(id).setType(id, type),
+    changeLabel: async (id, label, mode) => sourceOf(id).changeLabel(id, label, mode),
+    addBlocker: async (id, blockerId) => {
+      if (sourceOf(id) !== sourceOf(blockerId)) throw new TrackerError('INVALID', NO_LINKS);
+      return sourceOf(id).addBlocker(id, blockerId);
+    },
     edit: async (id, changes) => sourceOf(id).edit(id, changes),
     claim: async (id) => sourceOf(id).claim(id),
     setParent,

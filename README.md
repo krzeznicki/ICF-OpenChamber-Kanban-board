@@ -16,6 +16,7 @@ Requires OpenChamber 2.7.1 or later. MIT licence.
 Also:
 
 - Each card can show a short summary in your language, and new tasks get a type and state suggested by your Small Model.
+- Mark several cards with ⌘-click or Shift-click to move, edit, start, archive or delete them together.
 - Every board action has a keyboard shortcut you can rebind; `?` shows them. Search takes filters such as `type:bug` and `state:needs-info`.
 - Opened beside a chat, the panel shows the task that chat is working on. `/kanban` in the composer opens it.
 - Settings, presets and summaries are stored per user in OpenChamber, never in the repository.

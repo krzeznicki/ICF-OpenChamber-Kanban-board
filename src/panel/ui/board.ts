@@ -93,8 +93,19 @@ export const createBoard = (root: HTMLElement, callbacks: BoardCallbacks) => {
   // One banner per source that failed to list (sourceBanner.ts); the other sources' cards stay below.
   const sourceNotes = div('kb-source-notes');
   const columns = div('kb-columns');
-  shell.append(toolbar, status, sourceNotes, sessionNote, columns);
+  const bulkSlot = div('kb-bulk');
+  bulkSlot.hidden = true;
+  shell.append(toolbar, status, sourceNotes, sessionNote, columns, bulkSlot);
   root.replaceChildren(shell);
+  let interactionLocked = false;
+  // Inert covers real pointer/focus interaction; the capture guard also covers dispatched events.
+  for (const event of ['click', 'pointerdown', 'keydown', 'input', 'change']) {
+    shell.addEventListener(event, e => {
+      if (!interactionLocked || (e.target instanceof Node && bulkSlot.contains(e.target))) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+    }, true);
+  }
 
   const project = mountSelect(projectSlot, {
     value: null,
@@ -226,6 +237,13 @@ export const createBoard = (root: HTMLElement, callbacks: BoardCallbacks) => {
   return {
     /** The persistent container the cards are drawn in; drag listeners live here. */
     columns,
+    bulkSlot,
+    /** The save's footer stays usable; every other control/card is temporarily inert. */
+    setInteractionLocked: (locked: boolean) => {
+      interactionLocked = locked;
+      for (const node of [toolbar, status, sourceNotes, sessionNote, columns]) node.inert = locked;
+      shell.setAttribute('aria-busy', String(locked));
+    },
     /** "Add task" works only while a board is shown. */
     setCanAdd: (enabled: boolean) => add.update({ disabled: !enabled }),
     /** The "Hide sub-tasks" switch follows the project's settings when they load. */

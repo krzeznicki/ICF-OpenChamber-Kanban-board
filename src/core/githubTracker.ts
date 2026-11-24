@@ -221,7 +221,7 @@ export const createGithubTracker = (root: string, exec: Exec, labels: ProjectCon
     return custom === undefined ? null : custom.slice(TYPE_PREFIX.length).trim() || null;
   };
 
-  const toTask = (issue: Issue, rel: Relations): Task => ({
+  const toTask = (issue: Issue, rel: Relations, childCount?: number): Task => ({
     id: idOf(issue.number),
     kind: rel.childCount > 0 ? 'parent' : 'ticket',
     title: issue.title,
@@ -234,6 +234,8 @@ export const createGithubTracker = (root: string, exec: Exec, labels: ProjectCon
     updatedAt: Date.parse(issue.updatedAt) || 0,
     claimed: issue.assignees.length > 0,
     source: 'github',
+    labels: issue.labels,
+    ...(childCount === undefined ? {} : { childCount }),
   });
 
   const load = async (n: number): Promise<{ task: Task; issue: Issue; rel: Relations }> => {
@@ -251,7 +253,7 @@ export const createGithubTracker = (root: string, exec: Exec, labels: ProjectCon
       assignees: (g.assignees?.nodes ?? []).map((a) => a.login),
     };
     const rel = relationsOf(g);
-    return { task: toTask(issue, rel), issue, rel };
+    return { task: toTask(issue, rel, g.subIssues?.totalCount), issue, rel };
   };
 
   const get = async (id: string): Promise<Task> => (await load(parseNumber(id))).task;
@@ -348,10 +350,45 @@ export const createGithubTracker = (root: string, exec: Exec, labels: ProjectCon
         .sort((a, b) => a.number - b.number);
       if (issues.length === 0) return [];
       const rel = await graph(issues.map((i) => i.number), false);
-      return issues.map((i) => toTask(i, relationsOf(rel.get(i.number) ?? null)));
+      return issues.map((i) => {
+        const g = rel.get(i.number) ?? null;
+        return toTask(i, relationsOf(g), g?.subIssues?.totalCount);
+      });
     },
 
     get,
+    async changeLabel(id, label, mode) {
+      const name = label.trim();
+      if (!name || name.includes(',') || /[\r\n]/.test(name)) throw new TrackerError('INVALID', 'Choose one non-empty label');
+      if (Object.values(labels).some(l => l.toLowerCase() === name.toLowerCase()) || isTypeLabel(name.toLowerCase())) {
+        throw new TrackerError('INVALID', 'Use the status or type control for workflow labels');
+      }
+      const { issue } = await load(parseNumber(id));
+      const present = issue.labels.find(l => l.toLowerCase() === name.toLowerCase());
+      await swapLabels(issue.number, mode === 'add' && !present ? name : null, mode === 'remove' && present ? [present] : []);
+      return get(id);
+    },
+    async addBlocker(id, blockerId) {
+      const n = parseNumber(id);
+      const b = parseNumber(blockerId);
+      const seen = new Set<number>();
+      const visit = async (at: number): Promise<void> => {
+        if (at === n) throw new TrackerError('INVALID', 'This dependency would create a cycle');
+        if (seen.has(at)) return;
+        seen.add(at);
+        const g = (await graph([at], true)).get(at);
+        if (!g) throw new TrackerError('NOT_FOUND', `Issue not found: #${at}`);
+        if (g.issueDependenciesSummary && g.issueDependenciesSummary.totalBlockedBy > (g.blockedBy?.nodes.length ?? 0)) {
+          throw new TrackerError('INVALID', 'Dependencies are not fully loaded; cannot check for cycles');
+        }
+        const refs = relationsOf(g).blockedBy ?? bodyBlockers(g.body ?? '');
+        for (const ref of refs) await visit(ref);
+      };
+      const task = await get(id);
+      await visit(b);
+      if (!task.blockedBy.includes(idOf(b))) await run(['issue', 'edit', String(n), '--add-blocked-by', String(b)]);
+      return get(id);
+    },
 
     async create(input: NewTask) {
       if (typeof input.title !== 'string' || input.title.trim() === '') throw new TrackerError('INVALID', 'Title is required');

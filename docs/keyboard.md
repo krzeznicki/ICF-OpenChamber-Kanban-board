@@ -22,6 +22,8 @@
 
 In the search field, ↓ selects the first matching card.
 
+With the mouse, ⌘-click marks a card and Shift-click marks a range; ⇧⌘← / ⇧⌘→ then move every marked card. See [Working on several cards](board.md#working-on-several-cards).
+
 ## Open task
 
 | Key | Action |

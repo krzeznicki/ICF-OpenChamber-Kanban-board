@@ -172,7 +172,7 @@ test('sources declare capabilities and availability', async (t) => {
   assert.equal(local!.id, 'local');
   assert.equal(github!.id, 'github');
   for (const s of [local!, github!]) {
-    assert.deepEqual(s.capabilities, { create: true, subtasks: true, blockedBy: true, claim: true, delete: true });
+    assert.deepEqual(s.capabilities, { create: true, subtasks: true, blockedBy: true, claim: true, delete: true, ...(s.id === 'github' ? { labels: true } : {}) });
   }
   assert.deepEqual(await local!.availability(), { status: 'ok' });
   const gh = await github!.availability();

@@ -122,3 +122,23 @@ test('linksAt: a card of another column links anywhere; in its own column only i
   assert.equal(linksAt(130, card, true), true);
   assert.equal(linksAt(190, card, true), false);
 });
+
+test('a Mod- or Shift-click marks the card instead of opening it; a plain click opens it', () => {
+  const marking = step(null, { ...down, mark: 'toggle' }).press;
+  assert.deepEqual(step(marking, { type: 'up', pointerId: 1, to: null }).effect, { kind: 'mark', taskId: 't', how: 'toggle' });
+  const ranging = step(null, { ...down, mark: 'range' }).press;
+  assert.deepEqual(step(ranging, { type: 'up', pointerId: 1, to: null }).effect, { kind: 'mark', taskId: 't', how: 'range' });
+});
+
+test('a drag of marked cards moves the whole group to a column, never links or reorders it', () => {
+  const group = step(step(null, { ...down, group: ['s', 't', 'u'] }).press, move(THRESHOLD)).press;
+  const drop = { kind: 'drop', taskId: 't', from: 'backlog', to: 'done', group: ['s', 't', 'u'] };
+  assert.deepEqual(step(group, { type: 'up', pointerId: 1, to: 'done' }).effect, drop);
+  assert.deepEqual(step(group, { type: 'up', pointerId: 1, to: 'done', onto: 'p' }).effect, drop);
+  // Let go in its own column (back home) or outside every column: cancelled, nothing moves.
+  assert.deepEqual(step(group, { type: 'up', pointerId: 1, to: 'backlog', before: 'v' }).effect, { kind: 'cancel' });
+  assert.deepEqual(step(group, { type: 'up', pointerId: 1, to: null, onto: 'p' }).effect, { kind: 'cancel' });
+  // A group of one is the plain drag.
+  const one = step(step(null, { ...down, group: ['t'] }).press, move(THRESHOLD)).press;
+  assert.deepEqual(step(one, { type: 'up', pointerId: 1, to: 'done' }).effect, { kind: 'drop', taskId: 't', from: 'backlog', to: 'done' });
+});

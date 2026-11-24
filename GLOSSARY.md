@@ -16,6 +16,10 @@ _Avoid_: Scope, mode
 The one card on the Board that keyboard actions act on; it stays selected when the board redraws.
 _Avoid_: Focused card, active card, current task
 
+**Marked card**:
+A card picked with Cmd/Ctrl+click or Shift+click (a range) to be moved together with the other Marked cards. Several cards can be marked; the Selected card is still one.
+_Avoid_: Multi-selection, checked card
+
 **Open task**:
 A task shown in the task modal.
 _Avoid_: Task detail, task view

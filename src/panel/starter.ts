@@ -12,7 +12,8 @@ import { errorMessage, type Task } from '../core/types.ts';
 import { VARIANT, panelId } from '../core/variant.ts';
 import { ApiError, createApi } from './api.ts';
 import { ledByOrchestrator, markArchived, sessionForTask, type Detached, type SessionLink } from './columns.ts';
-import { createLauncher } from './launcher.ts';
+import { createLauncher, uncertainHostStart } from './launcher.ts';
+import type { ActionResult } from './actionResult.ts';
 import { pickPreset, type Preset } from './presets.ts';
 import { buildPrompt } from './prompt.ts';
 import type { QueueEntry } from './queue.ts';
@@ -106,7 +107,7 @@ export const createStarter = (deps: StarterDeps) => {
    * starts the session with the model, agent and thinking level and records the link. An id too long to be an item
    * (GUEST_ATTACH_ID_MAX) also takes path B, so the card can follow it.
    */
-  const startTask = async (task: Task, opts: StartOptions, prompt: string): Promise<{ sessionId: string | null; pending?: boolean }> => {
+  const startTask = async (task: Task, opts: StartOptions, prompt: string): Promise<{ sessionId: string | null; pending?: boolean; needsMessage?: boolean }> => {
     const p = deps.project();
     if (p === null) throw new Error('No project is open');
     const api = createApi(host, p.directory);
@@ -133,7 +134,7 @@ export const createStarter = (deps: StarterDeps) => {
         return { sessionId: null, pending: true };
       }
     }
-    const result = await host.startSession(
+    const request =
       clampStartSessionRequest({
         providerId: panelId(VARIANT),
         id: task.id,
@@ -143,8 +144,9 @@ export const createStarter = (deps: StarterDeps) => {
         projectId: p.id,
         worktree: opts.location === 'worktree' ? true : false,
         navigation: 'preserve',
-      }),
-    );
+      });
+    const result = await uncertainHostStart(() => host.startSession(request));
+    if ('pending' in result) return result;
     if (result.sessionId === null) {
       const what = result.failure === 'bootstrap-failed' ? 'setting up the worktree failed' : 'the session could not be created';
       void host
@@ -167,7 +169,7 @@ export const createStarter = (deps: StarterDeps) => {
       .addLink(task.id, sessionId, result.directory ?? result.worktree?.directory ?? null)
       .then(() => reloadLinks(p.id, p.directory))
       .catch(() => {});
-    return { sessionId };
+    return { sessionId, needsMessage: result.sent === 'no-model' || result.sent === 'failed' };
   };
 
   const buildFor = async (task: Task, opts: StartOptions): Promise<string> => {
@@ -270,15 +272,15 @@ export const createStarter = (deps: StarterDeps) => {
     }
   };
 
-  const enqueue = async (task: Task, opts: StartOptions, ctx: StartContext): Promise<void> => {
+  const enqueue = async (task: Task, opts: StartOptions, ctx: StartContext): Promise<ActionResult> => {
     const p = deps.project();
-    if (p === null || p.id !== ctx.projectId) return;
+    if (p === null || p.id !== ctx.projectId) return { kind: 'cancelled', id: task.id };
     let prompt: string;
     try {
       prompt = await buildFor(task, opts);
     } catch (e) {
       fail(`Could not queue “${task.title}”: ${errorMessage(e)}`);
-      return;
+      return { kind: 'failed', id: task.id, message: errorMessage(e) };
     }
     const entry: QueueEntry = {
       taskId: task.id,
@@ -292,52 +294,61 @@ export const createStarter = (deps: StarterDeps) => {
     };
     try {
       const fresh = await createApi(host, p.directory).addToQueue(entry, ctx.settings.maxParallel);
-      if (currentId() !== p.id) return;
+      if (currentId() !== p.id) return { kind: 'success', id: task.id };
       queue = fresh;
       shown = p.id;
     } catch (e) {
       fail(`Could not queue “${task.title}”: ${errorMessage(e)}`);
-      return;
+      return { kind: 'failed', id: task.id, message: errorMessage(e) };
     }
     deps.draw();
     await drain();
     if (queue.some((e) => e.taskId === task.id)) {
       info(`“${task.title}” is queued; it starts when fewer than ${ctx.settings.maxParallel} agents are running`);
     }
+    return { kind: 'success', id: task.id };
   };
 
-  /** A drop on In Progress: resolve the start options, ask first when "Start automatically" is off, then launch or queue. */
-  const onStart = async (task: Task): Promise<void> => {
+  /**
+   * A drop on In Progress: resolve the start options, ask first when "Start automatically" is off,
+   * then launch or queue. Resolves once launched (counted as starting) or queued, not when the
+   * session is up, so a group start (edit.ts moveGroup) goes on to the next card at once.
+   */
+  const startTaskAction = async (id: string, mode: 'start' | 'queue'): Promise<ActionResult> => {
+    const deliveryFailure: ActionResult = { kind: 'failed', id, message: 'Session created, but the task message was not delivered. Open the existing session and send it there; do not start another agent.' };
+    if (launcher.needsMessage(id)) return deliveryFailure;
+    const task = deps.tasks()?.find(t => t.id === id);
+    if (!task || task.state === 'done') return { kind: 'failed', id, message: 'Reopen the task before starting it' };
     // A sub-task of a running orchestrator gets no session of its own.
     if (ledByOrchestrator(task, deps.sessions(), markArchived(links, deps.archived()), deps.detached())) {
       info('The orchestrator leads this task');
-      return;
+      return { kind: 'failed', id, message: 'The orchestrator leads this task' };
     }
     const ctx = deps.context();
     if (ctx === null) {
       info('Settings are loading, try again in a moment');
-      return;
+      return { kind: 'failed', id, message: 'Settings are loading' };
     }
     if (isStarting.has(task.id) || hasLiveSession(task.id)) {
       info(`“${task.title}” already has an agent working on it`);
-      return;
+      return hasLiveSession(id) ? { kind: 'success', id } : { kind: 'pending', id, message: 'Waiting for the existing start to be confirmed' };
     }
     if (queuedIds().has(task.id)) {
       info(`“${task.title}” is already queued`);
-      return;
+      return { kind: 'success', id };
     }
     let card: Partial<StartOptions>;
     try {
       card = await deps.loadCard(ctx.projectId, task.id);
     } catch (e) {
       fail(`Could not read the card's start options: ${errorMessage(e)}`);
-      return;
+      return { kind: 'failed', id, message: errorMessage(e) };
     }
     const subtasks = (deps.tasks() ?? []).some((t) => t.parentId === task.id);
     let opts = resolveStart(ctx.settings, { type: task.type, subtasks }, card, ctx.presets);
     if (!ctx.settings.autoStart) {
       const picked = await askStart(task.title, opts, ctx.presets, deps.lists);
-      if (picked === null) return;
+      if (picked === null) return { kind: 'cancelled', id };
       opts = picked;
     }
     if (opts.variant !== null) {
@@ -348,16 +359,21 @@ export const createStarter = (deps: StarterDeps) => {
       if (checked.dropped !== null) info(`${opts.model ?? 'The model'} does not offer the thinking level “${checked.dropped}”; starting without it`);
       opts = checked.opts;
     }
-    if (currentId() !== ctx.projectId) return;
-    if (queuedIds().size > 0 || occupied() >= ctx.settings.maxParallel) {
-      await enqueue(task, opts, ctx);
-      return;
+    if (currentId() !== ctx.projectId) return { kind: 'cancelled', id };
+    if (mode === 'queue' || queuedIds().size > 0 || occupied() >= ctx.settings.maxParallel) {
+      return enqueue(task, opts, ctx);
     }
     const pending = launcher.launch(task, opts);
     deps.draw(); // the card shows in In Progress while it starts
-    report(task, await pending);
+    const result = await pending;
+    report(task, result);
     deps.draw();
+    return result === 'started' ? { kind: 'success', id }
+      : result === 'needs-message' ? deliveryFailure
+      : result === 'failed' ? { kind: 'failed', id, message: 'Agent could not start; see the reported start error' }
+      : { kind: 'pending', id, message: 'Waiting for the existing start to be confirmed' };
   };
+  const onStart = async (task: Task): Promise<void> => { await startTaskAction(task.id, 'start'); };
 
   /**
    * Before a queued card moves to another column: take it out of the queue. False when that
@@ -414,6 +430,7 @@ export const createStarter = (deps: StarterDeps) => {
     queueErrors,
     hasLiveSession,
     onStart,
+    startTaskAction,
     leaveQueue,
     refresh,
     onSnapshot,

@@ -6,16 +6,30 @@
 // linked under it instead: such a card is highlighted while the pointer is over it, and the column
 // is not. In the card's own column only an accepting card's middle half links: elsewhere there a line
 // shows where the card goes, and the drop reorders it (../order.ts). Anywhere else the drop is the column move.
+// Mod+click (Cmd on macOS, Ctrl elsewhere) marks a card and Shift+click a range (../marks.ts)
+// instead of opening it; a press elsewhere on the board clears the marks. Dragging a Marked card
+// carries every Marked card: they all look dragged, the ghost shows how many, and the drop moves
+// them to a column (no link, no reorder).
 // The press/drag transitions live in ../drag.ts (pure, tested); this file only does the DOM side.
 import type { Column } from '../columns.ts';
 import { insertionBefore, linksAt, step, type DragEffect, type DragInput, type Press } from '../drag.ts';
+import type { MarkHow } from '../marks.ts';
 
 const COLUMNS: readonly string[] = ['backlog', 'ready', 'in_progress', 'review', 'done'];
 
 export type DragCallbacks = {
+  /** No marking, opening or dragging while the bulk form owns the board. */
+  locked?: () => boolean;
   /** False while the card's last move is in flight: the press is ignored. */
   canDrag: (taskId: string) => boolean;
-  onDrop: (taskId: string, from: Column, to: Column) => void;
+  /** What a drag of taskId carries: the Marked cards when it is one of them, else just it (../marks.ts dragGroup). */
+  group: (taskId: string) => readonly string[];
+  /** group: several Marked cards were dropped (taskId among them). */
+  onDrop: (taskId: string, from: Column, to: Column, group?: readonly string[]) => void;
+  /** A Mod- or Shift-click on a card. */
+  onMark: (taskId: string, how: MarkHow) => void;
+  /** A plain press on the board outside every card. */
+  onClearMarks: () => void;
   /** Whether the card parentId accepts taskId as its sub-task (link.ts canLinkUnder). */
   canLink: (taskId: string, parentId: string) => boolean;
   /** Released over an accepting card. */
@@ -97,8 +111,8 @@ export const attachDrag = (container: HTMLElement, callbacks: DragCallbacks): ((
       d.ghost?.remove();
       d.card.classList.remove('is-dragging');
     }
-    // A redraw may have replaced the card; clear the current one too.
-    if (taskId !== null) container.querySelector(`.kb-card[data-task-id="${CSS.escape(taskId)}"]`)?.classList.remove('is-dragging');
+    // A redraw may have replaced the cards (and a group dims several); clear the current ones too.
+    if (taskId !== null) for (const el of container.querySelectorAll('.kb-card.is-dragging')) el.classList.remove('is-dragging');
     document.documentElement.classList.remove('kb-dragging');
     if (pointerId !== null && container.hasPointerCapture(pointerId)) container.releasePointerCapture(pointerId);
   };
@@ -110,6 +124,14 @@ export const attachDrag = (container: HTMLElement, callbacks: DragCallbacks): ((
     ghost.removeAttribute('tabindex');
     ghost.setAttribute('aria-hidden', 'true');
     ghost.style.width = `${dom.width}px`;
+    if (p.group !== undefined) {
+      ghost.classList.add('kb-ghost-group');
+      const count = document.createElement('span');
+      count.className = 'kb-ghost-count';
+      count.textContent = String(p.group.length);
+      ghost.append(count);
+      for (const id of p.group) container.querySelector(`.kb-card[data-task-id="${CSS.escape(id)}"]`)?.classList.add('is-dragging');
+    }
     document.body.append(ghost);
     dom.ghost = ghost;
     dom.card.classList.add('is-dragging');
@@ -142,26 +164,38 @@ export const attachDrag = (container: HTMLElement, callbacks: DragCallbacks): ((
     if (effect.kind === 'start' && next !== null && at !== undefined) startGhost(next, at.x, at.y);
     else if (effect.kind === 'follow' && at !== undefined) follow(at.x, at.y);
     else if (effect.kind === 'open') callbacks.onOpen(effect.taskId);
-    else if (effect.kind === 'drop') callbacks.onDrop(effect.taskId, effect.from, effect.to);
+    else if (effect.kind === 'mark') callbacks.onMark(effect.taskId, effect.how);
+    else if (effect.kind === 'drop') callbacks.onDrop(effect.taskId, effect.from, effect.to, effect.group);
     else if (effect.kind === 'link') callbacks.onLink(effect.taskId, effect.parentId);
     else if (effect.kind === 'reorder') callbacks.onReorder(effect.taskId, effect.column, effect.before);
     return effect;
   };
 
   const onDown = (e: PointerEvent): void => {
+    if (callbacks.locked?.()) return;
     const target = e.target instanceof Element ? e.target : null;
     const card = target?.closest<HTMLElement>('.kb-card') ?? null;
     const col = columnOf(card);
     const ok = card !== null && target !== null && col !== null && card.dataset.taskId !== undefined && !interactive(target, card);
+    const mark: MarkHow | null = e.shiftKey ? 'range' : e.metaKey || e.ctrlKey ? 'toggle' : null;
+    // A plain press on the board's background (not a control, not a card) clears the marks.
+    if (card === null && mark === null && e.button === 0 && target !== null && target.closest('button, a, input, select, textarea, [role="button"]') === null) {
+      callbacks.onClearMarks();
+    }
+    // Shift+click would otherwise select the text between the two clicks.
+    if (ok && mark !== null) e.preventDefault();
     const before = press;
+    const taskId = ok ? (card.dataset.taskId as string) : null;
     feed({
       type: 'down',
       pointerId: e.pointerId,
       button: e.button,
-      taskId: ok ? (card.dataset.taskId as string) : null,
+      taskId,
       from: (col?.dataset.column ?? 'backlog') as Column,
       x: e.clientX,
       y: e.clientY,
+      ...(mark !== null ? { mark } : {}),
+      ...(taskId !== null ? { group: callbacks.group(taskId) } : {}),
     });
     if (press !== null && press !== before && ok) {
       const rect = card.getBoundingClientRect();
@@ -185,6 +219,7 @@ export const attachDrag = (container: HTMLElement, callbacks: DragCallbacks): ((
   };
 
   const onUp = (e: PointerEvent): void => {
+    if (callbacks.locked?.()) { feed({ type: 'abort' }); return; }
     const hit = press?.dragging === true ? document.elementFromPoint(e.clientX, e.clientY) : null;
     const to = columnOf(hit);
     const onto = press !== null && hit !== null ? (linkTarget(hit, press, e.clientY)?.dataset.taskId ?? null) : null;
@@ -201,6 +236,7 @@ export const attachDrag = (container: HTMLElement, callbacks: DragCallbacks): ((
   };
 
   const onKey = (e: KeyboardEvent): void => {
+    if (callbacks.locked?.()) return;
     if (e.key !== 'Enter' && e.key !== ' ') return;
     if (!(e.target instanceof HTMLElement) || !e.target.classList.contains('kb-card')) return;
     const id = e.target.dataset.taskId;

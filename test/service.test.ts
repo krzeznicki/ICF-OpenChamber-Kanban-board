@@ -6,6 +6,8 @@ import { isAbsolute, join } from 'node:path';
 import { withAdditionalSources, writeConfig } from '../src/core/config.ts';
 import type { Exec, Task } from '../src/core/types.ts';
 import { handle } from '../src/service/routes.ts';
+import { planBulk, runBulk } from '../src/panel/bulkEdit.ts';
+import type { TaskState } from '../src/core/types.ts';
 
 type T = { after: (fn: () => Promise<void>) => void };
 type Err = { error: { code: string; message: string } };
@@ -29,6 +31,28 @@ const local = async (t: T): Promise<string> => {
 
 test('GET /health answers 200 {}', async () => {
   assert.deepEqual(await handle('GET', '/health', undefined, deps), { status: 200, json: {} });
+});
+
+test('add blocker is additive, idempotent, validates cycles and keeps the local body', async t => {
+  const directory = await local(t);
+  const create = async (input: Record<string, unknown>) => ((await handle('POST', '/tasks/create', { directory, input }, deps)).json as { task: Task }).task;
+  const p = await create({ title: 'Group' });
+  const a = await create({ title: 'A', parentId: p.id });
+  const b = await create({ title: 'B', parentId: p.id });
+  const c = await create({ title: 'C', parentId: p.id, blockedBy: [a.id], body: 'Keep this description.' });
+  const add = (id: string, blockerId: string) => handle('POST', '/tasks/blocker', { directory, id, blockerId }, deps);
+  assert.equal((await add(c.id, b.id)).status, 200);
+  assert.equal((await add(c.id, b.id)).status, 200);
+  const got = ((await handle('POST', '/tasks/get', { directory, id: c.id }, deps)).json as { task: Task }).task;
+  assert.deepEqual(got.blockedBy, [a.id, b.id]);
+  assert.match(got.body, /Keep this description/);
+  assert.equal((await add(a.id, c.id)).status, 422);
+  assert.equal((await add(c.id, c.id)).status, 422);
+  const other = await create({ title: 'Other' });
+  assert.equal((await add(c.id, other.id)).status, 422);
+  assert.equal((await add(c.id, '#1')).status, 422);
+  const label = await handle('POST', '/tasks/label', { directory, id: c.id, label: 'urgent', mode: 'add' }, deps);
+  assert.equal((label.json as Err).error.code, 'UNSUPPORTED');
 });
 
 test('create, list, get, state, type round trip on a local project', async (t) => {
@@ -77,6 +101,39 @@ test('close with children closes the feature and its tickets', async (t) => {
   const tasks = (closed.json as { tasks: Task[] }).tasks;
   assert.equal(tasks.length, 2);
   assert.ok(tasks.every((x) => x.state === 'done'));
+});
+
+test('bulk state/type writes round trip without closing unselected children or dropping links and queue', async (t) => {
+  const directory = await local(t);
+  const files = await tmp(t);
+  const d = { exec: noExec, linksFile: join(files, 'links.json'), queueFile: join(files, 'queue.json') };
+  const call = async (path: string, body: object): Promise<Task> => {
+    const result = await handle('POST', path, { directory, ...body }, d);
+    if (result.status !== 200) throw new Error(JSON.stringify(result.json));
+    return (result.json as { task: Task }).task;
+  };
+  const parent = await call('/tasks/create', { input: { title: 'Feature', type: 'enhancement' } });
+  const child = await call('/tasks/create', { input: { title: 'Child', parentId: parent.id } });
+  assert.equal((await handle('POST', '/links/add', { directory, taskId: parent.id, sessionId: 'ses_bulk' }, d)).status, 200);
+  assert.equal((await handle('POST', '/queue/add', { directory, entry: { taskId: parent.id, title: 'Feature', prompt: 'p', location: 'project' } }, d)).status, 200);
+  let refuseState = true;
+  const api = {
+    get: (id: string) => call('/tasks/get', { id }),
+    setType: (id: string, type: string) => call('/tasks/type', { id, type }),
+    setState: (id: string, state: TaskState) => call('/tasks/state', { id, state: refuseState ? 'invalid' : state }),
+  };
+  const plan = planBulk([parent, child], [parent.id], { type: 'bug', state: 'done', withChildren: false });
+  const failed = await runBulk(plan, api, () => {});
+  assert.deepEqual(failed.failures.map(f => f.field), ['state']);
+  assert.equal((await api.get(parent.id)).type, 'bug');
+  refuseState = false;
+  assert.equal((await runBulk(plan, api, () => {}, [parent.id])).failures.length, 0);
+  assert.equal((await api.get(parent.id)).state, 'done');
+  assert.equal((await api.get(child.id)).state, 'needs-triage');
+  const links = (await handle('POST', '/links/list', { directory }, d)).json as { links: { taskId: string }[] };
+  const queue = (await handle('POST', '/queue/list', { directory }, d)).json as { queue: { taskId: string }[] };
+  assert.deepEqual(links.links.map(l => l.taskId), [parent.id]);
+  assert.deepEqual(queue.queue.map(q => q.taskId), [parent.id]);
 });
 
 test('relative or missing directory is 400 INVALID', async (t) => {

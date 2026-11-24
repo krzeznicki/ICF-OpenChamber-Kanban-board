@@ -168,7 +168,7 @@ export const createLocalTracker = (root: string): Tracker => {
     return task;
   };
 
-  const patch = async (id: string, field: 'Status' | 'Type', value: string): Promise<Task> => {
+  const patch = async (id: string, field: 'Status' | 'Type' | 'Blocked by', value: string): Promise<Task> => {
     const task = await get(id);
     const ref = parseId(task.id);
     // A synthesized parent (no spec.md yet) is written on its first edit.
@@ -451,6 +451,28 @@ export const createLocalTracker = (root: string): Tracker => {
 
     setType(id, type) {
       return patch(id, 'Type', type.trim());
+    },
+
+    async changeLabel() {
+      throw new TrackerError('UNSUPPORTED', 'Local tasks do not support labels');
+    },
+
+    async addBlocker(id, blockerId) {
+      const task = await get(id);
+      const blocker = await get(blockerId);
+      if (task.id === blocker.id || task.kind !== 'ticket' || blocker.kind !== 'ticket' || task.parentId !== blocker.parentId) {
+        throw new TrackerError('INVALID', 'A blocker must be another ticket of the same feature');
+      }
+      const seen = new Set<string>();
+      const visit = async (at: string): Promise<void> => {
+        if (at === task.id) throw new TrackerError('INVALID', 'This dependency would create a cycle');
+        if (seen.has(at)) return;
+        seen.add(at);
+        for (const b of (await get(at)).blockedBy) await visit(b);
+      };
+      await visit(blocker.id);
+      const ids = [...new Set([...task.blockedBy, blocker.id])];
+      return patch(task.id, 'Blocked by', blockersValue(ids.map(b => fileNumber(parseId(b).file!))));
     },
 
     async claim(id) {

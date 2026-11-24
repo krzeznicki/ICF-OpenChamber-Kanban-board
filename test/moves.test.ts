@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Task } from '../src/core/types.ts';
-import { openChildren, planMove, taskTypes } from '../src/panel/moves.ts';
+import { groupSteps, openChildren, planGroupMove, planMove, taskTypes } from '../src/panel/moves.ts';
+import type { Column } from '../src/panel/columns.ts';
 
 const task = (over: Partial<Task> = {}): Task => ({
   id: '.scratch/f/issues/01-a.md',
@@ -91,4 +92,45 @@ test('taskTypes offers the base types plus every used one', () => {
     'docs',
     'spike',
   ]);
+});
+
+test('planGroupMove: each card planned from its own column; those already there are skipped, each refusal said once', () => {
+  const a = task({ id: 'a' });
+  const b = task({ id: 'b', state: 'done' });
+  const c = task({ id: 'c', state: 'done' });
+  const d = task({ id: 'd', state: 'ready-for-agent' });
+  const plan = planGroupMove(
+    [
+      { task: a, from: 'backlog' },
+      { task: b, from: 'done' },
+      { task: c, from: 'done' },
+      { task: d, from: 'in_progress' },
+    ],
+    'in_progress',
+    [a, b, c, d],
+  );
+  assert.deepEqual(plan.moves, [{ task: a, from: 'backlog', move: { kind: 'start' } }]);
+  assert.deepEqual(plan.reasons, ['Reopen the task (move it to Backlog or Ready) before starting it']);
+});
+
+test('planGroupMove: a parent closed with the group asks about its open children', () => {
+  const p = task({ id: 'P', kind: 'parent' });
+  const kid = task({ id: 'k', parentId: 'P' });
+  const plan = planGroupMove([{ task: p, from: 'ready' }], 'done', [p, kid]);
+  assert.deepEqual(plan.moves, [{ task: p, from: 'ready', move: { kind: 'close', askChildren: true } }]);
+  assert.deepEqual(plan.reasons, []);
+});
+
+test('groupSteps: Mod+Shift+←/→ on Marked cards moves each one column on from its own, grouped by column; the edge stays', () => {
+  const columns = new Map<string, Column>([
+    ['a', 'backlog'],
+    ['b', 'ready'],
+    ['c', 'backlog'],
+    ['d', 'done'],
+  ]);
+  assert.deepEqual(groupSteps(['a', 'b', 'c', 'd', 'gone'], columns, 1), [
+    { ids: ['a', 'c'], to: 'ready' },
+    { ids: ['b'], to: 'in_progress' },
+  ]);
+  assert.deepEqual(groupSteps(['a', 'b'], columns, -1), [{ ids: ['b'], to: 'backlog' }]);
 });

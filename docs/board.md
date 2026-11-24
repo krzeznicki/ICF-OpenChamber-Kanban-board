@@ -43,6 +43,22 @@ Drag a card to another column, or use **Move to** in its modal. A move shows at 
 - To start a Done card again, move it to Backlog or Ready first.
 - `ready-for-human` and `wontfix` show as badges on Backlog cards. A claimed ticket (`Status: claimed` locally, an assignee on GitHub) counts as `ready-for-agent`.
 
+### Working on several cards
+
+**⌘-click** (Ctrl-click outside macOS) marks a card, and **Shift-click** marks every card between the last marked one and the clicked one, across columns, as in a file list. A plain click, a click on the board's background or Escape clears the marks.
+
+Dragging a marked card moves every marked card to that column, and ⇧⌘← / ⇧⌘→ moves them one column on. A group only moves between columns; it does not reorder or link cards. Cards that cannot go there stay, with the reason given once. Parents with open sub-tasks ask one at a time, and starts respect the agent limit and the queue.
+
+Marked cards also bring up a floating action panel:
+
+- **State** and **Type**, then **Apply**. For `done`, **Close sub-tasks** (on by default) closes the whole tree under each task.
+- **Move to column**, **Set parent**, **Unlink parent** and **Add blocker**. Local blockers must be tickets of the same feature.
+- **Labels**, for GitHub tasks only.
+- **Start Task**, which uses each card's own start options and joins the queue when no slot is free.
+- **Archive** and **Restore** for done tasks, **Copy** (titles, or links and local paths) and **Delete**, after a separate confirm.
+
+Each form says how many marked tasks it applies to and why the others are left out. If some tasks fail, they stay marked so you can retry; values already saved are skipped.
+
 Drag a card up or down its own column to reorder it. The order is kept by the board, not in the repository; cards you never reordered follow the tracker's order below the others.
 
 Dropping a card onto the middle of another card makes it that card's sub-task, after a confirm. The top and bottom edges of a card still reorder.

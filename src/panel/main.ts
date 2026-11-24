@@ -40,7 +40,7 @@ import { createAgentLoader, createModelLoader, type StartLists } from './models.
 import { createStarter } from './starter.ts';
 import { MODEL_NOTICES, createLimiter, createModelAvailability } from './limiter.ts';
 import { createSuggester, createTypeClassifier } from './suggest.ts';
-import { taskTypes } from './moves.ts';
+import { groupSteps, taskTypes } from './moves.ts';
 import { MODEL_PICK } from './addTask.ts';
 import { filterBoard, searchSuggestions } from './search.ts';
 import { currentSourceView, sourceBadge, sourceSwitcher, tasksInView, type SourceView } from './sourceView.ts';
@@ -60,6 +60,11 @@ import { openCheatSheet } from './ui/cheatSheet.ts';
 import { firstSelected, layoutOf, locate } from './navigation.ts';
 import { columnNeighbour } from './openTask.ts';
 import { createSelection, type Selection } from './ui/selection.ts';
+import { createBulkToolbar, type BulkToolbar } from './bulkToolbar.ts';
+import { mountBulkToolbar } from './ui/bulkToolbar.ts';
+import type { ActionDeps } from './bulkActions.ts';
+import { executeMove } from './actionResult.ts';
+import { openChildren } from './moves.ts';
 import { setHintKeymap } from './ui/shortcutHints.ts';
 import { openSettings } from './ui/settingsView.ts';
 import { injectStyles } from './ui/styles.ts';
@@ -244,6 +249,12 @@ let editor: Editor;
  * drawn layout navigation.ts steps through (also for Mod+↑/↓ in an Open task).
  */
 let selection: Selection;
+let bulk: BulkToolbar | null = null;
+let bulkUi: ReturnType<typeof mountBulkToolbar> | null = null;
+let bulkLocked = false;
+const paintBulk = (): void => {
+  if (bulk !== null) bulkUi?.update(bulk.model(), boardTypes());
+};
 let shortcuts: Shortcuts;
 let unsubscribeSessions: (() => void) | null = null;
 /** Bumped on every load and project switch; a stale answer is dropped. */
@@ -445,6 +456,7 @@ const draw = (): void => {
     (task) => sourceBadge(task, view, sources),
   );
   selection.rendered(layoutOf(shown));
+  paintBulk();
   auditLinks();
   focusSession();
   // The empty board speaks of the source it shows (in All: the primary one).
@@ -643,7 +655,9 @@ const backgroundLoad = (): void => {
 };
 
 const selectProject = async (id: string | null): Promise<void> => {
+  if (bulkLocked) return;
   if (id === state.projectId) return;
+  bulk?.reset();
   state.projectId = id;
   editor.reset();
   selection.set(null);
@@ -937,6 +951,83 @@ const setArchivedTasks = (projectId: string, marks: Map<string, number>): void =
   editor.refresh();
 };
 
+/** Awaited storage path for bulk actions: no success until persistence confirms it. */
+const persistBulkArchive = async (projectId: string, marks: Map<string, number>, removed: Map<string, number>): Promise<void> => {
+  await saver.idle();
+  const n = archiveSync.edit();
+  await archiveWriteJob(
+    { marks, removed, tasks: state.tasks, unlisted: state.unlisted },
+    { load: () => store.loadArchivedTasks(projectId), save: value => store.saveArchivedTasks(projectId, value) },
+    value => {
+      archiveSync.written(n);
+      unarchivedAt.set(projectId, removed);
+      state.archivedTasks = value;
+      state.archivedTasksFor = projectId;
+    },
+  )();
+};
+
+const bulkActionDeps = (): ActionDeps | null => {
+  const p = project();
+  if (!p || state.view !== 'board') return null;
+  const api = createApi(host, p.directory);
+  // Keep the old mark even if a reload prunes the old source ID before migration is retried.
+  const originalArchive = new Map(archivedTasks());
+  return {
+    api,
+    tasks: () => state.tasks ?? [],
+    context: () => ({
+      sources: state.config?.sources ?? [], archived: new Set(archivedTasks().keys()),
+      busy: new Set(editor.busy), complete: state.tasks !== null && state.sourceErrors.length === 0,
+    }),
+    copy: text => host.writeClipboard(text),
+    start: (id, mode) => starter.startTaskAction(id, mode),
+    move: async (id, to) => {
+      const task = await api.get(id);
+      const from = state.columns.get(id) ?? (task.state === 'done' ? 'done' : task.state === 'ready-for-agent' ? 'ready' : 'backlog');
+      return executeMove(task, from, to, openChildren(task, state.tasks ?? []), {
+        before: () => starter.leaveQueue(id),
+        after: () => detach(task, from),
+        setState: api.setState, close: api.close,
+        start: () => starter.startTaskAction(id, 'start'),
+        chooseChildren: async () => {
+          const answer = await askChoice(`Close “${task.title}”?`, 'This task has open sub-tasks.', [
+            { id: 'one', label: 'Only this task' }, { id: 'all', label: 'With sub-tasks', variant: 'destructive' },
+          ]);
+          return answer === null ? null : answer === 'all';
+        },
+      });
+    },
+    archive: async (ids, restore) => {
+      const tasks = await Promise.all(ids.map(id => api.get(id)));
+      if (tasks.some(t => t.state !== 'done')) throw new Error('Only completed tasks can be archived or restored.');
+      let marks = new Map(archivedTasks());
+      const removed = new Map(removedFor(p.id));
+      if (restore) for (const id of ids) { marks.delete(id); removed.set(id, Date.now()); }
+      else marks = archiveTasks(marks, ids, Date.now());
+      await persistBulkArchive(p.id, marks, removed);
+    },
+    remap: async (from, to) => {
+      // Follow immediately even if a subsequent storage write needs reporting.
+      state.tasks = state.tasks?.map(t => t.id === from ? { ...t, id: to } : t) ?? null;
+      renameOrdered(from, to);
+      await saver.idle();
+      await store.moveCard(p.id, from, to);
+      await store.moveNoType(p.id, from, to);
+      const marks = new Map(archivedTasks());
+      const at = originalArchive.get(from);
+      if (at !== undefined) {
+        marks.delete(from); marks.set(to, at);
+        await persistBulkArchive(p.id, marks, new Map(removedFor(p.id)).set(from, Date.now()));
+      }
+    },
+    deleted: async ids => {
+      forgetOrdered(ids);
+      for (const id of ids) await forgetStartOptions(p.id, id);
+    },
+  };
+};
+
 const archiveDone = async (): Promise<void> => {
   const id = state.projectId;
   if (id === null || viewTasks() === null) return;
@@ -1151,6 +1242,12 @@ const installBoardNavigation = (): void => {
   const moveSelected = (by: -1 | 1) => (): boolean => {
     // In a text field (the search) Mod+Shift+←/→ selects text.
     if (focusInTextField()) return false;
+    // Marked cards move together, each one column on from its own (moves.ts groupSteps).
+    const marked = selection.marked().filter((m) => state.columns.has(m));
+    if (marked.length > 0) {
+      editor.moveGroups(groupSteps(marked, state.columns, by));
+      return true;
+    }
     const id = selection.get();
     const from = id === null ? undefined : state.columns.get(id);
     if (id === null || from === undefined) return false;
@@ -1159,6 +1256,10 @@ const installBoardNavigation = (): void => {
     if (to !== undefined) editor.moveCard(id, to.id);
     return true;
   };
+  // Escape is never bound (shortcuts.ts): on the Board it also drops the Marked cards.
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !e.defaultPrevented && shortcuts.context() === 'board') selection.clearMarks();
+  });
   shortcuts.on('board.moveCardPrev', moveSelected(-1));
   shortcuts.on('board.moveCardNext', moveSelected(1));
   shortcuts.on('board.toggleSubtasks', () => {
@@ -1206,6 +1307,8 @@ const installShortcuts = (): void => {
   installOpenTaskShortcuts(shortcuts);
   installToolbarShortcuts(shortcuts);
   installCheatSheet(shortcuts);
+  shortcuts.addLayer(() => bulkLocked ? 'none' : null, { front: true });
+  shortcuts.addLayer(() => bulkUi?.isActionOpen() || board.bulkSlot.contains(document.activeElement) ? 'none' : null, { front: true });
   applyKeymap();
 };
 
@@ -1250,7 +1353,7 @@ const installToolbarShortcuts = (shortcuts: Shortcuts): void => {
   shortcuts.on('board.settings', () => showSettings());
   shortcuts.on('board.search', () => board.focusSearch());
   shortcuts.on('board.refresh', () => {
-    if (!board.busy()) void load();
+    if (!bulkLocked && !board.busy()) void load();
   });
   shortcuts.reserve('board.refresh');
 };
@@ -1293,6 +1396,7 @@ const start = (ctx: HostReadyContext): void => {
   }
   board = createBoard(root, {
     onProject: (id) => {
+      if (bulkLocked) return;
       state.pinned = true;
       rememberProject(id);
       void selectProject(id);
@@ -1328,10 +1432,14 @@ const start = (ctx: HostReadyContext): void => {
     onClearArchive: () => void clearArchive(),
   });
   // Focus returns to the Selected card after a redraw only on the Board itself, never under a dialog.
-  selection = createSelection(board.columns, { canFocus: () => shortcuts.context() === 'board' });
+  selection = createSelection(board.columns, {
+    canFocus: () => !bulkLocked && shortcuts.context() === 'board',
+    onMarksChanged: ids => bulk?.selectionChanged(ids),
+  });
   editor = createEditor({
     host,
     board,
+    blocked: () => bulkLocked,
     api: () => {
       const p = project();
       return p === null || state.view !== 'board' ? null : createApi(host, p.directory);
@@ -1354,7 +1462,8 @@ const start = (ctx: HostReadyContext): void => {
         showPending();
       },
     },
-    onStart: (task) => void starter.onStart(task),
+    onStart: (task) => starter.onStart(task),
+    marks: selection,
     lists,
     beforeMove: (task) => starter.leaveQueue(task.id),
     afterSetState: detach,
@@ -1401,6 +1510,43 @@ const start = (ctx: HostReadyContext): void => {
     // Global only; off until the global layer is read.
     suggest: { enabled: () => suggestEnabled(globalLoaded, state.globalSettings), suggester },
   });
+  bulkUi = mountBulkToolbar(board.bulkSlot, {
+    actions: {
+      tasks: () => state.tasks ?? [],
+      preview: action => bulk!.actionPreview(action),
+      submit: (action, ids) => bulk!.executeAction(action, ids),
+    },
+    onDraft: change => bulk?.setDraft(change),
+    onApply: () => void bulk?.apply(),
+    onClear: () => bulk?.clear(),
+    onSelectAll: () => selection.selectAll(),
+  });
+  bulk = createBulkToolbar({
+    actions: bulkActionDeps,
+    api: () => {
+      const p = project();
+      return p === null || state.view !== 'board' ? null : createApi(host, p.directory);
+    },
+    tasks: () => state.tasks ?? [],
+    visible: () => selection.layout().flat(),
+    busy: () => editor.busy,
+    complete: () => state.tasks !== null && state.sourceErrors.length === 0,
+    changed: paintBulk,
+    replace: selection.setMarked,
+    retain: selection.retain,
+    lock: (locked, ids) => {
+      bulkLocked = locked;
+      selection.setLocked(locked);
+      board.setInteractionLocked(locked);
+      editor.setBulkBusy(ids, locked);
+      draw();
+    },
+    reload: async () => {
+      await load();
+      if (state.view !== 'board') throw new Error('Changes were saved, but the board could not reload. Refresh to retry loading.');
+    },
+  });
+  paintBulk();
   installShortcuts();
   // Answers the model gave after an earlier frame of this panel was gone are kept by the host. Only
   // summaries are taken back; a late type/state suggestion is dropped (summaries.acceptLate ignores

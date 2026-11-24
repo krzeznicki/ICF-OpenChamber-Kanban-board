@@ -7,7 +7,7 @@ npm run check   # typecheck, tests and build
 
 `npm run build` bundles the code with esbuild: the panel to `panel/main.js`, the service to `service/main.js` and the CLI to `build/cli/task-board.mjs`. Commit the built files with the sources, because OpenChamber installs extensions without building them.
 
-The tests run in Node without a layout engine, so drag and drop between columns of different lengths is checked separately in headless Chrome. `sh scripts/debug/drag-across-columns/run.sh` must print only `PASS` lines; set `CHROME` if Chrome is not at the default macOS path.
+The tests run in Node without a layout engine, so drag and drop between columns of different lengths is checked separately in headless Chrome. `sh scripts/debug/drag-across-columns/run.sh` must print only `PASS` lines; set `CHROME` if Chrome is not at the default macOS path. The same script checks ⌘/Ctrl/Shift-click marking and a group drag. `sh scripts/debug/bulk-toolbar/run.sh` checks the floating action panel at narrow and desktop widths; both lines must print `PASS`.
 
 Install the board from a separate clone, not from a project you use it on: a folder install runs from the folder itself, and any write inside the package reloads the extension.
 

@@ -13,7 +13,7 @@ export type LinkRecord = { taskId: string; sessionId: string; directory: string;
 export type SourceInfo = {
   id: SourceId;
   label: string;
-  capabilities: { create: boolean; subtasks: boolean; blockedBy: boolean; claim: boolean; delete: boolean };
+  capabilities: { create: boolean; subtasks: boolean; blockedBy: boolean; claim: boolean; delete: boolean; labels?: boolean };
 };
 
 /**
@@ -101,6 +101,10 @@ export const createApi = (host: HostClient, directory: string) => {
     setState: (id: string, state: TaskState) =>
       call<{ task: Task }>('POST', '/tasks/state', { id, state }).then((r) => r.task),
     setType: (id: string, type: string) => call<{ task: Task }>('POST', '/tasks/type', { id, type }).then((r) => r.task),
+    changeLabel: (id: string, label: string, mode: 'add' | 'remove') =>
+      call<{ task: Task }>('POST', '/tasks/label', { id, label, mode }).then(r => r.task),
+    addBlocker: (id: string, blockerId: string) =>
+      call<{ task: Task }>('POST', '/tasks/blocker', { id, blockerId }).then(r => r.task),
     /** Title and/or description; the id stays. */
     edit: (id: string, changes: TaskEdit) => call<{ task: Task }>('POST', '/tasks/edit', { id, ...changes }).then((r) => r.task),
     /**
