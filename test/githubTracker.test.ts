@@ -7,6 +7,26 @@ import { fakeGh, type FakeGhOptions, type FakeIssue } from './fakeGh.ts';
 import { planBulk, runBulk } from '../src/panel/bulkEdit.ts';
 
 const LABELS = parseLabels(null);
+
+test('ordinary labels preserve workflow labels; native blockers are additive and reject cycles', async () => {
+  const { tracker } = setup([
+    { number: 1, title: 'One', labels: ['bug', 'ready-for-agent', 'keep'], blockedBy: [2] },
+    { number: 2, title: 'Two' },
+    { number: 3, title: 'Three' },
+  ]);
+  await tracker.changeLabel('#1', 'urgent', 'add');
+  await tracker.changeLabel('#1', 'urgent', 'add');
+  assert.deepEqual((await tracker.get('#1')).labels?.sort(), ['bug', 'keep', 'ready-for-agent', 'urgent']);
+  await tracker.changeLabel('#1', 'urgent', 'remove');
+  assert.equal((await tracker.get('#1')).state, 'ready-for-agent');
+  for (const label of ['bug', 'type:chore', 'ready-for-agent']) {
+    await assert.rejects(() => tracker.changeLabel('#1', label, 'remove'), /status|type/i);
+  }
+  await tracker.addBlocker('#1', '#3');
+  await tracker.addBlocker('#1', '#3');
+  assert.deepEqual((await tracker.get('#1')).blockedBy, ['#2', '#3']);
+  await assert.rejects(() => tracker.addBlocker('#3', '#1'), /cycle/i);
+});
 const DAY = 24 * 3600 * 1000;
 const ago = (days: number): string => new Date(Date.now() - days * DAY).toISOString();
 const ALL_LABELS = ['needs-triage', 'needs-info', 'ready-for-agent', 'ready-for-human', 'wontfix', 'bug', 'enhancement'];

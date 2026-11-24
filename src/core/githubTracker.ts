@@ -234,6 +234,7 @@ export const createGithubTracker = (root: string, exec: Exec, labels: ProjectCon
     updatedAt: Date.parse(issue.updatedAt) || 0,
     claimed: issue.assignees.length > 0,
     source: 'github',
+    labels: issue.labels,
     ...(childCount === undefined ? {} : { childCount }),
   });
 
@@ -356,6 +357,38 @@ export const createGithubTracker = (root: string, exec: Exec, labels: ProjectCon
     },
 
     get,
+    async changeLabel(id, label, mode) {
+      const name = label.trim();
+      if (!name || name.includes(',') || /[\r\n]/.test(name)) throw new TrackerError('INVALID', 'Choose one non-empty label');
+      if (Object.values(labels).some(l => l.toLowerCase() === name.toLowerCase()) || isTypeLabel(name.toLowerCase())) {
+        throw new TrackerError('INVALID', 'Use the status or type control for workflow labels');
+      }
+      const { issue } = await load(parseNumber(id));
+      const present = issue.labels.find(l => l.toLowerCase() === name.toLowerCase());
+      await swapLabels(issue.number, mode === 'add' && !present ? name : null, mode === 'remove' && present ? [present] : []);
+      return get(id);
+    },
+    async addBlocker(id, blockerId) {
+      const n = parseNumber(id);
+      const b = parseNumber(blockerId);
+      const seen = new Set<number>();
+      const visit = async (at: number): Promise<void> => {
+        if (at === n) throw new TrackerError('INVALID', 'This dependency would create a cycle');
+        if (seen.has(at)) return;
+        seen.add(at);
+        const g = (await graph([at], true)).get(at);
+        if (!g) throw new TrackerError('NOT_FOUND', `Issue not found: #${at}`);
+        if (g.issueDependenciesSummary && g.issueDependenciesSummary.totalBlockedBy > (g.blockedBy?.nodes.length ?? 0)) {
+          throw new TrackerError('INVALID', 'Dependencies are not fully loaded; cannot check for cycles');
+        }
+        const refs = relationsOf(g).blockedBy ?? bodyBlockers(g.body ?? '');
+        for (const ref of refs) await visit(ref);
+      };
+      const task = await get(id);
+      await visit(b);
+      if (!task.blockedBy.includes(idOf(b))) await run(['issue', 'edit', String(n), '--add-blocked-by', String(b)]);
+      return get(id);
+    },
 
     async create(input: NewTask) {
       if (typeof input.title !== 'string' || input.title.trim() === '') throw new TrackerError('INVALID', 'Title is required');

@@ -33,6 +33,28 @@ test('GET /health answers 200 {}', async () => {
   assert.deepEqual(await handle('GET', '/health', undefined, deps), { status: 200, json: {} });
 });
 
+test('add blocker is additive, idempotent, validates cycles and keeps the local body', async t => {
+  const directory = await local(t);
+  const create = async (input: Record<string, unknown>) => ((await handle('POST', '/tasks/create', { directory, input }, deps)).json as { task: Task }).task;
+  const p = await create({ title: 'Group' });
+  const a = await create({ title: 'A', parentId: p.id });
+  const b = await create({ title: 'B', parentId: p.id });
+  const c = await create({ title: 'C', parentId: p.id, blockedBy: [a.id], body: 'Keep this description.' });
+  const add = (id: string, blockerId: string) => handle('POST', '/tasks/blocker', { directory, id, blockerId }, deps);
+  assert.equal((await add(c.id, b.id)).status, 200);
+  assert.equal((await add(c.id, b.id)).status, 200);
+  const got = ((await handle('POST', '/tasks/get', { directory, id: c.id }, deps)).json as { task: Task }).task;
+  assert.deepEqual(got.blockedBy, [a.id, b.id]);
+  assert.match(got.body, /Keep this description/);
+  assert.equal((await add(a.id, c.id)).status, 422);
+  assert.equal((await add(c.id, c.id)).status, 422);
+  const other = await create({ title: 'Other' });
+  assert.equal((await add(c.id, other.id)).status, 422);
+  assert.equal((await add(c.id, '#1')).status, 422);
+  const label = await handle('POST', '/tasks/label', { directory, id: c.id, label: 'urgent', mode: 'add' }, deps);
+  assert.equal((label.json as Err).error.code, 'UNSUPPORTED');
+});
+
 test('create, list, get, state, type round trip on a local project', async (t) => {
   const directory = await local(t);
   const spec = await handle('POST', '/tasks/create', { directory, input: { title: 'Feature', body: 'Spec.' } }, deps);

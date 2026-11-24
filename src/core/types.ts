@@ -54,6 +54,7 @@ export type Task = {
   /** GitHub's authoritative direct sub-issue count, including children omitted from list().
    * Absent when relationships could not be read; recursive edits must not assume zero. */
   childCount?: number;
+  labels?: string[];
 };
 
 export type NewTask = {
@@ -98,6 +99,8 @@ export interface Tracker {
   /** 'done' closes; from 'done' reopens */
   setState(id: string, state: TaskState): Promise<Task>;
   setType(id: string, type: string): Promise<Task>;
+  changeLabel(id: string, label: string, mode: 'add' | 'remove'): Promise<Task>;
+  addBlocker(id: string, blockerId: string): Promise<Task>;
   /**
    * Changes the title and/or the description; the id stays (local: the file is not renamed). Local
    * keeps the heading's `NN:`, the Type / Status / Blocked by lines and the `## Comments` /
