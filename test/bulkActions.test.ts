@@ -64,6 +64,30 @@ test('an empty local feature can become a sub-task but a feature with children c
   assert.deepEqual(previewAction(action, [t('empty'), t('destination')], ['empty'], context).eligible, ['empty']);
   assert.equal(previewAction(action, [t('p'), t('child', 'p'), t('destination')], ['p'], context).eligible.length, 0);
 });
+
+test('parent and unparent retry metadata migration without repeating source mutation', async () => {
+  for (const action of [{ kind: 'parent', parentId: 'p' }, { kind: 'unparent' }] as const) {
+    const s = setup([t('a', 'old'), t('p')]);
+    const migrations = new Map();
+    s.deps.migrations = migrations;
+    let moves = 0;
+    let repairs = 0;
+    const move = async (id: string) => {
+      moves++;
+      const next = { ...s.data.get(id)!, id: 'new-a', parentId: action.kind === 'parent' ? 'p' : null };
+      s.data.delete(id); s.data.set(next.id, next); return next;
+    };
+    s.deps.api.setParent = move;
+    s.deps.api.removeParent = move;
+    s.deps.remap = async () => { if (++repairs === 1) throw new Error('Storage unavailable'); };
+    assert.deepEqual((await runAction(action, ['a'], s.deps)).failures.map(f => f.id), ['new-a']);
+    assert.deepEqual(previewAction(action, [...s.data.values()], ['new-a'], context, migrations).eligible, ['new-a']);
+    assert.deepEqual((await runAction(action, ['new-a'], s.deps)).succeeded, ['new-a']);
+    assert.equal(moves, 1);
+    assert.equal(repairs, 2);
+    assert.equal(migrations.size, 0);
+  }
+});
 test('recursive deletion deduplicates parent and child and blocks ancestors after a child failure', async () => {
   const s = setup([t('p'), t('c', 'p'), t('g', 'c')]);
   const deleted: string[] = [];

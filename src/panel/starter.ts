@@ -12,7 +12,7 @@ import { errorMessage, type Task } from '../core/types.ts';
 import { VARIANT, panelId } from '../core/variant.ts';
 import { ApiError, createApi } from './api.ts';
 import { ledByOrchestrator, markArchived, sessionForTask, type Detached, type SessionLink } from './columns.ts';
-import { createLauncher } from './launcher.ts';
+import { createLauncher, uncertainHostStart } from './launcher.ts';
 import type { ActionResult } from './actionResult.ts';
 import { pickPreset, type Preset } from './presets.ts';
 import { buildPrompt } from './prompt.ts';
@@ -107,7 +107,7 @@ export const createStarter = (deps: StarterDeps) => {
    * starts the session with the model, agent and thinking level and records the link. An id too long to be an item
    * (GUEST_ATTACH_ID_MAX) also takes path B, so the card can follow it.
    */
-  const startTask = async (task: Task, opts: StartOptions, prompt: string): Promise<{ sessionId: string | null; pending?: boolean }> => {
+  const startTask = async (task: Task, opts: StartOptions, prompt: string): Promise<{ sessionId: string | null; pending?: boolean; needsMessage?: boolean }> => {
     const p = deps.project();
     if (p === null) throw new Error('No project is open');
     const api = createApi(host, p.directory);
@@ -134,7 +134,7 @@ export const createStarter = (deps: StarterDeps) => {
         return { sessionId: null, pending: true };
       }
     }
-    const result = await host.startSession(
+    const request =
       clampStartSessionRequest({
         providerId: panelId(VARIANT),
         id: task.id,
@@ -144,8 +144,9 @@ export const createStarter = (deps: StarterDeps) => {
         projectId: p.id,
         worktree: opts.location === 'worktree' ? true : false,
         navigation: 'preserve',
-      }),
-    );
+      });
+    const result = await uncertainHostStart(() => host.startSession(request));
+    if ('pending' in result) return result;
     if (result.sessionId === null) {
       const what = result.failure === 'bootstrap-failed' ? 'setting up the worktree failed' : 'the session could not be created';
       void host
@@ -168,7 +169,7 @@ export const createStarter = (deps: StarterDeps) => {
       .addLink(task.id, sessionId, result.directory ?? result.worktree?.directory ?? null)
       .then(() => reloadLinks(p.id, p.directory))
       .catch(() => {});
-    return { sessionId };
+    return { sessionId, needsMessage: result.sent === 'no-model' || result.sent === 'failed' };
   };
 
   const buildFor = async (task: Task, opts: StartOptions): Promise<string> => {
@@ -314,6 +315,8 @@ export const createStarter = (deps: StarterDeps) => {
    * session is up, so a group start (edit.ts moveGroup) goes on to the next card at once.
    */
   const startTaskAction = async (id: string, mode: 'start' | 'queue'): Promise<ActionResult> => {
+    const deliveryFailure: ActionResult = { kind: 'failed', id, message: 'Session created, but the task message was not delivered. Open the existing session and send it there; do not start another agent.' };
+    if (launcher.needsMessage(id)) return deliveryFailure;
     const task = deps.tasks()?.find(t => t.id === id);
     if (!task || task.state === 'done') return { kind: 'failed', id, message: 'Reopen the task before starting it' };
     // A sub-task of a running orchestrator gets no session of its own.
@@ -366,6 +369,7 @@ export const createStarter = (deps: StarterDeps) => {
     report(task, result);
     deps.draw();
     return result === 'started' ? { kind: 'success', id }
+      : result === 'needs-message' ? deliveryFailure
       : result === 'failed' ? { kind: 'failed', id, message: 'Agent could not start; see the reported start error' }
       : { kind: 'pending', id, message: 'Waiting for the existing start to be confirmed' };
   };

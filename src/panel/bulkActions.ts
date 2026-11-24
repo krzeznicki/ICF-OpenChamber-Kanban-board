@@ -25,7 +25,13 @@ export type BulkActionOutcome = {
   succeeded: string[]; failures: { id: string; message: string }[];
   pending: { id: string; message: string }[]; remapped: { from: string; to: string }[];
 };
+export type ActionMigrations = Map<string, { action: BulkAction; repair(): Promise<void> }>;
+const matchingMigration = (migrations: ActionMigrations | undefined, id: string, action: BulkAction) => {
+  const migration = migrations?.get(id);
+  return migration && JSON.stringify(migration.action) === JSON.stringify(action) ? migration : null;
+};
 export type ActionDeps = {
+  migrations?: ActionMigrations;
   api: Pick<Api, 'get' | 'changeLabel' | 'addBlocker' | 'setParent' | 'removeParent' | 'remove'>;
   tasks(): readonly Task[];
   context(): ActionContext;
@@ -37,7 +43,7 @@ export type ActionDeps = {
   copy(text: string): Promise<void>;
 };
 
-export const previewAction = (action: BulkAction, tasks: readonly Task[], selected: readonly string[], context: ActionContext): ActionPreview => {
+export const previewAction = (action: BulkAction, tasks: readonly Task[], selected: readonly string[], context: ActionContext, migrations?: ActionMigrations): ActionPreview => {
   const out: ActionPreview = { eligible: [], excluded: [], additional: [] };
   const byId = new Map(tasks.map(t => [t.id, t]));
   const relation = action.kind === 'parent' ? action.parentId : action.kind === 'blocker' ? action.blockerId : null;
@@ -50,6 +56,7 @@ export const previewAction = (action: BulkAction, tasks: readonly Task[], select
       seen.add(at);
     }
     const cap = context.sources.find(s => s.id === task.source)?.capabilities;
+    if (matchingMigration(migrations, task.id, action)) return null;
     if (action.kind === 'label' && !cap?.labels) return 'This source does not support labels.';
     if (action.kind === 'delete' && !cap?.delete) return 'This source does not support deletion.';
     if (action.kind === 'blocker' && !cap?.blockedBy) return 'This source does not support blockers.';
@@ -96,7 +103,7 @@ export const previewAction = (action: BulkAction, tasks: readonly Task[], select
 
 export const runAction = async (action: BulkAction, ids: readonly string[], deps: ActionDeps, progress: (p: BulkProgress) => void = () => {}): Promise<BulkActionOutcome> => {
   const out: BulkActionOutcome = { succeeded: [], failures: [], pending: [], remapped: [] };
-  const preview = previewAction(action, deps.tasks(), ids, deps.context());
+  const preview = previewAction(action, deps.tasks(), ids, deps.context(), deps.migrations);
   out.failures.push(...preview.excluded.map(f => ({ id: f.id, message: f.reason })));
   const recursive = action.kind === 'delete' && action.withChildren;
   const plan = recursive ? planBulk(deps.tasks(), preview.eligible, { state: 'done', type: null, withChildren: true }) : null;
@@ -116,6 +123,14 @@ export const runAction = async (action: BulkAction, ids: readonly string[], deps
   for (const original of targets) {
     let id = original;
     try {
+      const migration = matchingMigration(deps.migrations, id, action);
+      if (migration) {
+        await migration.repair();
+        deps.migrations!.delete(id);
+        out.succeeded.push(id);
+        progress({ completed: out.succeeded.length + out.failures.length + out.pending.length, total: targets.length });
+        continue;
+      }
       if (plan && (plan.children.get(id) ?? []).some(child => out.failures.some(f => f.id === child))) throw new Error('A sub-task could not be deleted; its parent was kept.');
       const task = await deps.api.get(id);
       let next: Task | null = null;
@@ -138,7 +153,11 @@ export const runAction = async (action: BulkAction, ids: readonly string[], deps
       if (next && next.id !== id) {
         out.remapped.push({ from: id, to: next.id });
         id = next.id;
-        await deps.remap(original, id);
+        const to = id;
+        const repair = () => deps.remap(original, to);
+        deps.migrations?.set(id, { action, repair });
+        await repair();
+        deps.migrations?.delete(id);
       }
       if (result?.kind === 'pending') out.pending.push({ id, message: result.message });
       else if (result?.kind === 'failed') out.failures.push({ id, message: result.message });

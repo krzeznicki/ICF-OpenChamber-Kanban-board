@@ -3,7 +3,7 @@
 // under node:test; ui/bulkToolbar.ts draws the model and main.ts wires the deps.
 import { errorMessage, type Task } from '../core/types.ts';
 import { planBulk, runBulk, type BulkApi, type BulkDraft, type BulkFailure, type BulkPlan, type BulkProgress } from './bulkEdit.ts';
-import { previewAction, runAction, type BulkAction, type ActionDeps, type ActionPreview } from './bulkActions.ts';
+import { previewAction, runAction, type BulkAction, type ActionDeps, type ActionPreview, type ActionMigrations } from './bulkActions.ts';
 
 export type BulkToolbarDeps = {
   actions?: () => ActionDeps | null;
@@ -41,9 +41,10 @@ export const createBulkToolbar = (deps: BulkToolbarDeps) => {
   let notice: string | null = null;
   let actionFailures: { id: string; message: string }[] = [];
   let lastAction: BulkAction | null = null;
+  const migrations: ActionMigrations = new Map();
   const actionPreview = (action: BulkAction): ActionPreview => {
     const a = deps.actions?.();
-    return a ? previewAction(action, deps.tasks(), ids, a.context())
+    return a ? previewAction(action, deps.tasks(), ids, a.context(), migrations)
       : { eligible: [], excluded: ids.map(id => ({ id, reason: 'Actions are unavailable.' })), additional: [] };
   };
 
@@ -111,7 +112,7 @@ export const createBulkToolbar = (deps: BulkToolbarDeps) => {
       deps.lock(true, targetIds);
       deps.changed();
       try {
-        const result = await runAction(action, confirmedIds, { ...a, context: () => context }, p => { progress = p; deps.changed(); });
+        const result = await runAction(action, confirmedIds, { ...a, migrations, context: () => context }, p => { progress = p; deps.changed(); });
         actionFailures = [...result.failures, ...result.pending];
         if (action.kind !== 'copy') {
           ids = [...new Set([...excluded, ...actionFailures.map(f => f.id)])];
@@ -198,7 +199,7 @@ export const createBulkToolbar = (deps: BulkToolbarDeps) => {
       }
     },
     clear,
-    reset: clear,
+    reset: () => { if (!saving) { migrations.clear(); clear(); } },
   };
 };
 

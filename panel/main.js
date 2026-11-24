@@ -14363,21 +14363,31 @@ ${ref}`,
 
   // src/panel/launcher.ts
   var SETTLE_MS = 6e4;
+  var uncertainHostStart = async (start2) => {
+    try {
+      return await start2();
+    } catch {
+      return { sessionId: null, pending: true };
+    }
+  };
   var createLauncher = (deps) => {
     const now = deps.now ?? Date.now;
     const waiting = /* @__PURE__ */ new Map();
     const inFlight = /* @__PURE__ */ new Set();
     const launch = async (task, opts, prompt) => {
+      if (waiting.get(task.id)?.needsMessage) return "needs-message";
       if (deps.isStarting.has(task.id) || deps.hasLiveSession(task.id)) return "already";
       deps.isStarting.add(task.id);
       inFlight.add(task.id);
       let sessionId = null;
       let pending2 = false;
+      let needsMessage2 = false;
       try {
         const text3 = prompt ?? await deps.prompt(task, opts);
         const r = await deps.start(task, opts, text3);
         sessionId = r.sessionId;
         pending2 = sessionId === null && r.pending === true;
+        needsMessage2 = r.needsMessage === true;
       } catch (e) {
         deps.onError(task, e);
       } finally {
@@ -14387,12 +14397,13 @@ ${ref}`,
         deps.isStarting.delete(task.id);
         return "failed";
       }
-      waiting.set(task.id, { sessionId, at: now() });
-      return pending2 ? "pending" : "started";
+      waiting.set(task.id, { sessionId, at: now(), needsMessage: needsMessage2 });
+      return pending2 ? "pending" : needsMessage2 ? "needs-message" : "started";
     };
     const settle = (known, taskKnown) => {
       let changed = false;
       for (const [taskId, w] of waiting) {
+        if (w.needsMessage) continue;
         const found = w.sessionId !== null ? known(w.sessionId) : taskKnown?.(taskId, w.at) ?? false;
         if (!found && (w.sessionId === null || now() - w.at < SETTLE_MS)) continue;
         waiting.delete(taskId);
@@ -14407,7 +14418,8 @@ ${ref}`,
       deps.isStarting.clear();
     };
     const starting = () => [...inFlight];
-    return { launch, settle, reset, starting };
+    const needsMessage = (id) => waiting.get(id)?.needsMessage === true;
+    return { launch, settle, reset, starting, needsMessage };
   };
 
   // src/panel/prompt.ts
@@ -14634,18 +14646,18 @@ ${note}` : note;
           return { sessionId: null, pending: true };
         }
       }
-      const result = await host2.startSession(
-        clampStartSessionRequest({
-          providerId: panelId(VARIANT),
-          id: task.id,
-          title: task.title,
-          url: task.url ?? `https://icf-kanban.local/t/${encodeURIComponent(task.id)}`,
-          text: prompt,
-          projectId: p.id,
-          worktree: opts.location === "worktree" ? true : false,
-          navigation: "preserve"
-        })
-      );
+      const request = clampStartSessionRequest({
+        providerId: panelId(VARIANT),
+        id: task.id,
+        title: task.title,
+        url: task.url ?? `https://icf-kanban.local/t/${encodeURIComponent(task.id)}`,
+        text: prompt,
+        projectId: p.id,
+        worktree: opts.location === "worktree" ? true : false,
+        navigation: "preserve"
+      });
+      const result = await uncertainHostStart(() => host2.startSession(request));
+      if ("pending" in result) return result;
       if (result.sessionId === null) {
         const what = result.failure === "bootstrap-failed" ? "setting up the worktree failed" : "the session could not be created";
         void host2.toast({
@@ -14664,7 +14676,7 @@ ${note}` : note;
       const sessionId = result.sessionId;
       void api.addLink(task.id, sessionId, result.directory ?? result.worktree?.directory ?? null).then(() => reloadLinks(p.id, p.directory)).catch(() => {
       });
-      return { sessionId };
+      return { sessionId, needsMessage: result.sent === "no-model" || result.sent === "failed" };
     };
     const buildFor = async (task, opts) => {
       const p = deps.project();
@@ -14788,6 +14800,8 @@ ${note}` : note;
       return { kind: "success", id: task.id };
     };
     const startTaskAction = async (id, mode) => {
+      const deliveryFailure = { kind: "failed", id, message: "Session created, but the task message was not delivered. Open the existing session and send it there; do not start another agent." };
+      if (launcher.needsMessage(id)) return deliveryFailure;
       const task = deps.tasks()?.find((t) => t.id === id);
       if (!task || task.state === "done") return { kind: "failed", id, message: "Reopen the task before starting it" };
       if (ledByOrchestrator(task, deps.sessions(), markArchived(links, deps.archived()), deps.detached())) {
@@ -14836,7 +14850,7 @@ ${note}` : note;
       const result = await pending2;
       report(task, result);
       deps.draw();
-      return result === "started" ? { kind: "success", id } : result === "failed" ? { kind: "failed", id, message: "Agent could not start; see the reported start error" } : { kind: "pending", id, message: "Waiting for the existing start to be confirmed" };
+      return result === "started" ? { kind: "success", id } : result === "needs-message" ? deliveryFailure : result === "failed" ? { kind: "failed", id, message: "Agent could not start; see the reported start error" } : { kind: "pending", id, message: "Waiting for the existing start to be confirmed" };
     };
     const onStart = async (task) => {
       await startTaskAction(task.id, "start");
@@ -15893,7 +15907,11 @@ ${listKey(projects)}`;
   };
 
   // src/panel/bulkActions.ts
-  var previewAction = (action, tasks, selected, context) => {
+  var matchingMigration = (migrations, id, action) => {
+    const migration = migrations?.get(id);
+    return migration && JSON.stringify(migration.action) === JSON.stringify(action) ? migration : null;
+  };
+  var previewAction = (action, tasks, selected, context, migrations) => {
     const out = { eligible: [], excluded: [], additional: [] };
     const byId = new Map(tasks.map((t) => [t.id, t]));
     const relation = action.kind === "parent" ? action.parentId : action.kind === "blocker" ? action.blockerId : null;
@@ -15906,6 +15924,7 @@ ${listKey(projects)}`;
         seen.add(at);
       }
       const cap = context.sources.find((s) => s.id === task.source)?.capabilities;
+      if (matchingMigration(migrations, task.id, action)) return null;
       if (action.kind === "label" && !cap?.labels) return "This source does not support labels.";
       if (action.kind === "delete" && !cap?.delete) return "This source does not support deletion.";
       if (action.kind === "blocker" && !cap?.blockedBy) return "This source does not support blockers.";
@@ -15953,7 +15972,7 @@ ${listKey(projects)}`;
   var runAction = async (action, ids, deps, progress = () => {
   }) => {
     const out = { succeeded: [], failures: [], pending: [], remapped: [] };
-    const preview = previewAction(action, deps.tasks(), ids, deps.context());
+    const preview = previewAction(action, deps.tasks(), ids, deps.context(), deps.migrations);
     out.failures.push(...preview.excluded.map((f) => ({ id: f.id, message: f.reason })));
     const recursive = action.kind === "delete" && action.withChildren;
     const plan = recursive ? planBulk(deps.tasks(), preview.eligible, { state: "done", type: null, withChildren: true }) : null;
@@ -15975,6 +15994,14 @@ ${listKey(projects)}`;
     for (const original of targets) {
       let id = original;
       try {
+        const migration = matchingMigration(deps.migrations, id, action);
+        if (migration) {
+          await migration.repair();
+          deps.migrations.delete(id);
+          out.succeeded.push(id);
+          progress({ completed: out.succeeded.length + out.failures.length + out.pending.length, total: targets.length });
+          continue;
+        }
         if (plan && (plan.children.get(id) ?? []).some((child) => out.failures.some((f) => f.id === child))) throw new Error("A sub-task could not be deleted; its parent was kept.");
         const task = await deps.api.get(id);
         let next2 = null;
@@ -16009,7 +16036,11 @@ ${listKey(projects)}`;
         if (next2 && next2.id !== id) {
           out.remapped.push({ from: id, to: next2.id });
           id = next2.id;
-          await deps.remap(original, id);
+          const to = id;
+          const repair = () => deps.remap(original, to);
+          deps.migrations?.set(id, { action, repair });
+          await repair();
+          deps.migrations?.delete(id);
         }
         if (result?.kind === "pending") out.pending.push({ id, message: result.message });
         else if (result?.kind === "failed") out.failures.push({ id, message: result.message });
@@ -16035,9 +16066,10 @@ ${listKey(projects)}`;
     let notice = null;
     let actionFailures = [];
     let lastAction = null;
+    const migrations = /* @__PURE__ */ new Map();
     const actionPreview = (action) => {
       const a = deps.actions?.();
-      return a ? previewAction(action, deps.tasks(), ids, a.context()) : { eligible: [], excluded: ids.map((id) => ({ id, reason: "Actions are unavailable." })), additional: [] };
+      return a ? previewAction(action, deps.tasks(), ids, a.context(), migrations) : { eligible: [], excluded: ids.map((id) => ({ id, reason: "Actions are unavailable." })), additional: [] };
     };
     const currentPlan = () => retry ?? planBulk(deps.tasks(), ids, draft);
     const targets = (plan) => retry ? ids : plan.closeIds.length ? plan.closeIds : plan.selectedIds;
@@ -16099,7 +16131,7 @@ ${listKey(projects)}`;
         deps.lock(true, targetIds);
         deps.changed();
         try {
-          const result = await runAction(action, confirmedIds, { ...a, context: () => context }, (p) => {
+          const result = await runAction(action, confirmedIds, { ...a, migrations, context: () => context }, (p) => {
             progress = p;
             deps.changed();
           });
@@ -16201,7 +16233,12 @@ ${listKey(projects)}`;
         }
       },
       clear,
-      reset: clear
+      reset: () => {
+        if (!saving) {
+          migrations.clear();
+          clear();
+        }
+      }
     };
   };
 
@@ -17586,6 +17623,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
     const p = project();
     if (!p || state.view !== "board") return null;
     const api = createApi(host, p.directory);
+    const originalArchive = new Map(archivedTasks());
     return {
       api,
       tasks: () => state.tasks ?? [],
@@ -17634,7 +17672,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
         await store.moveCard(p.id, from, to);
         await store.moveNoType(p.id, from, to);
         const marks = new Map(archivedTasks());
-        const at = marks.get(from);
+        const at = originalArchive.get(from);
         if (at !== void 0) {
           marks.delete(from);
           marks.set(to, at);

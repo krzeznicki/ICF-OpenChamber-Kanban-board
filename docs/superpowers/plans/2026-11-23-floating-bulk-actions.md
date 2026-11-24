@@ -123,4 +123,14 @@ type BulkActionOutcome = {
 
 ## Handoff
 
-Design approved; plan ready for owner review. Preserve native execution in this session. No implementation changes in this follow-up yet.
+Design and execution approved. Native implementation in this session.
+
+## Execution record
+
+- Task 1 complete: `8dc3643`, service and tracker tests RED→GREEN; 106 focused tests/typecheck pass.
+- Task 2 complete: `2ba10e0`, explicit move outcomes and uncertain-start protection; 21 focused tests/typecheck pass.
+- Task 3 complete: `14812b6`, eligibility, execution, locks and partial outcomes; 31 runner/controller/archive tests/typecheck pass.
+- Task 4 complete: `68104df`, floating icon panel and action forms; browser checks pass in narrow and desktop layouts. SDK picker regression reproduced and fixed by removing transformed ancestor.
+- Task 5 verification complete: full suite 811/811, build/typecheck, browser checks and SDK package checker pass. Independent standards review found no violations. Spec review findings fixed and rechecked: ambiguous host starts stay reserved; failed first-message delivery remains actionable through reconciliation/timeouts; parent/unparent retries repair metadata under the new ID without repeating source mutations. PR update and TEST publication follow.
+
+Implementation rulings: result-returning moves are composed via DOM-free `executeMove`, rather than another editor entry point; archive adapter reuses `archiveWriteJob` with awaited persistence. Optional label capability defaults to unsupported for older services. Recursive deletion uses confirmed postorder and nonrecursive writes to avoid deleting unconfirmed new descendants. Icons use inline outline SVG because the installed SDK exposes no action icon library. Empty local features may become sub-tasks, consistent with existing tracker behavior.

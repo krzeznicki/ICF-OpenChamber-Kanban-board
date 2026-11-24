@@ -971,6 +971,8 @@ const bulkActionDeps = (): ActionDeps | null => {
   const p = project();
   if (!p || state.view !== 'board') return null;
   const api = createApi(host, p.directory);
+  // Keep the old mark even if a reload prunes the old source ID before migration is retried.
+  const originalArchive = new Map(archivedTasks());
   return {
     api,
     tasks: () => state.tasks ?? [],
@@ -1013,7 +1015,7 @@ const bulkActionDeps = (): ActionDeps | null => {
       await store.moveCard(p.id, from, to);
       await store.moveNoType(p.id, from, to);
       const marks = new Map(archivedTasks());
-      const at = marks.get(from);
+      const at = originalArchive.get(from);
       if (at !== undefined) {
         marks.delete(from); marks.set(to, at);
         await persistBulkArchive(p.id, marks, new Map(removedFor(p.id)).set(from, Date.now()));
