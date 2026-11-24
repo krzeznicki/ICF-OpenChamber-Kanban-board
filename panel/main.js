@@ -16622,7 +16622,7 @@ html, body { margin: 0; padding: 0; background: var(--oc-bg); color: var(--oc-fg
 .kb-bulk-count { font-size: 0.8em; font-weight: 600; font-variant-numeric: tabular-nums; max-width: 9rem; }
 .kb-bulk-field { width: 8.25rem; min-width: 0; }
 .kb-bulk-apply { align-self: flex-end; padding-bottom: 0.125rem; }
-.kb-bulk-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; padding-top: 0.5rem; border-top: 1px solid var(--oc-border); }
+.kb-bulk-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 0.5rem; padding-top: 0.5rem; border-top: 1px solid var(--oc-border); }
 .kb-bulk-action-group { display: flex; gap: 2px; }
 .kb-bulk-action-group + .kb-bulk-action-group { border-left: 1px solid var(--oc-border); padding-left: 0.5rem; }
 .kb-bulk-icon-wrap { position: relative; display: inline-flex; }
