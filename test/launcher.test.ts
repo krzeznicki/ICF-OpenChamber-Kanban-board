@@ -116,6 +116,8 @@ test('a pending start (timed-out path B) keeps the task starting until a session
   assert.ok(isStarting.has('#7'));
   // A second drop does not start a second session.
   assert.equal(await launcher.launch(task, opts), 'already');
+  tick(SETTLE_MS * 2);
+  assert.equal(launcher.settle(() => false), false, 'uncertain starts must not become retryable just because time passed');
   assert.equal(launcher.settle(() => true), false, 'a session id check alone cannot release it');
   assert.equal(launcher.settle(() => false, (id, since) => id === '#7' && since === 100), true);
   assert.equal(isStarting.size, 0);

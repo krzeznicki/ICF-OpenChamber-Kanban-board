@@ -71,7 +71,7 @@ export const createLauncher = (deps: LauncherDeps) => {
     let changed = false;
     for (const [taskId, w] of waiting) {
       const found = w.sessionId !== null ? known(w.sessionId) : (taskKnown?.(taskId, w.at) ?? false);
-      if (!found && now() - w.at < SETTLE_MS) continue;
+      if (!found && (w.sessionId === null || now() - w.at < SETTLE_MS)) continue;
       waiting.delete(taskId);
       deps.isStarting.delete(taskId);
       changed = true;
