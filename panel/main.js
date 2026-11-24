@@ -16293,7 +16293,7 @@ ${listKey(projects)}`;
     parent: "Set parent",
     unparent: "Unlink parent",
     blocker: "Add blocker",
-    start: "Start agents",
+    start: "Start Task",
     queue: "Add to queue",
     archive: "Archive",
     restore: "Restore",
@@ -16483,7 +16483,7 @@ ${listKey(projects)}`;
     });
     const apply = mountButton(slot("kb-bulk-apply", fields), { label: "Apply", size: "sm", disabled: true, onClick: callbacks.onApply });
     const actionRow = slot("kb-bulk-actions");
-    const groups = [["move", "label"], ["parent", "unparent", "blocker"], ["start", "queue"], ["archive", "restore", "copy"], ["delete"]];
+    const groups = [["move", "label"], ["parent", "unparent", "blocker"], ["start"], ["archive", "restore", "copy"], ["delete"]];
     const actionButtons = [];
     let lastAction = null;
     const popover = slot("kb-bulk-popover");

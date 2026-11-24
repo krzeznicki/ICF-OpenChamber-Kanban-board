@@ -115,7 +115,8 @@ try {
   window.scrollTo(0, 0);
   selection.mark('task-0', 'toggle');
   check(!board.bulkSlot.hidden, 'A mark should show the toolbar');
-  for (const label of ['Move to column', 'Labels', 'Set parent', 'Unlink parent', 'Add blocker', 'Start agents', 'Add to queue', 'Archive', 'Restore', 'Copy', 'Delete']) {
+  check(!board.bulkSlot.querySelector('button[aria-label="Add to queue"]'), 'Start Task is the single agent-start action');
+  for (const label of ['Move to column', 'Labels', 'Set parent', 'Unlink parent', 'Add blocker', 'Start Task', 'Archive', 'Restore', 'Copy', 'Delete']) {
     check(!!button(label).querySelector('svg'), `${label} must have a compact icon`);
     check(button(label).getAttribute('aria-label') === label, `${label} must be accessible`);
   }

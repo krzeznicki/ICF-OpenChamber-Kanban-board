@@ -6,7 +6,7 @@ import { bulkIconButton } from './bulkIcons.ts';
 
 export const ACTION_LABELS: Record<BulkAction['kind'], string> = {
   move: 'Move to column', label: 'Labels', parent: 'Set parent', unparent: 'Unlink parent',
-  blocker: 'Add blocker', start: 'Start agents', queue: 'Add to queue', archive: 'Archive',
+  blocker: 'Add blocker', start: 'Start Task', queue: 'Add to queue', archive: 'Archive',
   restore: 'Restore', copy: 'Copy', delete: 'Delete',
 };
 export type ActionFormDeps = {

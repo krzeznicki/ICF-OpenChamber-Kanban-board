@@ -47,7 +47,7 @@ export const mountBulkToolbar = (root: HTMLElement, callbacks: BulkToolbarCallba
   });
   const apply = mountButton(slot('kb-bulk-apply', fields), { label: 'Apply', size: 'sm', disabled: true, onClick: callbacks.onApply });
   const actionRow = slot('kb-bulk-actions');
-  const groups: BulkAction['kind'][][] = [['move', 'label'], ['parent', 'unparent', 'blocker'], ['start', 'queue'], ['archive', 'restore', 'copy'], ['delete']];
+  const groups: BulkAction['kind'][][] = [['move', 'label'], ['parent', 'unparent', 'blocker'], ['start'], ['archive', 'restore', 'copy'], ['delete']];
   const actionButtons: { kind: BulkAction['kind']; handle: ReturnType<typeof bulkIconButton> }[] = [];
   let lastAction: BulkAction | null = null;
   const popover = slot('kb-bulk-popover');
